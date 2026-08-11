@@ -1,0 +1,6 @@
+# Local-only reference material and analysis docs
+references/
+analyses/
+
+# OS
+.DS_Store
