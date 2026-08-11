@@ -1,6 +1,7 @@
-# Local-only reference material and analysis docs
-references/
-analyses/
+# Local-only reference material and analysis docs (root only —
+# skills/*/references/ is part of the skill and must be tracked)
+/references/
+/analyses/
 
 # OS
 .DS_Store

@@ -1,0 +1,157 @@
+# 镜像取证全流程（M0 → M0.5）
+
+> **何时加载本文件**：第 0 步判级为 A/B 后**立即**加载并动工。镜像先于一切分析——历年获奖站 29% 已消失（域名易主/平台回收/抢注/路径移除/HTTP 200 的原地替换五种形态俱全），"第一时间全站镜像作只读证据"不是最佳实践，是抢救行为【probe】。M0.5 断网跑通是阻塞门：镜像不可跑，不得进入逆向与移植。
+
+## 0. 三条地基原则
+
+1. **镜像神圣不可污染**：`legacy-mirror/` 磁盘文件抓下来后永不修改。它既是逆向的唯一原始依据，又是后续所有对拍验收的基准端——污染镜像 = 污染裁判【samsy】【noomo】【lando】。
+2. **目录结构 = 源站 URL 空间的字节级还原**：页面按路径落成 `<path>/index.html`，资产按原路径落盘【noomo】【lando】。外部 host 资产落 `assets/<host>/<path>`【lando】。
+3. **账本先行**：每个文件的来源 URL、字节数、sha256、下载结果都要有账（§3）。没有账本的镜像不能作为对账与验收的依据【6/6】。
+
+三目录分离：`legacy-mirror/`（只读证据）≠ `public/`（运行资产）≠ `dist/`（部署产物）【oryzo】。运行侧消费镜像资产用符号链接/中间件映射，永不复制重资产（详见 `references/asset-management.md`）。
+
+## 1. 镜像三遍法 + 一条实测
+
+单一手段必漏。HTML 外壳信息量决定主手段：Webflow/静态站资源在 HTML/CSS 里可爬；Next/RSC 站资源藏在 hash chunk 与 flight payload 的转义字符串里，"链接跟随式爬虫第一层就走到头"【kimi】。所以标准动作是三遍互补 + 一条实测：
+
+### 第一遍：正则 BFS 爬虫（`scripts/mirror-site.mjs`）
+
+rogier 首创、noomo/lando 三代实战传承的骨架【rogier】【noomo】【lando】：
+
+- **种子**：全部已知页面路由 + 已知关键资产路径（rogier 60 个初始路径；lando 从 `/` 爬 7 页并用 `/404-page-not-found` 探测出 404 模板）。
+- **提取正则集**：对每个文本响应（HTML/JS/CSS/SVG/JSON）提取 `href/src/poster/content` 属性、CSS `url()`、动态 `import()`、`new Worker("...")`、`fetch("...")`、资产目录前缀字面量（`/assets|_astro|audio|content|fonts|images|models|workers/` 类）、按扩展名白名单匹配的绝对 URL【rogier】【noomo】。
+- **格式感知深挖**：下载 `.gltf`/glTF 后解析 JSON，把 `buffers[].uri`、`images[].uri` 递归入队【rogier】【noomo】；扫描页面 chunk 内数据结构推导资产路径（rogier 用 `thumbnail:{...}` 正则推出 `/images/thumbs/*`——数据藏在 JS 里，DOM 抓不到）【rogier】。
+- **host 白名单**：外部资源只收白名单 CDN 域（lando 12 个），防爬飞【lando】。
+- **迭代到不动点**：每轮下载产生的新文本再过一遍正则，直到无新 URL（lando 4 轮——CSS 里的字体、JS 里的 .riv 在后续轮次才被发现）【lando】。
+- **纯静态解析变体**：bundle 结构清晰时可不用爬虫，直接从 bundle 静态解析出完整资产清单逐个 curl（samsy 107 文件约 260MB 全部来自 bundle 静态解析）【samsy】。
+
+### 第二遍：真实浏览器 CDP 抓包补录（`scripts/netcapture.mjs`）
+
+静态解析对**运行时拼接的 URL**天然失明。headless Chrome 实跑全路由 × 桌面/移动双视口、走完整个滚动/交互流程，用 CDP 记录实际发出的同源请求，与磁盘 diff 出 GAP 清单逐项补录【kimi】：
+
+- kimi 实测补齐 23 个运行时拼接资源：`avatar_01..16.png` 的序号、`buttons/zh-CN/` 的语言目录都是运行时拼的【kimi】。
+- samsy 同思路：Chrome 实跑（/ → WORKS → ABOUT）抓 network 补录 `preloader.png`、worker chunk【samsy】。
+- 轻量变体：真实 Chrome 加载后执行 `performance.getEntriesByType('resource')`，取运行时实际请求的同源路径逐一核对镜像命中（noomo 56 路径全命中）——静态爬取之外的运行时闭环【noomo】。
+- 工具零依赖：Node 22+ 内置 WebSocket 直连 CDP，不装 puppeteer【kimi】【samsy】。
+
+### 第三遍：bundle 模板字面量静态求解（人工）
+
+抓包也有盲区——滚动深度够不到、条件分支不触发的资源，回到 bundle 里人工解模板字面量：
+
+- `` `/models/crystal${e}.glb` `` 把 `${e}` 求解为 0–6 逐个补抓【noomo】。
+- deck 深处资源（`about-us/process/step1..4.png` 等 6 个）靠解析 bundle 模板字面量补齐【kimi】。
+- 基址变量拼接：lando 的 GL 资产基址 `vQ="https://lando.itsoffbrand.io/gl"`（4 GLB + 3 HDRI + 解码器 + MSDF 字体）与 Rive 基址 `mj=".../rive/"`（8 个 .riv）都是变量拼接，静态正则不可见——从 bundle 读出基址后枚举补抓【lando】。
+- 语言变体：浏览器只请求当前语言那份，`en-US` 等按同构路径手工拉【kimi】。
+
+### 逐 URL 实测状态码（不可省略）
+
+**服务端重定向在客户端产物里零留痕**：光读 bundle 永远看不出 `/zh-cn/*` 是 301——必须对每条路由裸 fetch 实测状态码并记账【kimi】。注意用裸 fetch 而非浏览器（浏览器自动跟随重定向，正是造假文件的动作）。
+
+## 2. redirect: "manual" 纪律（红线）
+
+爬虫**绝不默认跟随重定向**。kimi 的著名教训：第一版爬虫用 `redirect: "follow"`，把 301 目标的 body 写在来源路径下，**凭空造出 10 个假文件——"把 301 伪装成 200"**【kimi】。修复方案三件套：
+
+1. 爬虫 fetch 一律 `redirect: "manual"`；
+2. 重定向单独记入 `redirects.tsv` 账本（"这是源站行为，不是爬虫记账"）；
+3. 独立验证脚本用裸 fetch 断言每条重定向的**状态码本身**——Next 的 `permanent: true` 发 308 而源站发 301，门必须断言状态码而不只断言"有重定向"【kimi】。
+
+## 3. manifest 账本体系
+
+镜像目录旁必备的账本（kimi 制度最完整，按需裁剪）【kimi】【samsy】【noomo】【lando】：
+
+| 账本 | 内容 | 作用 |
+|---|---|---|
+| `inventory.tsv` | 逐文件 sha256 权威清单 | 一切资产比对的唯一来源【kimi】 |
+| `manifest.tsv` / `mirror-manifest.json` | 下载流水：url → path/bytes/type/OK-FAIL，含 mirroredAt/downloaded/failed | 留证 + 重刷依据【samsy】【noomo】【lando】 |
+| `redirects.tsv` | 源站重定向逐条（来源、目标、状态码） | 重定向是源站行为，需回放与断言【kimi】 |
+| `netcapture.tsv` | 抓包 HAVE/GAP 对账表 | GAP=0 是 M0 关账条件之一【kimi】 |
+| `external.txt` | 外部 URL 逐条甄别（kimi 47 条） | 喂给 §6 外部依赖决策表【kimi】 |
+
+特殊载荷单独镜像：RSC flight payload 带 `RSC: 1` 头取回的另一份 body 存 `_rsc/`，其中含逐请求随机 nonce，**diff 前必须 mask**【kimi】。bundle 内联的 base64 资产（LUT、SMAA 纹理）提取到 `_extracted/`（分析产物区，与原件字节纯净区分开）【noomo】。
+
+## 4. 镜像神圣 + 服务层改写
+
+一切本地化适配在**服务层响应时动态完成**，磁盘纯净【samsy】【noomo】【lando】。`scripts/serve.mjs`（samsy 首创响应层改写，kimi→noomo→lando 四代传承）职责清单：
+
+- **MIME 补全**（glb/hdr/ktx2 等）+ **Range 请求**支持（视频可 seek）【noomo】。
+- **CDN 基址动态改写**：源 bundle 无条件写死 BunnyCDN 前缀且 CDN 防盗链 → 响应层把基址替换为 `/cdn/` 并映射回本地目录【samsy】；外部 host URL 统一重写为 `/ext/<host>/` 路径【lando】。
+- **遥测 stub**：GA 反代路径返回 JS stub，不外联【lando】。
+- **404 语义复刻**：未知路径回落源站 404 模板并返回真 HTTP 404（平台语义）【lando】。
+- **RSC 路由**：带 RSC 请求头的请求路由到 `_rsc/` 镜像【kimi】。
+- **probe 注入口**：`?__probe` 时在 `<head>` 首部注入确定性 shim，无 query 时输出字节不变【noomo】。
+- **SRI 剥离**：服务层改写过的文本字节无法匹配原 integrity 哈希，需剥离 SRI 属性并**登记为偏差**【lando】。
+
+例外条款：rogier 一代曾直接改磁盘 bundle（禁 service worker、detect-gpu benchmarks 本地化、GPU fallback），但**每处重写登记在案**（"Known local JS rewrites"）并在对比时扣除【rogier】——后代演进为"干脆不改磁盘"。如确实不得已改磁盘，必须照 rogier 的登记纪律执行。
+
+## 5. 断网跑通验收门（M0.5，⛔ 阻塞门）
+
+"镜像可跑才能当对拍基准，且实跑必然暴露静态解析盲区"——隐藏关键步【lando】。用 `scripts/serve.mjs` 伺服镜像，断网（或禁外联监控下）执行：
+
+验收标准（全部满足才关账）：
+- **零 404**：noomo 断网服务 99/99 URL 全 200【noomo】；samsy 全新加载零 404【samsy】。
+- **零控制台错误**：全路由 + 404 页跑 `scripts/probe.mjs` 探针全 CLEAN，首页含**全滚动**【lando】。
+- **零外联**：无任何对源站/CDN 的真实网络请求【samsy】。
+- **重定向断言**：kimi 7/7 路由零 4xx + 5 条重定向逐条断言（裸 fetch 独立跑，用 `scripts/verify-routes.mjs` 对镜像伺服执行路由/重定向/状态码契约）【kimi】。
+- **关键流程走通**：首访交互流程实际走一遍（samsy 首访 /tutorial 流程走通）【samsy】。
+- **GAP=0 对账**：netcapture 对账表无未销账条目【kimi】。
+
+实跑必然暴露盲区并当场补录，这是预期内流程而非失败：lando 实跑发现 head/helmet/glass 的 13 件 PBR 纹理"由纹理集拼接，正则不可见"，只有真跑看网络请求才能发现【lando】。
+
+M0.5 之后，`serve.mjs` 终身兼任后续所有对拍的"源站参照服"（如 `PORT=3200 SERVE_ROOT=legacy-mirror`）【noomo】。
+
+## 6. 外部依赖决策表
+
+抓不进镜像/不该入库的依赖（授权字体、第三方 SaaS、CDN）单独列表，**逐项显式决策**，三选一【oryzo】【samsy】【kimi】：
+
+| 处置 | 适用 | 判例 |
+|---|---|---|
+| 保留原引用不入库 | 授权条款禁止自托管的资产 | Adobe Fonts (Typekit) CSS 引用保留，副本仅存 `legacy-mirror/external/` 供参考【oryzo】【samsy】 |
+| 换端点/本地化 | 可自托管的 vendor 资源 | detect-gpu 的 unpkg benchmarks 指向本地 `/vendor/`【rogier】；Rive WASM 从 `/ext/unpkg.com/...` 本地提供【lando】 |
+| 接受降级 | 纯统计/非行为依赖 | GA/Cloudflare Insights 不接入【oryzo】【samsy】 |
+
+特别小心有行为副作用的第三方：samsy 的 PartyKit 多人服务直连的是**源站生产房间**——决策表里要写明礼仪边界（"别广播"）【samsy】。bundle 内出现 `/api/` 字符串 ⇒ 强制做运行时 API 快照（导航数据可能在 headless CMS 里）【probe】。
+
+## 7. 防盗链对策
+
+- **带 Referer 抓取**：资产域无 Referer 返回 403 → 抓取请求带 `Referer: https://<目标站>/`【lando】。
+- **小响应告警**：bundle 响应 <1KB 极可能是拒绝页（landonorris 防盗链返回 32 字节拒绝页，曾造成探测假阴性）——按字节数守卫，触发即带 Referer 重试【probe】。
+- **CDN 防盗链的运行时对策**：镜像抓取解决"抓得下来"，本地回放还要解决"bundle 会去请求 CDN"——用 §4 的服务层基址改写，不改磁盘【samsy】。
+
+## 8. 镜像盲区 checklist
+
+静态爬取**必漏**的资产类型，逐项建"从源站补录"通道并 checklist 化销账【oryzo】【samsy】：
+
+- [ ] worker 运行时才 fetch 的文件（WASM 排序 worker、baker.worker）【oryzo】【samsy】
+- [ ] 懒加载资源（画廊图片、preloader 图、懒加载 chunk）【oryzo】【samsy】
+- [ ] 移动端变体：oryzo 规则是扩展名前插 `_MOBILE`（纹理上限 800px vs 桌面 2560px）——逆向出命名规则后批量补抓【oryzo】；双端纹理变体（桌面 webp + 移动 ktx2）【lando】
+- [ ] 仅特定 query 触发的 chunk（samsy 的 `?editor` / `?gameboy` 才加载的 editor-*.js / gb-*.js）【samsy】
+- [ ] 纹理集拼接路径（正则不可见，只有实跑网络请求可见）【lando】
+- [ ] 非当前语言的本地化资源（浏览器只请求当前语言）【kimi】
+- [ ] 抓包滚动深度够不到的深处资源（回第三遍模板字面量求解）【kimi】
+- [ ] 字体文件（rogier 首轮漏抓，后补齐并验证与源站逐字节一致）【rogier】
+
+销账方式：每项要么"已补录（见 manifest 行）"，要么"确认源站不存在此类"，不许留空。
+
+## 9. 常见坑
+
+- **redirect follow 造假文件**：默认跟随重定向会把 301 伪装成 200，凭空造出假文件——`redirect: "manual"` 红线【kimi】。
+- **服务端行为零留痕**：redirects/状态码必须逐 URL 实测，读产物读不出来；308 vs 301 这种差异只有断言状态码本身才能抓住【kimi】。
+- **catch-all 假 200**：请求 `.map`/任意路径返回 index.html（other-side-of-truth）——对每个下载物做 content-type 校验与哈希碰撞检测（大量文件同 hash = catch-all 兜底页）【probe】。
+- **HTML 里没有 `<script src>`**：现代站可能全靠内联 `import()`（Shopify Editions 三代）——爬虫只认 script 标签会漏掉全部 JS【probe】；script 枚举还要排除 HTML 注释内的脚本【probe】。
+- **RSC nonce 假 diff**：`_rsc/` 载荷含逐请求随机 nonce，不 mask 直接 diff 会误报不确定【kimi】。
+- **镜像跑不通就开工**：镜像没过 M0.5 门就逆向/移植，等于没有对拍基准，后续一切"像不像"都无法归因【lando】【samsy】。
+- **探针自身盲区**：镜像 CSS 被 Chrome 因 SRI 校验**静默拦截**，安全报错走 CDP Log 域——探针若只监听 Runtime/Network，M0.5 的"CLEAN"存在盲区（`scripts/probe.mjs` 已并入 Log 域监听；自查时确认这一点）【lando】。
+- **后台标签节流伪装假死**：M0 阶段在后台标签实跑镜像，rAF 节流 + gsap lagSmoothing 会把站点冻成假死，误判"镜像坏了"（noomo M0 亲历，samsy 曾因此误改源码后撤销）——无头/实跑一律带 anti-throttling 旗标或保持前台【noomo】【samsy】【oryzo】。
+- **直接改磁盘镜像**：一切适配走服务层；确实不得已改磁盘必须逐处登记并在对比时扣除（rogier 一代纪律）【rogier】。
+
+## 10. M0/M0.5 关账条件（产出物清单）
+
+- [ ] `legacy-mirror/`：目录结构 = 源站 URL 空间，磁盘纯净、只读
+- [ ] 账本齐备：manifest（含 sha256）、redirects.tsv、netcapture GAP 对账（=0）、external.txt
+- [ ] `scripts/serve.mjs` 可伺服镜像，服务层改写清单逐项登记
+- [ ] 断网验收全绿：零 404 / 零控制台错误（probe CLEAN，含全滚动）/ 零外联 / 重定向状态码断言通过
+- [ ] 外部依赖决策表：每条外部 URL 有归属决策（保留引用/换端点/接受降级）
+- [ ] 镜像盲区 checklist 逐项销账
+- [ ] 版权预评估已出（哪些资产不可再分发 → 是否公开部署的初步决断，详见 `references/legal-and-deploy.md`）
+
+全部勾完 → M0 关账，进入 M1 逆向（`references/reverse-engineering.md`）。

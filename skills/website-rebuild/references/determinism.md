@@ -1,0 +1,155 @@
+# determinism.md — 确定性协议（对拍门的前置条件）
+
+> **何时加载本文件**：搭建任何像素对拍 / byte-equal / 同帧对拍门之前必须加载（与 `references/verification-gates.md` 配套）；以及当对拍结果不稳定、双侧截图"每次都不一样"时回来排查。核心命题：**先把双侧驱动到可复现的同一状态，比对才有意义**。
+
+## 0. byte-equal 的前提假设与失效条件
+
+- **前提假设**："同机同版本 Chrome 的 DOM 渲染是逐字节确定的"【kimi，M5.2 确立】——这个事实使"整页 byte-equal"成为可行的常规验收。但它只在**同一台机器、同一版本 Chrome、全部熵源被冻结**时成立。
+- **失效条件**（任一命中则该画面降级为量化对拍门，见 `references/verification-gates.md` §1.3）：
+  1. 画面含本性不可冻的随机源（视频帧相位、glitch/粒子随机相位）【samsy】——或对局部用"同等隐藏"协议（§2.8）剥离后其余部分仍走 byte-equal；
+  2. 跨机器/跨 Chrome 版本比对（渲染不再逐字节确定）；WebGL 场景在无头下用 SwiftShader（`--use-gl=swiftshader`）保证可复现渲染【rogier】，但与真机输出仍有差异（sRGB 色彩管理、授权字体），须真机兜底【oryzo】；
+  3. 熵源没有枚举完（症状：同侧连续两次截图哈希就不相等——先自拍两次验证单侧确定性，再谈双侧对拍）；
+  4. 字体加载时序被改动。kimi 拒绝子集化 4.8MB 字体的首要理由：字体是首屏渲染门控（deck 等 `document.fonts.ready` 才渲染），子集化会污染时序基线；canvas `measureText` 折行会变、点阵字体对坐标舍入极敏感【kimi】。**测量基准的稳定性优先于"看起来该做的优化"**。
+
+## 1. 方法内核：枚举熵源，逐个消掉
+
+kimi M4.3 日志原话："**找出渲染器的全部熵源，逐个用环境补丁消掉**"【kimi】。熵源按类型分型，每型对应一种冻结手段：
+
+| 熵源类型 | 表现 | 对应协议（§2） |
+|---|---|---|
+| 墙钟（`performance.now`/`Date.now`） | 旋转积分、计时驱动的位置 | `clock`、`__warp` |
+| rAF 时间戳 | 时间戳驱动的累积器、跑马灯 | `clock+raf`、`framebudget` |
+| 媒体时钟 | 视频帧推进 | 媒体层补丁 |
+| `Math.random` | 洗牌、字符瀑布 | 种子化随机 |
+| 合成层光栅缓存 | transform 过渡留下的历史次像素光栅 | 重光栅归一化 |
+| 本性不可冻 | 无法钉死的局部 | 同等隐藏 + 专门门 |
+
+**操作顺序**：
+1. 读 `_pretty/` 找出这块画面消费了哪些时间/随机源（grep `performance.now`、rAF 回调签名、`Math.random`、`video.currentTime`…）；
+2. 按 §2 协议表选冻结组合，位姿表里**每条位姿显式声明 freeze 模式**【kimi】；
+3. 双侧同协议注入（同一份补丁代码打在镜像与复刻两侧）；
+4. 跑 §4 防呆断言，确认冻结与驱动都真的生效了。
+
+## 2. 八种冻结协议【kimi】
+
+kimi README 自评"本项目最值得带走的东西"。总表：
+
+| 协议 | 钉住什么 | 用在哪 |
+|---|---|---|
+| `clock` | `performance.now → 0`（rAF 真实，入场动画播完） | 大多数静止位姿 |
+| `clock+raf` | 再把 rAF 时间戳喂 0 | 跑马灯、轨道环、reduced-motion 判别 |
+| `framebudget` | rAF 时间戳改发 `帧序号×16.67ms`，n 帧后停摆 | 过渡中间帧 |
+| `__warp(t)` | 冻结时钟可拨动，damp/blend 一帧确定性收敛 | 轮盘 detail 态 |
+| 种子化 `Math.random` | mulberry32(42) 双侧同流 | 头像洗牌、字符瀑布 |
+| 媒体层补丁 | `play()` 假成功、`paused` 谎报 false | pixel-flow 视频 |
+| 重光栅归一化 | display 抖动强制重绘，清合成层缓存 | 带 transform 过渡的标题层 |
+| 同等隐藏 | 不可冻区域双侧同规则隐藏 | SwipeHint、LetterGlitch、星云 |
+
+逐条要点：
+
+### 2.1 `clock`
+钉 `performance.now → 0`，rAF 保持真实——入场动画正常播完后画面静止。静止位姿的默认协议。
+
+### 2.2 `clock+raf`
+在 `clock` 之上把 rAF 时间戳也喂 0。用于**rAF 时间戳直接驱动**的持续动画（跑马灯、轨道环）。注意有的渲染器需要**双冻**：kimi 的星云是 rAF 时间戳驱动的累积器，单冻 clock 不够（M4.2——"断点笔记里的『下一步很简单』也是待验证断言"即出自此坑）【kimi】。
+
+### 2.3 `framebudget`
+rAF 时间戳改发 `帧序号×16.67ms`、n 帧后停摆——一切 rAF 消费者变成帧序号的纯函数。为"静止态门对过渡组件结构性失明"补的洞（M7.5 ASCII 瀑布事故）：使**过渡中间帧**（第 24 帧、u=0.5、字符带扫至半屏）也能字节比对【kimi】。
+
+### 2.4 `__warp(t)`
+冻结时钟但可拨动（如 `__warp(100000)`），让 damp/blend 类惰性追赶在一帧内确定性收敛。用于含阻尼收敛的终态画面（轮盘 detail 态）【kimi】。
+
+### 2.5 种子化 `Math.random`
+mulberry32(42) 替换 `Math.random`，双侧同流——随机序列相同则洗牌/瀑布结果逐字节同。只对"启动后拉固定次数随机"的消费者有效；随机消费次数本身不确定的场景仍属不可冻。
+
+### 2.6 媒体层补丁
+`play()` 假成功、`paused` 谎报 false——视频停在 seek 帧，同时防止站点的"卡死检测循环"发现视频没在播而进入异常分支（"自己失明"）【kimi】。seek 后必须重新驱帧再截图【noomo】。
+
+### 2.7 重光栅归一化
+display 抖动强制重绘，清掉合成层缓存的历史次像素光栅——带 transform 过渡的层会在合成器里留下与过渡路径相关的光栅残迹，导致同终态不同字节【kimi】。
+
+### 2.8 同等隐藏
+本性不可冻的区域**双侧同规则隐藏**，使整页门可以 byte-equal；被隐藏的部分**必须另建专门门覆盖**（kimi 的星云有自己的画布字节门），否则就是给自己挖 §4.3 的覆盖空洞【kimi】。
+
+## 3. probe-shim 双侧确定性驱动【noomo】
+
+**适用条件**：滚动驱动的 WebGL/动画站 + **源站是别人的混淆 bundle、不可插桩**。问题：浏览器后台标签 rAF/timer 节流使这类站不可确定性驱动，而你不能改源站代码。noomo 的结论：这套东西"对任何『滚动驱动动画站』的 A/B 对拍都直接可复用"。
+
+**机制**（对应本 skill `scripts/probe-shim.js`，约 90 行，仅在 URL 带 `?__probe` 时激活）：
+
+1. 把 rAF 换成手动泵 `__pump(dt, frames)`——测试脚本主动喂帧，页面不再依赖浏览器调度；
+2. `document.hidden` / `visibilityState` / `hasFocus` 钉死为可见——绕开一切可见性门控；
+3. `setTimeout` 接管进泵驱定时队列——定时器随泵推进而非墙钟；
+4. 时间戳从 0 起——使双侧 `Tick.seconds` 驱动的 shader 相位可对齐。
+
+**双侧同位注入**（关键在"同位"）：
+
+- 镜像侧：由 `scripts/serve.mjs` 按 query 在 `<head>` **首部**注入，磁盘镜像文件保持字节纯净；
+- 复刻侧：由框架 hook 在同一位置注入（noomo 用 Nitro `render:html` 钩子 `html.head.unshift`）；
+- **教训**："gsap 在模块求值期捕获 rAF，Nuxt 插件太晚，必须 head 首脚本"【noomo】——shim 必须先于一切消费者求值；
+- 无 `?__probe` 时两侧输出**字节不变**，SSR 字节门不受污染；shim 本身登记进偏差表【noomo】。
+
+**驱动方法论**（M7a 日志）：
+
+- `__drive` 用真时钟配速泵帧 + **MessageChannel yield**（不受节流的宏任务边界，让页面内 await 链能推进）；
+- 用户激活门控的状态（`experienceStarted`）需要 **isTrusted 真实点击**，合成事件不算；
+- `smoother.scrollTo(y, false)` **反复钉扎**消滚动动量残留；
+- seek 后重新驱帧再截图【noomo】。
+
+**结果**：源站原 bundle 可在后台标签被确定性驱动到任意 t，与复刻侧逐检查点同帧截图。复刻侧另暴露 `window.__sweet3` 引擎句柄（同样 `?__probe` 门控）支持数值探针【noomo】。同类做法：rogier 的 `window.__rogier*Probe` 接口 + `?debug-output-probe` query 开关，约 2500 行调试脚手架作为有意偏差登记保留（"回归门依赖它"）【rogier】。
+
+## 4. 防呆断言（冻结/驱动是否真的生效）
+
+冻结协议最大的敌人是"没生效但门照样绿"：
+
+1. **同会话位姿哈希必须互异**：不同位姿的截图哈希相同 = 驱动步骤没生效（kimi M5.3：eclipse 位姿截的还是 hero，门全绿）【kimi】。
+2. **jump 后补发同位跳转唤醒事件**：源站 jump-immediate 会让事件门控内容休眠，需补发唤醒事件，否则截到的是休眠态【kimi】。
+3. **自拍两次先验证单侧确定性**：同侧同协议连续两次哈希不等 → 熵源没枚举完，回 §1 补。
+4. **资产预检**：先确认镜像服务能出图再截图，否则截图误导归因【rogier】。
+5. **状态到达要有独立证据**：等语义条件（IDLE、`hasStarted`）而不是裸 sleep【samsy】【oryzo】。
+
+## 5. 无头驱动的通用旗标与手段清单
+
+搭无头对拍环境时逐项过：
+
+- **anti-throttling 旗标必带**：`--disable-background-timer-throttling --disable-renderer-backgrounding`——后台标签 rAF 节流 + gsap `lagSmoothing` 会把启动链冻成假死。samsy 曾因此误判源码 bug 并错误"修复"，取证后撤销【samsy】；oryzo（人肉盯屏不可靠，因此上无头回归）、noomo（M0 亲历）独立踩过同一坑【oryzo】【noomo】。
+- **SwiftShader**：`--use-gl=swiftshader` 保证 WebGL 无头渲染可复现【rogier】。
+- **localStorage 预种**：`Page.addScriptToEvaluateOnNewDocument` 预种教程完成态等前置状态，跳过引导流程；配页内 gsap ticker 泵【samsy】。
+- **query 开关跳过阻塞流程**：复刻侧 `?skip-preloader`；源站侧没有开关就模拟真实点击过 preloader（rogier 的对拍脚本对 original 模拟点击 Enter）【rogier】。
+- **真实 DOM 点击驱动状态**：samsy 按 `#topmenu` 索引点击驱动三视图——菜单文字被 glitch 轮换、文本匹配不可用；真实点击同时绕过 router 探针问题【samsy】。
+- **视口/窗口锁定**：量化对拍必须同视口（oryzo 1456×830、kimi 1440×900/390×844/768×1024、samsy 1280×800）；文字块随窗口高度命中相邻组，"复检需锁窗口"【noomo】。
+- **双侧同参数启动**：复刻与镜像两个服务器同时起、无头参数一致、驱动脚本同一份【samsy】【kimi】。镜像参照服即 `scripts/serve.mjs`（终身兼任对拍基准端，如 `PORT=3200 SERVE_ROOT=legacy-mirror`）【noomo】。
+- **hover 类位姿用 CDP 真实鼠标**（Input 域射线），不用 CSS 类模拟【kimi】。
+
+## 6. 常见坑
+
+1. **把环境问题当代码 bug 修**：后台节流假死、探针时钟与页面时钟错位（伪装成"计时器时间压缩"）、vite HMR `?t=` 幽灵模块让探针读到假状态——**判定时序 bug 前先校准探针**【samsy】；环境陷阱全表见 `references/environment-traps.md`。
+2. **shim 注入晚于消费者**：gsap 等库在模块求值期捕获 rAF——shim 必须是 head 首脚本，框架插件时机都太晚【noomo】。
+3. **录制巧合进规格**：冻结环境下录的基准值可能编码了加载时序巧合（"首帧 anchor == 585px"），断言机制而非环境量【kimi】——详见 `references/verification-gates.md` §4.4。
+4. **诊断解码器的正确性**：门只要求"确定性 + 双侧同函数"，但诊断要求绝对正确；PNG 解码 colorType 事故（Chrome 截图是三通道而代码硬编码 `*4` 索引）画出几何假象【kimi】。用 `scripts/lib/png.mjs`（对 Pillow 逐格验证过，恒输出 RGBA）。
+5. **WebGL 读回**：`readRenderTargetPixels` 前必查 `gl.getError`（全零缓冲是读回假象）【noomo】；无 `preserveDrawingBuffer` 不能 `drawImage` 读 canvas【kimi】。
+6. **CDP 工程坑**：调用带超时、多兆 payload 分块取回、headless Chrome 无视 SIGTERM 要 SIGKILL【kimi】。
+7. **探针等待时长是环境量**：真 GPU tier 3 机器需要 `PROBE_WAIT=25000/45000`，超时先判 "probe timing, not a product mismatch" 再查代码【rogier】。
+8. **改动加载架构后要复验位姿哈希不变**：任何"应当不影响画面"的改动都用"位姿哈希不变"关账（kimi M7.1 动态加载改造后桌面 8 位姿哈希不变）【kimi】。
+9. **无 `?__probe` 时必须字节无痕**：验证仪器不得污染被测输出（SSR 门保持全绿），且仪器本身登记进偏差表【noomo】【rogier】。
+
+## 7. 上门前快速自检
+
+对拍门接入 CI 前逐项确认：
+
+- [ ] 该画面的熵源清单已从 `_pretty/` 取证列出（不是凭印象）
+- [ ] 每条位姿的 freeze 协议已显式声明在位姿表里
+- [ ] 单侧连续两次截图哈希相等（单侧确定性成立）
+- [ ] 同会话不同位姿哈希互异（驱动确实生效）
+- [ ] 同等隐藏剥离的区域已有专门门覆盖
+- [ ] 无头旗标齐全：anti-throttling + SwiftShader（WebGL 时）
+- [ ] shim/探针在无开关时对输出字节无痕，且已登记进偏差表
+- [ ] 不可冻场景已明确降级为量化门并写入噪声归类清单
+
+## 8. 产出物
+
+- 位姿表：每条位姿 = 路由 + 视口 + 驱动步骤 + **显式 freeze 协议声明**【kimi】
+- `scripts/probe-shim.js` 的双侧注入配置（镜像侧 serve query / 复刻侧框架 hook），登记进偏差表
+- 确定性自检记录：单侧两次哈希相等 + 同会话位姿哈希互异
+- 无头启动参数清单（旗标、视口、预种脚本）写进门脚本，环境变量参数化
+- 对拍产物成对入库（见 `references/verification-gates.md` §8）
