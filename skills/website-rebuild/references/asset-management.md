@@ -35,18 +35,18 @@
 | ⑥ `/ext/<host>/` 映射 + rsync -L | 【lando】 | 资产按 `legacy-mirror/assets/<host>/<path>` 组织；dev 用 vite 插件 `extAssets()` 把 `/ext/<host>/` 映射回镜像；build 后 `postbuild.mjs` 建 `dist/ext → legacy-mirror/assets` 符号链接，部署时 `rsync -L` 解引用（登记为偏差 6.4）。适合资产分散在多个外部 CDN 域的站 |
 
 **选型指令**：
-- 资产分散在多个外部 host（CDN 防盗链、第三方域）→ 走 ⑥（`/ext/<host>/` 统一收编，服务层把外部 URL 改写为该前缀，"same trick as samsyninja-rebuild"【lando】）。
+- 资产分散在多个外部 host（CDN 跨域引用限制、第三方域）→ 走 ⑥（`/ext/<host>/` 统一收编，服务层把外部 URL 改写为该前缀，"same trick as samsyninja-rebuild"【lando】）。
 - 同源资产 + 框架有静态挂载点 → 走 ⑤（noomo/nitro）或 ④（符号链接，最简单，Next/静态站首选）。
 - vite 工程且资产按源站根路径组织 → 走 ③（中间件回落）。
 - ① 只在资产总量小且需要"public 即镜像副本"的哈希审计语义时考虑，且必须配全量哈希验证【rogier】。
 - 无论选哪种，凡与"源站直接伺服资产"不同的机制（符号链接、挂载、映射）**登记进偏差表**【kimi】【lando】。
 
-## 3. 配套机制：CDN 防盗链与服务层改写
+## 3. 配套机制：CDN 跨域引用与服务层改写
 
-不复制策略的前提是"镜像可被本地伺服"，防盗链与外链问题一律在**服务层响应时**解决，磁盘镜像保持纯净：
+不复制策略的前提是"镜像可被本地伺服"，跨域与外链问题一律在**服务层响应时**解决，磁盘镜像保持纯净：
 
-- **抓取期防盗链**：源站资产域无 Referer 返回 403 时，抓取带 `Referer: {源站域}` 伪装【lando】。
-- **运行期 CDN 基址改写**：samsy 的源 bundle 把音频路径无条件改写为 BunnyCDN 前缀且 CDN 防盗链——`serve.mjs` 在响应层把 CDN 基址动态替换为 `/cdn/` 并按扩展名映射回本地目录【samsy】；复刻侧还可利用源站自带的 `?cdn=false` 查询参数逃生门分流到本地媒体【samsy】。
+- **抓取期补齐 Referer**：源站资产域要求同源 Referer、缺失时返回 403，抓取按其要求带 `Referer: {源站域}`【lando】。
+- **运行期 CDN 基址改写**：samsy 的源 bundle 把音频路径无条件改写为 BunnyCDN 前缀且该 CDN 要求同源引用——`serve.mjs` 在响应层把 CDN 基址动态替换为 `/cdn/` 并按扩展名映射回本地目录【samsy】；复刻侧还可利用源站自带的 `?cdn=false` 查询参数分流到本地媒体【samsy】。
 - **改写的副作用要登记**：lando 服务层改写文本响应后字节无法匹配原 SRI 哈希，因此剥离 integrity 属性并登记为偏差 6.10【lando】。
 - **一代反例**：rogier 直接改磁盘 bundle（禁 service worker、detect-gpu benchmarks 本地化），但把每处重写登记在案（PHASE1_AUDIT "Known local JS rewrites"）并在对比时扣除——后代演进为"干脆不改磁盘"【rogier】。若被迫改磁盘，必须照此逐处登记。
 

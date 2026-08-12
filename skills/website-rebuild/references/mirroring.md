@@ -49,7 +49,7 @@ rogier 首创、noomo/lando 三代实战传承的骨架【rogier】【noomo】�
 
 ## 2. redirect: "manual" 纪律（红线）
 
-爬虫**绝不默认跟随重定向**。kimi 的著名教训：第一版爬虫用 `redirect: "follow"`，把 301 目标的 body 写在来源路径下，**凭空造出 10 个假文件——"把 301 伪装成 200"**【kimi】。修复方案三件套：
+爬虫**绝不默认跟随重定向**。kimi 的著名教训：第一版爬虫用 `redirect: "follow"`，把 301 目标的 body 写在来源路径下，**凭空造出 10 个假文件——"把 301 误当成 200"**【kimi】。修复方案三件套：
 
 1. 爬虫 fetch 一律 `redirect: "manual"`；
 2. 重定向单独记入 `redirects.tsv` 账本（"这是源站行为，不是爬虫记账"）；
@@ -74,7 +74,7 @@ rogier 首创、noomo/lando 三代实战传承的骨架【rogier】【noomo】�
 一切本地化适配在**服务层响应时动态完成**，磁盘纯净【samsy】【noomo】【lando】。`scripts/serve.mjs`（samsy 首创响应层改写，kimi→noomo→lando 四代传承）职责清单：
 
 - **MIME 补全**（glb/hdr/ktx2 等）+ **Range 请求**支持（视频可 seek）【noomo】。
-- **CDN 基址动态改写**：源 bundle 无条件写死 BunnyCDN 前缀且 CDN 防盗链 → 响应层把基址替换为 `/cdn/` 并映射回本地目录【samsy】；外部 host URL 统一重写为 `/ext/<host>/` 路径【lando】。
+- **CDN 基址动态改写**：源 bundle 无条件写死 BunnyCDN 前缀且该 CDN 要求同源引用 → 响应层把基址替换为 `/cdn/` 并映射回本地目录【samsy】；外部 host URL 统一重写为 `/ext/<host>/` 路径【lando】。
 - **遥测 stub**：GA 反代路径返回 JS stub，不外联【lando】。
 - **404 语义复刻**：未知路径回落源站 404 模板并返回真 HTTP 404（平台语义）【lando】。
 - **RSC 路由**：带 RSC 请求头的请求路由到 `_rsc/` 镜像【kimi】。
@@ -111,11 +111,12 @@ M0.5 之后，`serve.mjs` 终身兼任后续所有对拍的"源站参照服"（�
 
 特别小心有行为副作用的第三方：samsy 的 PartyKit 多人服务直连的是**源站生产房间**——决策表里要写明礼仪边界（"别广播"）【samsy】。bundle 内出现 `/api/` 字符串 ⇒ 强制做运行时 API 快照（导航数据可能在 headless CMS 里）【probe】。
 
-## 7. 防盗链对策
+## 7. 跨域与受保护资产的抓取
 
-- **带 Referer 抓取**：资产域无 Referer 返回 403 → 抓取请求带 `Referer: https://<目标站>/`【lando】。
-- **小响应告警**：bundle 响应 <1KB 极可能是拒绝页（landonorris 防盗链返回 32 字节拒绝页，曾造成探测假阴性）——按字节数守卫，触发即带 Referer 重试【probe】。
-- **CDN 防盗链的运行时对策**：镜像抓取解决"抓得下来"，本地回放还要解决"bundle 会去请求 CDN"——用 §4 的服务层基址改写，不改磁盘【samsy】。
+- **补齐 Referer 请求头**：部分资产域要求同源 Referer，缺失时按其约定返回 403 → 抓取请求按要求带上 `Referer: https://<目标站>/`，满足服务器对合法引用的期望【lando】。
+- **小响应告警**：bundle 响应 <1KB 极可能是拒绝页（landonorris 的资产域缺 Referer 时返回 32 字节拒绝页，曾造成探测假阴性）——按字节数守卫，触发即补齐 Referer 重试【probe】。
+- **CDN 跨域引用的运行期处理**：镜像抓取解决"抓得下来"，本地回放还要解决"bundle 会去请求 CDN"——用 §4 的服务层基址改写把引用指回本地，不改磁盘【samsy】。
+- 遇到需要登录态、付费墙或授权的资产（本 skill 适用范围之外），停止并告知用户，不尝试获取。
 
 ## 8. 镜像盲区 checklist
 
@@ -134,7 +135,7 @@ M0.5 之后，`serve.mjs` 终身兼任后续所有对拍的"源站参照服"（�
 
 ## 9. 常见坑
 
-- **redirect follow 造假文件**：默认跟随重定向会把 301 伪装成 200，凭空造出假文件——`redirect: "manual"` 红线【kimi】。
+- **redirect follow 造假文件**：默认跟随重定向会把 301 误当成 200，凭空造出假文件——`redirect: "manual"` 红线【kimi】。
 - **服务端行为零留痕**：redirects/状态码必须逐 URL 实测，读产物读不出来；308 vs 301 这种差异只有断言状态码本身才能抓住【kimi】。
 - **catch-all 假 200**：请求 `.map`/任意路径返回 index.html（other-side-of-truth）——对每个下载物做 content-type 校验与哈希碰撞检测（大量文件同 hash = catch-all 兜底页）【probe】。
 - **HTML 里没有 `<script src>`**：现代站可能全靠内联 `import()`（Shopify Editions 三代）——爬虫只认 script 标签会漏掉全部 JS【probe】；script 枚举还要排除 HTML 注释内的脚本【probe】。

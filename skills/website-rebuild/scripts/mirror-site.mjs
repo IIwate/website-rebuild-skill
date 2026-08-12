@@ -21,8 +21,8 @@
  * Lineage: rogierdeboeve-rebuild (BFS regex crawler + manifest, ~250 lines)
  *   -> storytellingnoomo-rebuild ("Adapted from rogierdeboeve-rebuild": same-origin
  *      absolute paths, css url() refs, glTF buffer/image URIs)
- *   -> landonorris-rebuild (asset-host whitelist, Referer countermeasure for
- *      hotlink-protected CDNs, 404-template probe).
+ *   -> landonorris-rebuild (asset-host whitelist, same-origin Referer header for
+ *      asset CDNs that require it, 404-template probe).
  */
 import { mkdir, writeFile } from 'node:fs/promises';
 import { dirname, join, relative, extname } from 'node:path';
@@ -115,8 +115,8 @@ async function save(url, buf, contentType) {
 
 async function get(url) {
   const res = await fetch(url, {
-    // Referer countermeasure (landonorris lesson): hotlink-protected asset CDNs
-    // return 403 without a Referer from the origin.
+    // Some asset CDNs require a same-origin Referer and return 403 without one
+    // (landonorris lesson); supply it so legitimate requests are served.
     headers: { 'user-agent': UA, accept: '*/*', referer: ORIGIN + '/' },
     redirect: 'follow',
   });

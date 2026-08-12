@@ -69,7 +69,7 @@ grep -n 'WebGLRenderer\|dispatchWorkgroups' bundle.lines   # 命中后必须归�
 
 | 维度 | 评什么 | 对应加载的指南 |
 |---|---|---|
-| 素材获取 | 资产体量、防盗链、第三方桶、运行时拼接路径比例 | `references/mirroring.md` |
+| 素材获取 | 资产体量、跨域引用限制、第三方桶、运行时拼接路径比例 | `references/mirroring.md` |
 | 3D/WebGL 复杂度 | 场景数、shader 数、渲染栈（WebGL1/2/WebGPU-TSL）、后处理链长度 | `references/webgl-scenes.md` |
 | 滚动/动画编排 | 事实来源形态（GSAP 代码/烘焙数据/CSS 变量/物理常量）、编排层数 | `references/animation-recovery.md` |
 | 私有格式 | 自研二进制格式有无、是否有开源参照（.sog = PlayCanvas SOG 可借开源比对【oryzo】） | `references/binary-formats.md` |
@@ -98,7 +98,7 @@ grep -n 'WebGLRenderer\|dispatchWorkgroups' bundle.lines   # 命中后必须归�
 
 | 分项 | 星级 | 为什么（引用证据） | 对标前作 |
 |---|---|---|---|
-| 素材获取 | ★★★ | 例：外部 CDN 域带 Referer 防盗链、运行时拼接基址 ×2 | lando |
+| 素材获取 | ★★★ | 例：外部 CDN 域要求同源 Referer、运行时拼接基址 ×2 | lando |
 | 3D/WebGL | ★★ | 例：单场景、shader 全内联可提取 | rogier（多场景）之下 |
 | 滚动/动画编排 | ★★★ | 例：GSAP 命令式 + 无全局时间轴 | oryzo 同型 |
 | 私有格式 | ★ | 例：无自研二进制 | — |

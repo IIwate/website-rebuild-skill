@@ -48,7 +48,7 @@ cmp -s probe/a.html probe/b.html && echo BYTE-IDENTICAL || { wc -c probe/a.html 
 
 三分类，直接影响判级与后续验收门设计：
 - **byte-identical**：理想镜像对象（apple、noomo 的 SSR 输出连 26KB 注水负载都逐字节一致）【probe】。
-- **token 级差异**：仅 nonce/随机装饰串（kprverse 全文只差 12 个字符的装饰性编号；Imperva 反爬 token 轮换同类）→ 仍可镜像，验收门加掩码规则，**不要误判为动态渲染判 D**【probe】。
+- **token 级差异**：仅 nonce/随机装饰串（kprverse 全文只差 12 个字符的装饰性编号；某些 WAF/CDN 每次注入的轮换 token 同类）→ 仍可镜像，验收门加掩码规则，**不要误判为动态渲染判 D**【probe】。
 - **内容级差异**：文案/结构/数据随请求变（A/B 分桶、个性化注水）→ D 信号（airbnb）【probe】。
 
 ### 步骤 3：物种/年代校验（防"隐性下线"）
@@ -87,7 +87,7 @@ grep -ciE 'theatre|@react-three/fiber' probe/a.html  # 动画即数据 → C 信
 ```bash
 BUNDLE='https://example.com/assets/main.xxxx.js'
 curl -s -A "$UA" -o probe/bundle.js -w 'size=%{size_download}\n' "$BUNDLE"
-# 响应 <1KB → 极可能是防盗链拒绝页（landonorris 返回 32 字节拒绝页造成假阴性），带 Referer 重试
+# 响应 <1KB → 极可能是缺 Referer 的拒绝页（landonorris 返回 32 字节拒绝页造成假阴性），补齐 Referer 重试
 [ "$(wc -c < probe/bundle.js)" -lt 1024 ] && curl -s -A "$UA" -e "${TARGET%/*}/" -o probe/bundle.js "$BUNDLE"
 # minification 形态预检（未混淆产物可跳过 beautify，省一道工）
 wc -lc probe/bundle.js
@@ -134,7 +134,7 @@ grep -c '/api/'         probe/bundle.lines    # >0 ⇒ 镜像阶段强制做运�
    pangram-pangram）/ SSR 快照锁定 + 端点 stub（hackernews）/ React-SSR 冻结与注水剥离 /
    行为外置进 Rive、glTF、KTX2 二进制资产的直搬与 runtime 锁定 / Nuxt-Vue SSG payload 展开
    （chungiyoo）/ 第三方 GCS 桶 + manifest 驱动资产发现（kodeclubs）/ 公开 sourcemap 直取 +
-   反爬 token（orano）/ 运行时 API-headless CMS 快照（synchronized-studio）/ HAR 驱动镜像
+   WAF 轮换 token 掩码（orano）/ 运行时 API-headless CMS 快照（synchronized-studio）/ HAR 驱动镜像
    （persepolis）——逐项列名后按 §1 的 B 政策执行【probe】
 ```
 
@@ -159,7 +159,7 @@ grep -c '/api/'         probe/bundle.lines    # >0 ⇒ 镜像阶段强制做运�
 1. 存活性判定到**路径粒度**，且用 GET 不用 HEAD（kprverse API 网关对 HEAD 假 404）。
 2. `curl -sIL` 表面 200 会掩盖 301 退役信号——必须校验**最终 URL 与目标主体同一性**。
 3. 200 后必须做**物种/年代校验**：generator meta、主题 schema、依赖 license 版权年份、获奖期技术栈残留 grep。
-4. bundle 响应 <1KB → 带 **Referer** 重试（landonorris 防盗链返回 32 字节拒绝页，造成假阴性）。
+4. bundle 响应 <1KB → 补齐 **Referer** 请求头重试（landonorris 的资产域缺 Referer 时返回 32 字节拒绝页，造成假阴性）。
 5. script 枚举要**排除 HTML 注释内的脚本**。
 6. 现代站 HTML 可能**没有任何 `<script src>`**（Shopify Editions 三代全靠内联 `import()`）——只认 script 标签会漏掉全部 JS。
 7. **catch-all 假 200**：请求 `.map` 返回 index.html（other-side-of-truth）——对下载物做 content-type 与哈希碰撞校验。
@@ -167,14 +167,14 @@ grep -c '/api/'         probe/bundle.lines    # >0 ⇒ 镜像阶段强制做运�
 9. MB 级单行文件先 `tr` 注入换行再 grep，防有界量词正则卡死。
 10. 未混淆产物（bruno-simon、star-atlas）可跳过 js-beautify——先做 **minification 形态预检**再决定流程。
 11. 有公开 sourcemap（orano、linear）时直取 sourcesContent 源码，替代 beautify 流程。
-12. 反爬 token 轮换（Imperva）是 nonce 级差异，**不要误判为动态渲染判 D**。
+12. WAF/CDN 每次注入的轮换 token 是 nonce 级差异，**不要误判为动态渲染判 D**（把它当可掩码噪声即可）。
 
 ## 6. 常见坑
 
 - **HEAD 假死 / GET 存活**：Lambda/API GW 托管静态站的常见形态，只用 `-I` 会把活站判 X【probe】。
 - **平台名预判**：凭"这是 Webflow/大厂站"直接预判会错——webflow.com 预判不适用，实测有手写 GSAP/three.js bundle，判 A【probe】。判级只认指纹证据。
 - **框架名单因子判级**：Nuxt 站可以是 A（noomo），Next RSC 站一定是 C（opal-tadpole）——差别在三判据③【probe】。
-- **把 token 噪声当动态渲染**：nonce/装饰性随机串/反爬 token 都是可掩码的确定性站【probe】。
+- **把 token 噪声当动态渲染**：nonce/装饰性随机串/WAF 轮换 token 都是可掩码的确定性站【probe】。
 - **只探根域**：获奖路径 404 而根域 200 的站会被误判存活【probe】。
 - **拖延镜像**：31 个历年获奖站 29% 已消失，集齐五种消亡形态（域名易主/转发、平台回收、域名抢注、路径移除、原地替换）。判级为 A/B 的瞬间，**第一时间全站镜像不是最佳实践，是抢救行为**——立即进入 `references/mirroring.md`【probe】。
 

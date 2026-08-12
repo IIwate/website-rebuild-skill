@@ -4,7 +4,7 @@
 
 | 脚本 | 用途 | 典型用法 | 出处 | 成熟度 |
 |---|---|---|---|---|
-| `mirror-site.mjs` | BFS 爬虫镜像源站（页面/跨域资产/manifest，文本资产迭代到不动点；含 Referer 防盗链对策、404 模板探测） | `node mirror-site.mjs --origin https://example.com --hosts cdn.x.com --probe-404 /no-such-page` | lando 版（rogier→noomo→lando 三代传承） | 高 |
+| `mirror-site.mjs` | BFS 爬虫镜像源站（页面/跨域资产/manifest，文本资产迭代到不动点；对要求同源 Referer 的资产域补齐 Referer 头、404 模板探测） | `node mirror-site.mjs --origin https://example.com --hosts cdn.x.com --probe-404 /no-such-page` | lando 版（rogier→noomo→lando 三代传承） | 高 |
 | `netcapture.mjs` | 真实浏览器 CDP 抓包，记录实际同源请求与磁盘镜像 diff 对账（HAVE/GAP），补运行时拼接 URL | `node netcapture.mjs --origin https://example.com --routes /,/about --fetch` | kimi 版 | 高 |
 | `serve.mjs` | 零依赖静态服务器：MIME 补全、Range、redirects.tsv 重定向回放、`/ext/<host>/` 服务层改写（镜像磁盘神圣不改）、`?__probe` 注入 probe-shim、404.html 回放 | `PORT=5175 SERVE_ROOT=legacy-mirror node serve.mjs` | noomo+lando 合并版（samsy→kimi→noomo→lando 四代传承；kimi 的 RSC 层需按项目自加） | 高 |
 | `probe.mjs` | CDP 无头探针：console/异常/网络采集 + Log 域监听（SRI 拦截盲区修复）、`--eval/--evalAfter/--shot/--mobile`、CLEAN 判定退出码进 CI | `node probe.mjs http://localhost:5175/ --shot out.png --eval "document.title"` | lando 版（rogier 探针家族→samsy regression→lando） | 高 |
