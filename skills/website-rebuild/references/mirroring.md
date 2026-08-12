@@ -73,7 +73,7 @@ rogier 首创、noomo/lando 三代实战传承的骨架【rogier】【noomo】�
 
 一切本地化适配在**服务层响应时动态完成**，磁盘纯净【samsy】【noomo】【lando】。`scripts/serve.mjs`（samsy 首创响应层改写，kimi→noomo→lando 四代传承）职责清单：
 
-- **MIME 补全**（glb/hdr/ktx2 等）+ **Range 请求**支持（视频可 seek）【noomo】。
+- **MIME 补全**（glb/hdr/ktx2 等）+ **Range 请求**支持（视频可 seek）【noomo】。HLS 站另需 `.m3u8`/`.ts`/`.m4s` 正确 MIME，否则播放器拒绝清单、补录下来的阶梯照样不播（`scripts/serve.mjs` 已内置）【racingshop】。
 - **CDN 基址动态改写**：源 bundle 无条件写死 BunnyCDN 前缀且该 CDN 要求同源引用 → 响应层把基址替换为 `/cdn/` 并映射回本地目录【samsy】；外部 host URL 统一重写为 `/ext/<host>/` 路径【lando】。
 - **遥测 stub**：GA 反代路径返回 JS stub，不外联【lando】。
 - **404 语义复刻**：未知路径回落源站 404 模板并返回真 HTTP 404（平台语义）【lando】。
@@ -124,6 +124,7 @@ M0.5 之后，`serve.mjs` 终身兼任后续所有对拍的"源站参照服"（�
 
 - [ ] worker 运行时才 fetch 的文件（WASM 排序 worker、baker.worker）【oryzo】【samsy】
 - [ ] 懒加载资源（画廊图片、preloader 图、懒加载 chunk）【oryzo】【samsy】
+- [ ] **流媒体清单阶梯**：HLS/DASH 的 master `.m3u8`/`.mpd` 能被静态爬到，但 rendition 播放列表与 `.ts`/`.m4s` 分片是播放器**运行时**才请求的，静态爬取全漏（racingshop 实测只抓到 master + 封面 MP4，漏了 3 个 rendition + 12 个分片，靠探针报 404 才暴露）——用 `scripts/gapfill-video.mjs` 递归解析清单阶梯补录【racingshop】
 - [ ] 移动端变体：oryzo 规则是扩展名前插 `_MOBILE`（纹理上限 800px vs 桌面 2560px）——逆向出命名规则后批量补抓【oryzo】；双端纹理变体（桌面 webp + 移动 ktx2）【lando】
 - [ ] 仅特定 query 触发的 chunk（samsy 的 `?editor` / `?gameboy` 才加载的 editor-*.js / gb-*.js）【samsy】
 - [ ] 纹理集拼接路径（正则不可见，只有实跑网络请求可见）【lando】

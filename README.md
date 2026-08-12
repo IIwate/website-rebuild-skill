@@ -55,15 +55,16 @@ cp -R skills/website-rebuild ~/.claude/skills/website-rebuild
 ```
 skills/website-rebuild/    # 技能本体，目录结构遵循 agentskills.io 规范
 ├── SKILL.md               #   主流程 + 判级门 + 宪法纪律（激活时整体加载）
-├── references/            #   14 份分场景指南（按需加载）
+├── references/            #   15 份分场景指南（按需加载）
 ├── assets/templates/      #   REBUILD_PLAN / engine-notes 文档模板
-└── scripts/               #   12 个零依赖 Node 工具
+└── scripts/               #   13 个零依赖 Node 工具
 README.md                  # 本文件
 ```
 
 ## Roadmap
 
-- **v0.2+（B 类缺口，按需求频率排序）**：Shopify 平台层剥离、第三方存储桶/manifest 驱动资产发现、运行时 API 与 headless CMS 快照、Nuxt/Vue SSG payload 展开、多 chunk 大型 bundle 切片、Wayback 抢救流程
+- **v0.1.1（已合并）**：首个实战项目（racing.shop，B 类 Shopify 店）的回流——Shopify 平台层指南、HLS 流媒体阶梯补录、爬虫协议相对 URL 修复、零外联门断言面补全、stub 双模式规则、localhost 语义分叉策略
+- **v0.2+（剩余 B 类缺口，按需求频率排序）**：第三方存储桶/manifest 驱动资产发现、运行时 API 与 headless CMS 快照、Nuxt/Vue SSG payload 展开、多 chunk 大型 bundle 切片、Wayback 抢救流程
 - **远期（C 类分支）**：声明式架构的"重构式逆向"方法论。实测显示大厂创意页正在向该形态漂移（Shopify Editions 三代 B→B→C），此分支迟早需要
 - 每完成一个新的复刻项目，将其新经验合并回本 skill
 

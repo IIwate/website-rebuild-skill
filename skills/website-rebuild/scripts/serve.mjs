@@ -82,6 +82,14 @@ const MIME = {
   ".mp4": "video/mp4",
   ".mp3": "audio/mpeg",
   ".wav": "audio/wav",
+  // HLS ladder (see scripts/gapfill-video.mjs). Serving a mirrored .m3u8 with
+  // the wrong type makes the player refuse the manifest, so the recovered
+  // renditions never play. NOTE: in a mirror, ".ts" is an MPEG-TS segment,
+  // never TypeScript — never serve it as text/*.
+  ".m3u8": "application/vnd.apple.mpegurl",
+  ".ts": "video/mp2t",
+  ".m4s": "video/iso.segment",
+  ".mpd": "application/dash+xml",
   ".otf": "font/otf",
   ".ttf": "font/ttf",
   ".woff": "font/woff",

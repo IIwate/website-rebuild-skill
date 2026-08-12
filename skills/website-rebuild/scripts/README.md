@@ -6,6 +6,7 @@
 |---|---|---|---|---|
 | `mirror-site.mjs` | BFS 爬虫镜像源站（页面/跨域资产/manifest，文本资产迭代到不动点；对要求同源 Referer 的资产域补齐 Referer 头、404 模板探测） | `node mirror-site.mjs --origin https://example.com --hosts cdn.x.com --probe-404 /no-such-page` | lando 版（rogier→noomo→lando 三代传承） | 高 |
 | `netcapture.mjs` | 真实浏览器 CDP 抓包，记录实际同源请求与磁盘镜像 diff 对账（HAVE/GAP），补运行时拼接 URL | `node netcapture.mjs --origin https://example.com --routes /,/about --fetch` | kimi 版 | 高 |
+| `gapfill-video.mjs` | HLS 流媒体阶梯补录：master m3u8 → 递归取 variant/备用音轨/I-frame 播放列表 → 逐段下载 `.ts`/`.m4s`（含 EXT-X-MAP 初始化段、EXT-X-KEY）→ 追加进 manifest 账本。补的是静态爬虫的结构性盲区：HTML 里只有 master，其余全由播放器运行时 fetch，只有探针 404 才暴露（`serve.mjs` 的 MIME 表已含 `.m3u8`/`.ts`/`.m4s`/`.mpd`，补录后即可本地回放） | `node gapfill-video.mjs --master https://cdn.x.com/vp/<id>/<id>.m3u8 --origin https://example.com`（`--dry-run` 先看阶梯全貌） | racingshop 版（通用化：递归下降 + 相对 URI 解析 + 备用轨道/fMP4 分支） | 高（racingshop 实战验证扁平阶梯；递归与备用轨道分支为通用化新增，已用 fixture + 原站数据回归） |
 | `serve.mjs` | 零依赖静态服务器：MIME 补全、Range、redirects.tsv 重定向回放、`/ext/<host>/` 服务层改写（镜像磁盘神圣不改）、`?__probe` 注入 probe-shim、404.html 回放 | `PORT=5175 SERVE_ROOT=legacy-mirror node serve.mjs` | noomo+lando 合并版（samsy→kimi→noomo→lando 四代传承；kimi 的 RSC 层需按项目自加） | 高 |
 | `probe.mjs` | CDP 无头探针：console/异常/网络采集 + Log 域监听（SRI 拦截盲区修复）、`--eval/--evalAfter/--shot/--mobile`、CLEAN 判定退出码进 CI | `node probe.mjs http://localhost:5175/ --shot out.png --eval "document.title"` | lando 版（rogier 探针家族→samsy regression→lando） | 高 |
 | `verify-routes.mjs` | 路由/重定向/head 契约门：head+`<main>` 全属性逐字段对镜像比、重定向断言状态码本身 | 编辑文件顶部 CONFIG 后 `node verify-routes.mjs` | kimi 版 | 高（CONFIG 需按项目填写） |
@@ -24,4 +25,5 @@
 - **regression.mjs**（状态全遍历 CDP 回归：localStorage 预种、逐状态截图断言）——状态机定义站点专用，probe.mjs 已覆盖单页探测。移植自 `samsyninja-rebuild/scripts/regression.mjs`。
 - **gen-shells.mjs / gen_components.py**（DOM 外壳生成：零重写流水线 vs 保守切组件）——策略绑定站点类型（见 dom-shell-strategies 分支），不宜做成单一通用脚本。移植自 `landonorris-rebuild/scripts/gen-shells.mjs` / oryzo 的 `gen_components.py`。
 - **rogier 的 capture.mjs / analyze-home-bands.mjs**（行亮度剖面分析）——依赖 sharp，违反零依赖哲学，未纳入；等价能力可用 `lib/png.mjs` + 自写剖面重做。
+- **racingshop 的 gapfill.mjs（协议相对 URL 归一重解）**——评估后不纳入：它修的是爬虫把 `//host/path` 拼成 `https://origin//host/path` 的 bug，而 `mirror-site.mjs` 已在提取阶段就把协议相对 URL 归一成 `https://host/path`，根因不再产生，留着只会诱导别人跑一个针对不存在故障的补丁。若历史镜像里已有这类损坏条目，一次性重解那份 manifest 即可，不需要常备脚本。
 - **kimi 确定性冻结协议（八协议表）**——是文档/协议不是脚本，应进 references/，不在本目录范围。

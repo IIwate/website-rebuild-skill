@@ -130,7 +130,8 @@ grep -c '/api/'         probe/bundle.lines    # >0 ⇒ 镜像阶段强制做运�
    ├─ 双抓 byte-identical（或仅 token 级差异）
    └─ 无内容级 API 依赖（bundle 内 /api/ 为零或仅遥测）
 5. 其余 → B：管线主线成立，但存在以下任一附加条件（即"缺哪份指南"）：
-   多 chunk 大规模切片（stripe 74 分包）/ Shopify 平台层剥离（allbirds、mana-yerba-mate、
+   多 chunk 大规模切片（stripe 74 分包）/ Shopify 平台层剥离（✅ 指南已就绪：
+   `references/shopify-platform.md`；allbirds、mana-yerba-mate、
    pangram-pangram）/ SSR 快照锁定 + 端点 stub（hackernews）/ React-SSR 冻结与注水剥离 /
    行为外置进 Rive、glTF、KTX2 二进制资产的直搬与 runtime 锁定 / Nuxt-Vue SSG payload 展开
    （chungiyoo）/ 第三方 GCS 桶 + manifest 驱动资产发现（kodeclubs）/ 公开 sourcemap 直取 +

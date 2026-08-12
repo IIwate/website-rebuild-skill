@@ -146,8 +146,12 @@ function extractAssetUrls(text, baseUrl) {
     addIfAsset('https://' + decodeEntities(m[1]), urls);
   }
   // root-relative refs on the origin itself (noomo-generation behavior: sites
-  // that serve their own bundles/media reference them as /path/file.ext)
-  for (const m of text.matchAll(/(?:src|href)=["'](\/[^"']+?\.[a-z0-9]{2,5}(?:\?[^"']*)?)["']/gi)) {
+  // that serve their own bundles/media reference them as /path/file.ext).
+  // The (?!\/) guard is load-bearing: protocol-relative refs (//host/path) also
+  // start with "/", and without it they get joined onto ORIGIN as
+  // https://host//host/path — 77 phantom 404s on the first Shopify target
+  // (racingshop-rebuild). Those refs are already handled by the branch above.
+  for (const m of text.matchAll(/(?:src|href)=["'](\/(?!\/)[^"']+?\.[a-z0-9]{2,5}(?:\?[^"']*)?)["']/gi)) {
     addIfAsset(ORIGIN + decodeEntities(m[1]), urls);
   }
   // relative url(...) inside CSS

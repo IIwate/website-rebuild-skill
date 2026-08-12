@@ -122,6 +122,17 @@ REBUILD_PLAN 固定维护三张表（lando 定型，各项目同构【lando】�
 - lando：`stubs-notes.md` 是"临时骨架清单（逐波替换为溯源实现）"，每个 stub 文件标注对应源函数与行号区间【lando】；
 - 收口时冷头评审要做"零 TODO/stub 审计"（noomo M7c）【noomo】——生命周期标记就是那次审计的对账清单。
 
+### 6.1 no-op stub 必须同时是合法的 classic script 与 module（硬规则）
+
+替换外部脚本的空 stub 文件，**必须在两种加载模式下都能解析**。同一个 stub 文件常被多处引用，而这些引用未必都带 `type="module"`：
+
+- ❌ `export {}` —— 被 **classic**（非 module）`<script src>` 加载时抛 `SyntaxError`，脚本整体不执行。后果会级联：源站后续代码假定该模块已注册全局对象，于是变成 `.init` on undefined 的崩溃，错误现场离真因很远【racingshop】。
+- ❌ `export default null`、顶层 `import`、顶层 `await` —— 同理。
+- ✅ **纯注释文件**（如 `// no-op stub: replaces <原脚本名>, see REBUILD_PLAN §6 D6`）——两种模式下都合法、都无副作用。**首选**。
+- ✅ 受保护的 IIFE（`(function(){ /* no-op */ })();`）——需要 stub 真的建立某个全局占位对象时用。
+
+判定方法：不要凭引用点当前的写法猜。grep 构建产物里**全部**指向该 stub 的 `<script>` 标签，确认 `type` 属性分布；只要存在一处不带 `type="module"`，就必须走双模式合法写法。
+
 ## 7. 常见坑（移植坑）
 
 1. **CSS 级联顺序即语义**【rogier】：源站把布局工具类（`.grid`、`.col-*`）放在样式表**末尾**，复刻放开头导致同特异性冲突全部反向解析、项目页媒体栅格坍塌。对策：逐字复刻连"规则出现的顺序"一起复刻。
