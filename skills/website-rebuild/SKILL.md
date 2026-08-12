@@ -1,13 +1,9 @@
 ---
 name: website-rebuild
 description: 1:1 rebuild of award-winning creative websites (WebGL / scroll-animation / portfolio sites). Evidence-driven pipeline - mirror-first forensics, line-number-traceable reverse engineering of minified bundles, verbatim porting, quantitative verification gates. Use when user asks to "复刻网站", "重建网站", "1:1 rebuild", "clone this site", or provides a URL of a creative/award site to reproduce.
-version: 0.1.0
+compatibility: Requires Node 22+ (bundled scripts use built-in WebSocket to talk to CDP), npx, and a local Chrome/Chromium for headless comparison. Agent-agnostic - works in any Agent Skills-compatible runtime.
 metadata:
-  requires:
-    bins:
-      - node
-      - npx
-    notes: Node 22+（脚本依赖内置 WebSocket 直连 CDP）；本机 Chrome/Chromium（无头对拍用）
+  version: "0.1.0"
 ---
 
 # Website Rebuild（获奖创意站 1:1 复刻）
@@ -70,7 +66,7 @@ metadata:
 
 **M0 / M0.5 — 镜像取证**。加载 [references/mirroring.md](references/mirroring.md)。用 `scripts/mirror-site.mjs` BFS 爬取 + `scripts/netcapture.mjs` 真实浏览器补录，manifest 逐文件登记 sha256，`redirect: manual` 纪律，外部依赖逐项决策。`scripts/serve.mjs` 伺服镜像，断网验收。**这一步永远最先做**——原站随时可能消失或改版，镜像是全项目唯一证据基准，也是后续一切对拍的参照服。
 
-**M1 — 逆向建坐标系**。加载 [references/reverse-engineering.md](references/reverse-engineering.md)。`scripts/beautify-bundle.mjs`（js-beautify 钉 1.15.1）展开 bundle 到 `_pretty/`，此后行号是全项目唯一溯源坐标系。先写 `docs/engine-notes.md`（模板：[references/templates/engine-notes.md](references/templates/engine-notes.md)）再写任何代码。技术栈从 bundle 取证钉死精确版本。数据驱动动画先 dump 数值账本。建立 `REBUILD_PLAN.md`（模板：[references/templates/rebuild-plan.md](references/templates/rebuild-plan.md)）。
+**M1 — 逆向建坐标系**。加载 [references/reverse-engineering.md](references/reverse-engineering.md)。`scripts/beautify-bundle.mjs`（js-beautify 钉 1.15.1）展开 bundle 到 `_pretty/`，此后行号是全项目唯一溯源坐标系。先写 `docs/engine-notes.md`（模板：[assets/templates/engine-notes.md](assets/templates/engine-notes.md)）再写任何代码。技术栈从 bundle 取证钉死精确版本。数据驱动动画先 dump 数值账本。建立 `REBUILD_PLAN.md`（模板：[assets/templates/rebuild-plan.md](assets/templates/rebuild-plan.md)）。
 
 **M2+ — 严格溯源移植**。加载 [references/porting-discipline.md](references/porting-discipline.md)，并按分支路由表加载对应场景指南。每个移植文件头部注明源行号区间；GLSL/魔数/数据逐字提取；数据资产脚本抽取入库不手抄。
 
@@ -155,7 +151,7 @@ Step 1 侦察结果决定加载哪些场景指南（按需，不要全量加载�
 - [asset-management.md](references/asset-management.md) — 资产不复制策略与字体决策
 - [environment-traps.md](references/environment-traps.md) — 环境陷阱手册
 - [legal-and-deploy.md](references/legal-and-deploy.md) — 版权评估与部署决断
-- [templates/rebuild-plan.md](references/templates/rebuild-plan.md)、[templates/engine-notes.md](references/templates/engine-notes.md) — 文档模板
+- [assets/templates/rebuild-plan.md](assets/templates/rebuild-plan.md)、[assets/templates/engine-notes.md](assets/templates/engine-notes.md) — 文档模板
 
 ## Notes
 

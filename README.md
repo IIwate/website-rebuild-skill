@@ -1,6 +1,8 @@
 # website-rebuild-skill
 
-一个 Claude 技能（skill）：输入一个获奖创意网站的网址，按取证式方法论完成 1:1 复刻——全站镜像作证据、逆向 minified bundle 建立行号溯源、逐行为移植、量化验收门收口。
+一个网站复刻技能（skill）：输入一个获奖创意网站的网址，按取证式方法论完成 1:1 复刻——全站镜像作证据、逆向 minified bundle 建立行号溯源、逐行为移植、量化验收门收口。
+
+遵循 [Agent Skills 开放规范](https://agentskills.io/)，为**任何支持 skills 的智能体**设计——Claude Code / Claude Desktop 只是其中之一，任何实现该规范的 agent runtime 均可加载使用（skill 内的提问、脚本调用均按运行时能力自适应，不绑定特定产品）。
 
 方法论提炼自六个连续实践项目（rogierdeboeve → oryzo → samsyninja → careers-kimi → storytellingnoomo → landonorris，工期从 6.5 周收敛到 1 天），适用边界经 43 站实测探测校准（9 个异质基准站 + 3 个 Shopify Editions + 31 个 Awwwards Sites of the Year 全量）。
 
@@ -31,12 +33,16 @@
 
 前提：Node 22+、本机 Chrome/Chromium（无头对拍用）、`npx` 可用。
 
+把 `skills/website-rebuild/` 整个目录放到你的 agent 的 skills 目录即可。以 Claude Code 为例：
+
 ```bash
-# 安装到用户级（或项目级 .claude/skills/）
+# 用户级（或项目级 .claude/skills/）
 cp -R skills/website-rebuild ~/.claude/skills/website-rebuild
 ```
 
-使用：给 Claude 一个网址，说"复刻这个站"/"1:1 rebuild 这个网站"。技能会自动走：指纹判级 → 开工评级与范围确认 → 镜像取证（⛔ 门）→ 逆向建坐标系（⛔ 门）→ 溯源移植 → 量化验收 → 冷头评审与版权决断。
+其他支持 Agent Skills 规范的 runtime 按其各自的 skills 目录约定放置同一目录。
+
+使用：给你的 agent 一个网址，说"复刻这个站"/"1:1 rebuild 这个网站"。技能会自动走：指纹判级 → 开工评级与范围确认 → 镜像取证（⛔ 门）→ 逆向建坐标系（⛔ 门）→ 溯源移植 → 量化验收 → 冷头评审与版权决断。
 
 ## 方法论一页纸
 
@@ -47,7 +53,11 @@ cp -R skills/website-rebuild ~/.claude/skills/website-rebuild
 ## 仓库结构
 
 ```
-skills/website-rebuild/    # 技能本体（SKILL.md + references/ 分场景指南 + scripts/ 零依赖工具）
+skills/website-rebuild/    # 技能本体，目录结构遵循 agentskills.io 规范
+├── SKILL.md               #   主流程 + 判级门 + 宪法纪律（激活时整体加载）
+├── references/            #   14 份分场景指南（按需加载）
+├── assets/templates/      #   REBUILD_PLAN / engine-notes 文档模板
+└── scripts/               #   12 个零依赖 Node 工具
 README.md                  # 本文件
 ```
 
