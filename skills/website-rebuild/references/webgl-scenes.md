@@ -67,7 +67,7 @@ WebGL 场景对拍与 DOM 字节门有本质不同：**GPU 渲染有容差、活
 - 换页等时间过程：颜色时间轨迹逐点对拍（每 120ms 采样计算色，per-sample RGB delta ≤6）【rogier】。
 
 ### 双侧同参数、同状态、同帧
-- 镜像与复刻用同一脚本、同参数无头启动，驱动到同一状态再截图【samsy】【noomo】。
+- 镜像与复刻用同一脚本、同参数无头启动，驱动到同一状态再截图【samsy】【noomo】。**按状态量（`spreadT`/`progress`/`t`）对齐抓帧前，先量"单次截图耗时 / 被测运动全长"，≥1/10 就先修快门再谈相位**（`environment-traps.md` §7）【shopifydesign】。
 - 驱动方式要抗噪：samsy 的菜单文字被 glitch 轮换、文本匹配不可用，改按 `#topmenu` 索引点击【samsy】。
 - 滚动驱动 + 源站不可插桩 → probe-shim 路线【noomo】：约 90 行脚本在 `?__probe` 时接管 rAF/timer/visibility，手动泵 `__pump(dt, frames)` 把双侧驱动到同一 t；时间戳从 0 起，使 `Tick.seconds` 驱动的 shader 相位可对齐；**双侧同位注入**（镜像侧由静态服按 query 注入 `<head>` 首部、复刻侧用 Nitro `render:html` 钩子 unshift）——"gsap 在模块求值期捕获 rAF，注入太晚就失效，必须 head 首脚本"【noomo】。
 - 驱动细节【noomo】：
@@ -77,7 +77,9 @@ WebGL 场景对拍与 DOM 字节门有本质不同：**GPU 渲染有容差、活
 - 截图前**资产预检**：先确认镜像服务能出图再对拍，否则截图会误导归因【rogier】。
 
 ### 渲染确定性与读回防呆
-- headless 用 SwiftShader（`--use-gl=swiftshader`）保证可复现渲染【rogier】；必带 anti-throttling 旗标（`--disable-background-timer-throttling --disable-renderer-backgrounding`）【samsy】。
+- headless 用 SwiftShader（`--use-gl=swiftshader`）保证可复现渲染【rogier】——**仅当站点没有 GPU 分级时才是无脑可用的**；必带 anti-throttling 旗标（`--disable-background-timer-throttling --disable-renderer-backgrounding`）【samsy】。
+  > **⚠ 交叉警告**【shopifydesign】：`--use-gl=swiftshader` / `--disable-gpu` 属于 `determinism.md` §2.9 的**能力探测熵源**，会静默切换被测程序的分支——站点的 GPU 名黑名单正则里常常**就含 `swiftshader`**（shopify.design 的 `z3`/`H3` L22746–L22752 把 `"SwiftShader"` 直判 low），而画质档被插值进 shader 源码：**加了这条 flag，你对拍的就是 low 档 shader，而其余门跑的是 high 档**（该项目两个里程碑无人发现，两侧一致所以不红；已登记为偏差 D16）。另有一层代价：软件渲染下 1728×1080 单次 `captureScreenshot` 要 1–2s，按 `spreadT` 之类的状态量对齐抓帧会被采样偏差污染（`environment-traps.md` §7）。
+  > **决策与配套动作**（先 grep 应用区间有无 GPU 分级/能力探测，再决定用不用；用了就必须钉死画质档、断言实测档位、旗标与档位同行登记进偏差表）：见 `determinism.md` §5 的判定表。
 - `readRenderTargetPixels` 读回前必查 `gl.getError`——全零缓冲是读回假象不是黑屏【noomo】。
 - **无 `preserveDrawingBuffer` 的 WebGL canvas 不能用 `drawImage` 读**【kimi】；kimi 唯一的 WebGL 场景（Dither）用 `readPixels` 直读做字节门【kimi】。
 - seek 后必须重新驱帧再截图【noomo】。

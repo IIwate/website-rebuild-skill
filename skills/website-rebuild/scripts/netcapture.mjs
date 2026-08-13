@@ -55,7 +55,7 @@ const flag = (name, dflt) => {
 
 const ORIGIN_RAW = flag("origin", null);
 if (!ORIGIN_RAW) {
-  console.error("usage: netcapture.mjs --origin https://example.com [--mirror legacy-mirror] [--routes /,/a] [--viewports desktop,mobile] [--steps 12] [--dwell 1500] [--settle 9000] [--hosts cdn.x.com,media.y.net] [--out file.tsv] [--fetch]");
+  console.error("usage: netcapture.mjs --origin https://example.com [--mirror legacy-mirror] [--routes /,/a] [--viewports desktop,mobile] [--steps 12] [--dwell 1500] [--settle 9000] [--hosts cdn.x.com,media.y.net] [--out file.tsv] [--fetch] [--swiftshader]");
   process.exit(2);
 }
 const ORIGIN = ORIGIN_RAW.replace(/\/+$/, "");
@@ -70,6 +70,8 @@ const HOSTS_FLAG = flag("hosts", "").split(",").map((s) => s.trim()).filter(Bool
 // Same semantics as mirror-site.mjs's ASSET_HOSTS: origin + whatever you name.
 const RECORD_HOSTS = new Set([ORIGIN_HOST, ...HOSTS_FLAG]);
 const CDP_PORT = Number(process.env.CDP_PORT || 9333);
+// Opt-in software GL — see the flag list below for why it is not the default.
+const SWIFTSHADER = args.includes("--swiftshader");
 const DO_FETCH = args.includes("--fetch");
 
 // Emulated viewports; select with --viewports (comma list of these keys).
@@ -175,8 +177,17 @@ const chrome = spawn(
   [
     `--remote-debugging-port=${CDP_PORT}`,
     "--headless=new",
-    "--use-gl=swiftshader",
-    "--enable-unsafe-swiftshader",
+    // Software GL is OPT-IN (--swiftshader), not the default. The flag makes
+    // the page render headlessly on GPU-less machines, but it is also a
+    // capability-detection input: a site that tiers on the GPU name will read
+    // "SwiftShader", drop to its low tier, and you are then capturing a
+    // different program than the one you are rebuilding (determinism.md §2.9,
+    // environment-traps.md "快门速度"). For capture specifically the risk is
+    // narrow — a tier usually changes geometry/shader parameters, not which
+    // files are fetched — but verify that on your target before relying on it,
+    // because if the tier DOES switch asset variants your GAP=0 is measured
+    // against the wrong asset set.
+    ...(SWIFTSHADER ? ["--use-gl=swiftshader", "--enable-unsafe-swiftshader"] : []),
     "--no-first-run",
     "--no-default-browser-check",
     "--disable-background-timer-throttling",
