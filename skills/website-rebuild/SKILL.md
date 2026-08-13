@@ -3,7 +3,7 @@ name: website-rebuild
 description: 1:1 rebuild of award-winning creative websites (WebGL / scroll-animation / portfolio sites). Evidence-driven pipeline - mirror-first forensics, line-number-traceable reverse engineering of minified bundles, verbatim porting, quantitative verification gates. Use when user asks to "复刻网站", "重建网站", "1:1 rebuild", "clone this site", or provides a URL of a creative/award site to reproduce.
 compatibility: Requires Node 22+ (bundled scripts use built-in WebSocket to talk to CDP), npx, and a local Chrome/Chromium for headless comparison. Agent-agnostic - works in any Agent Skills-compatible runtime.
 metadata:
-  version: "0.1.1"
+  version: "0.1.2"
 ---
 
 # Website Rebuild（获奖创意站 1:1 复刻）
@@ -93,7 +93,7 @@ Step 1 侦察结果决定加载哪些场景指南（按需，不要全量加载�
 | GSAP / 烘焙动画数据 / CSS 变量动画 / 自研输入状态机 | [references/animation-recovery.md](references/animation-recovery.md) |
 | 私有二进制格式（.buf / .sog / VAT / GLB 时间线 / .riv） | [references/binary-formats.md](references/binary-formats.md) |
 | Shopify 店铺（指纹见 `cdn/shop`、`Shopify.theme`、`cdn.shopify.com`） | [references/shopify-platform.md](references/shopify-platform.md) |
-| DOM 层策略选型（所有站必经，Webflow 导出 / 静态单页 / 框架 SSR 分支不同） | [references/dom-shell-strategies.md](references/dom-shell-strategies.md) |
+| DOM 层策略选型（所有站必经；Webflow 导出 / 静态单页 / 框架 SSR 分支不同，另有"DOM 被 3D 引擎当坐标源读"的正交约束） | [references/dom-shell-strategies.md](references/dom-shell-strategies.md) |
 | 大体量资产（百 MB 级媒体 / 授权字体） | [references/asset-management.md](references/asset-management.md) |
 | 无头探测行为异常 / 疑似环境问题 | [references/environment-traps.md](references/environment-traps.md) |
 
@@ -115,16 +115,17 @@ Step 1 侦察结果决定加载哪些场景指南（按需，不要全量加载�
 
 | 脚本 | 用途 | 使用阶段 |
 |---|---|---|
-| `scripts/mirror-site.mjs` | BFS 爬虫镜像（正则集 + 资产白名单 + 迭代到不动点 + manifest） | M0 |
-| `scripts/netcapture.mjs` | 真实浏览器 CDP 抓包，与磁盘 diff 对账补录运行时资源 | M0 |
+| `scripts/mirror-site.mjs` | BFS 爬虫镜像（资产白名单 + 迭代到不动点；`redirect:manual` + 三本账，含逐文件 sha256） | M0 第一遍 |
+| `scripts/netcapture.mjs` | 真实浏览器 CDP 抓包对账补录运行时资源（**CDN 站必须传 `--hosts`**，否则只观测同源流量、会报假 GAP=0） | M0 第二遍 |
+| `scripts/gapfill-video.mjs` | HLS/DASH 流媒体阶梯补录（master → rendition → 分片），静态爬虫的结构性盲区 | M0（有流媒体时） |
 | `scripts/serve.mjs` | 零依赖静态服务器（MIME/Range/服务层改写/重定向回放），兼任源站参照服 | M0.5 起全程 |
 | `scripts/beautify-bundle.mjs` | js-beautify@1.15.1 钉死展开 bundle 到 `_pretty/` 并生成再生成说明 | M1 |
-| `scripts/probe.mjs` | CDP 无头探针（console/异常/网络 CLEAN 判定，退出码进 CI） | M2+ 每 commit |
+| `scripts/probe.mjs` | CDP 无头探针（console/异常/网络 CLEAN 判定，退出码进 CI；`--no-external` 断言零外联、`--walk` 全滚动走查） | M0.5 起每 commit |
 | `scripts/verify-routes.mjs` | 路由/重定向/状态码契约门 | M2+ |
 | `scripts/verify-ssr.mjs` | SSR/DOM 逐字节门 | M2+（有 SSR 产物时最先建） |
 | `scripts/pixelcompare.mjs` | 量化像素对拍（粗网格相似度 + metric 输出） | M(n-1) |
 | `scripts/side-by-side.mjs` | 双侧截图并排合成图（对拍产物留证） | M(n-1) |
-| `scripts/probe-shim.js` | 确定性驱动 shim（接管 rAF/timer，手动泵到任意 t，双侧同位注入） | M(n-1) |
+| `scripts/probe-shim.js` | 确定性驱动 shim（接管整个熵面：rAF/timer/`performance.now`/`Date.now`/定种 `Math.random`，手动泵到任意 t，双侧同位注入） | M(n-1) |
 | `scripts/dump-timelines.mjs` | GLB 动画曲线 dump 成 JSON 数值账本 | M1（数据驱动动画时） |
 | `scripts/lib/png.mjs` | 零依赖 PNG 编解码 | 对拍脚本依赖 |
 
@@ -154,7 +155,7 @@ Step 1 侦察结果决定加载哪些场景指南（按需，不要全量加载�
 - [porting-discipline.md](references/porting-discipline.md) — 溯源移植纪律（必经）
 - [verification-gates.md](references/verification-gates.md) — 验收门选型与失效模式（必经）
 - [determinism.md](references/determinism.md) — 确定性冻结协议与 probe-shim
-- [dom-shell-strategies.md](references/dom-shell-strategies.md) — DOM 层三策略选型
+- [dom-shell-strategies.md](references/dom-shell-strategies.md) — DOM 层策略选型（A/B/C + 正交约束 D）
 - [webgl-scenes.md](references/webgl-scenes.md) — WebGL/GLSL 场景逆向
 - [animation-recovery.md](references/animation-recovery.md) — 动画/输入逆向路径
 - [binary-formats.md](references/binary-formats.md) — 私有二进制格式

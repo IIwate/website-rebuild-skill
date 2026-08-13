@@ -9,7 +9,8 @@
   1. 画面含本性不可冻的随机源（视频帧相位、glitch/粒子随机相位）【samsy】——或对局部用"同等隐藏"协议（§2.8）剥离后其余部分仍走 byte-equal；
   2. 跨机器/跨 Chrome 版本比对（渲染不再逐字节确定）；WebGL 场景在无头下用 SwiftShader（`--use-gl=swiftshader`）保证可复现渲染【rogier】，但与真机输出仍有差异（sRGB 色彩管理、授权字体），须真机兜底【oryzo】；
   3. 熵源没有枚举完（症状：同侧连续两次截图哈希就不相等——先自拍两次验证单侧确定性，再谈双侧对拍）；
-  4. 字体加载时序被改动。kimi 拒绝子集化 4.8MB 字体的首要理由：字体是首屏渲染门控（deck 等 `document.fonts.ready` 才渲染），子集化会污染时序基线；canvas `measureText` 折行会变、点阵字体对坐标舍入极敏感【kimi】。**测量基准的稳定性优先于"看起来该做的优化"**。
+  4. **双侧的能力探测结果不同**（画质档、编解码器分支、设备分支）——此时两侧跑的根本不是同一个程序（shader 源码都可能不同），任何门都无意义；先按 §2.9 在两侧钉死同一探测结果再谈对拍【shopifydesign】；
+  5. 字体加载时序被改动。kimi 拒绝子集化 4.8MB 字体的首要理由：字体是首屏渲染门控（deck 等 `document.fonts.ready` 才渲染），子集化会污染时序基线；canvas `measureText` 折行会变、点阵字体对坐标舍入极敏感【kimi】。**测量基准的稳定性优先于"看起来该做的优化"**。
 
 ## 1. 方法内核：枚举熵源，逐个消掉
 
@@ -21,18 +22,20 @@ kimi M4.3 日志原话："**找出渲染器的全部熵源，逐个用环境补�
 | rAF 时间戳 | 时间戳驱动的累积器、跑马灯 | `clock+raf`、`framebudget` |
 | 媒体时钟 | 视频帧推进 | 媒体层补丁 |
 | `Math.random` | 洗牌、字符瀑布 | 种子化随机 |
+| 定时器（`setTimeout`/`setInterval`） | 倒计时、定时编排 | 泵驱定时队列（§3） |
+| **能力探测**（第四类熵源）【shopifydesign】 | GPU 微基准定画质档、codec 探测选资源、硬件参数/媒体查询分支——**随机器甚至随同机两次运行而变** | 探测结果钉死（§2.9） |
 | 合成层光栅缓存 | transform 过渡留下的历史次像素光栅 | 重光栅归一化 |
 | 本性不可冻 | 无法钉死的局部 | 同等隐藏 + 专门门 |
 
 **操作顺序**：
-1. 读 `_pretty/` 找出这块画面消费了哪些时间/随机源（grep `performance.now`、rAF 回调签名、`Math.random`、`video.currentTime`…）；
+1. 读 `_pretty/` 找出这块画面消费了哪些时间/随机/探测源（grep `performance.now`、`Date.now`、`new Date`、rAF 回调签名、`setInterval`、`Math.random`、`video.currentTime`、`canPlayType`、`deviceMemory`、`hardwareConcurrency`、`matchMedia`、`WEBGL_debug_renderer_info`…）——**这份清单是本站专属的，不能套用上一个项目的**（§3 覆盖面验收）；
 2. 按 §2 协议表选冻结组合，位姿表里**每条位姿显式声明 freeze 模式**【kimi】；
 3. 双侧同协议注入（同一份补丁代码打在镜像与复刻两侧）；
 4. 跑 §4 防呆断言，确认冻结与驱动都真的生效了。
 
-## 2. 八种冻结协议【kimi】
+## 2. 冻结协议：kimi 八种 + 第九种（能力探测钉死）
 
-kimi README 自评"本项目最值得带走的东西"。总表：
+前八种是 kimi README 自评"本项目最值得带走的东西"；第九种由 shopifydesign 补上——它冻的既不是时间也不是随机数，而是"这台机器有多强"。总表：
 
 | 协议 | 钉住什么 | 用在哪 |
 |---|---|---|
@@ -44,6 +47,7 @@ kimi README 自评"本项目最值得带走的东西"。总表：
 | 媒体层补丁 | `play()` 假成功、`paused` 谎报 false | pixel-flow 视频 |
 | 重光栅归一化 | display 抖动强制重绘，清合成层缓存 | 带 transform 过渡的标题层 |
 | 同等隐藏 | 不可冻区域双侧同规则隐藏 | SwipeHint、LetterGlitch、星云 |
+| 能力探测钉死【shopifydesign】 | GPU 微基准结果 / `canPlayType` / `deviceMemory`·`hardwareConcurrency` / `matchMedia` | 画质分级、编解码器分支、设备分支 |
 
 逐条要点：
 
@@ -71,6 +75,34 @@ display 抖动强制重绘，清掉合成层缓存的历史次像素光栅——
 ### 2.8 同等隐藏
 本性不可冻的区域**双侧同规则隐藏**，使整页门可以 byte-equal；被隐藏的部分**必须另建专门门覆盖**（kimi 的星云有自己的画布字节门），否则就是给自己挖 §4.3 的覆盖空洞【kimi】。
 
+### 2.9 能力探测钉死【shopifydesign】
+
+**这是第四类熵源：它不在时钟里，也不在随机数里，在能力探测里。** 站点问一句"这台机器有多强 / 支持什么"，答案随机器、甚至随同机两次运行而变，而这个答案会一路流进渲染参数、资源选择，乃至 **shader 源码字节**。上面八种协议一条也覆盖不到它。
+
+**实证**：shopify.design 的 `V3()`（L22703–L22745）跑一个**活体 GPU 微基准**——512×512 画布上执行 200 次 `sin` 的片元着色器、10 次计时绘制、返回 ms/draw——喂给分级器定出 high/medium/low 档。档位不是只切个开关：
+
+- fbm octave 数（3/2/0）与径向模糊 `#define SAMPLES`（12/8/6）被**字符串插值进 shader 源码** → 两侧 tier 不同 = **编译出字节不同的 shader**；
+- `dprCap`（1.5/1.2/1）改变**渲染分辨率**；
+- `photoSlices`（6/4/3）改变**几何数量**。
+
+微基准是活体计时，**同一台机器两次运行都可能翻档**。两侧不锁同一档，比的不是同一个程序——这比 `performance.now()` 严重得多。
+
+**必查清单**（在应用区间 grep，连阈值常量一起抄进笔记）：
+
+| 探测 | 典型形态 | 后果 |
+|---|---|---|
+| GPU 微基准 / `WEBGL_debug_renderer_info` GPU 名匹配 | 计时绘制返回 ms/draw；GPU 名黑名单正则（intel hd/uhd/iris、mali、adreno、swiftshader） | 画质档 → shader 源码、渲染分辨率、几何数量 |
+| `canPlayType` / `MediaSource.isTypeSupported` | `canPlayType('video/mp4; codecs="hvc1"')` 决定走 mp4 还是 webm | 两侧加载**不同的资源文件**，像素门必红且归因困难 |
+| `deviceMemory` / `hardwareConcurrency` / `maxTouchPoints` | `hardwareConcurrency<=2 → low`；`maxTouchPoints>1 && innerWidth<1024 → 移动分支` | 画质档；桌面/移动分支决定整块场景存在与否 |
+| `matchMedia` | `(hover:hover) and (pointer:fine)`、`prefers-reduced-motion` | 交互分支、动画是否播放 |
+
+**做法**：
+
+1. **对拍前把探测点全部枚举出来**，别等门红了再找——它伪装成"复刻侧画质不对"，实际是两侧程序不同。
+2. **两侧同一位置强制同一结果**：让 shim 直接返回钉死值（本例 `?__probe` 时强制 `high` 档），**不要去改站点的判级逻辑**；正常运行保持源站原逻辑不动（宪法第 3、4 条）。
+3. **强制值登记为偏差**，注明"仅对拍时生效的仪器类偏差"，并写上重新考虑条件：**若要验收分级逻辑本身，需另建"三档各跑一次"的门**——钉死一档会让另外两档的代码路径完全无门覆盖。
+4. **探测的失败路径也要看**：本例微基准 `catch` 返回 `999`（必判 low）且无告警——只要一侧抛错，两侧就静默分道扬镳。
+
 ## 3. probe-shim 双侧确定性驱动【noomo】
 
 **适用条件**：滚动驱动的 WebGL/动画站 + **源站是别人的混淆 bundle、不可插桩**。问题：浏览器后台标签 rAF/timer 节流使这类站不可确定性驱动，而你不能改源站代码。noomo 的结论：这套东西"对任何『滚动驱动动画站』的 A/B 对拍都直接可复用"。
@@ -81,6 +113,12 @@ display 抖动强制重绘，清掉合成层缓存的历史次像素光栅——
 2. `document.hidden` / `visibilityState` / `hasFocus` 钉死为可见——绕开一切可见性门控；
 3. `setTimeout` 接管进泵驱定时队列——定时器随泵推进而非墙钟；
 4. 时间戳从 0 起——使双侧 `Tick.seconds` 驱动的 shader 相位可对齐。
+
+**⚠ 这四项是 noomo 那个站的熵源清单，不是通用清单**【shopifydesign】：
+
+shopify.design 上，出厂 shim 冻的三样（rAF + `setTimeout` + visibility）之外，**四个未冻的源全在关键路径上**——`performance.now()`（下潜过渡直接用它算插值）、`Date.now()`（按 `Math.floor(Date.now()/18e4 % n)` 选曲）、`Math.random()`（favicon 洗牌 / 模型随机散布 / 每 27 秒倒计时回绕重掷抖动表）、`setInterval`（倒计时）。**实测未冻时同一镜像两次采样差 7 个字段**（场景图数值门，见 `references/verification-gates.md` §1.4.1）；接管齐全后镜像自比 0 字段差异。反过来，本站**没有任何 `visibilitychange` 监听**——shim 冻得最起劲的那一项在这里完全是 no-op。
+
+> **硬规则：不要套用固定的一套冻结项。** 冻结前先按 §1 步骤 1 grep 出**本站应用区间**的熵源清单，再拿这份清单逐项验收 shim 的覆盖面：清单上有而 shim 没冻的，要么补进 shim，要么写明为什么不需要冻。清单上没有的，冻了也只是心理安慰。`scripts/probe-shim.js` 现已扩展到接管 `performance.now` / `Date.now` / `new Date()` / `Math.random`（mulberry32 定种）/ `setInterval`——这是更好的**起点**，不是验收标准。
 
 **双侧同位注入**（关键在"同位"）：
 
@@ -137,7 +175,9 @@ display 抖动强制重绘，清掉合成层缓存的历史次像素光栅——
 
 对拍门接入 CI 前逐项确认：
 
-- [ ] 该画面的熵源清单已从 `_pretty/` 取证列出（不是凭印象）
+- [ ] 该画面的熵源清单已从 `_pretty/` 取证列出（不是凭印象），**含能力探测点**
+- [ ] shim 覆盖面已**逐项对照该清单验收**，未冻项写明理由（不是套用出厂那套冻结项）【shopifydesign】
+- [ ] 能力探测（GPU 基准 / codec / 硬件参数 / matchMedia）在两侧被强制为同一结果，强制值已登记为偏差【shopifydesign】
 - [ ] 每条位姿的 freeze 协议已显式声明在位姿表里
 - [ ] 单侧连续两次截图哈希相等（单侧确定性成立）
 - [ ] 同会话不同位姿哈希互异（驱动确实生效）
@@ -149,7 +189,9 @@ display 抖动强制重绘，清掉合成层缓存的历史次像素光栅——
 ## 8. 产出物
 
 - 位姿表：每条位姿 = 路由 + 视口 + 驱动步骤 + **显式 freeze 协议声明**【kimi】
+- **本站熵源清单**（时钟 / 随机 / 定时器 / 媒体 / 能力探测点及其阈值常量）+ 逐项对照的 shim 覆盖面验收记录【shopifydesign】
 - `scripts/probe-shim.js` 的双侧注入配置（镜像侧 serve query / 复刻侧框架 hook），登记进偏差表
+- 能力探测钉死值（画质档、codec 分支等）连同"若要验收分级逻辑本身需另建三档门"的重新考虑条件，登记进偏差表【shopifydesign】
 - 确定性自检记录：单侧两次哈希相等 + 同会话位姿哈希互异
 - 无头启动参数清单（旗标、视口、预种脚本）写进门脚本，环境变量参数化
 - 对拍产物成对入库（见 `references/verification-gates.md` §8）

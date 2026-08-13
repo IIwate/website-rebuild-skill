@@ -8,13 +8,26 @@
  *   node probe.mjs <url> [--shot out.png] [--wait 6000] [--width 1728]
  *        [--height 1080] [--scroll 0.5] [--eval "expr"]
  *        [--evalAfter "expr"] [--evalAfterDelay 2000] [--mobile]
+ *        [--walk 24] [--walk-dwell 700] [--no-external]
+ *
+ * --no-external and --walk exist because the offline gate asks for things this
+ * probe could not otherwise assert:
+ *   --no-external: the gate says "zero outbound calls", but the probe only
+ *     failed on 4xx/loadingFailed. A mirror that quietly still fetches the live
+ *     CDN passes that as CLEAN. With the flag, any request off the served
+ *     origin counts as a failure (data:/blob: are not requests and never do).
+ *   --walk: the gate wants CLEAN "including a full scroll". --scroll jumps to
+ *     one offset, which never mounts the scenes in between; --walk steps the
+ *     whole page so lazily-mounted scenes actually boot and get observed.
  *
  * Adapted from landonorris-rebuild/scripts/probe.mjs.
  * Lineage: rogierdeboeve-rebuild (CDP probe family, quantified acceptance)
  *   -> samsyninja-rebuild regression.mjs (anti-throttling flags, state walks)
  *   -> landonorris-rebuild (~190 lines; Log-domain listener fix: security/SRI
  *      errors surface on the CDP Log domain, NOT Runtime — a probe without
- *      Log.enable is blind to them and reports a false CLEAN).
+ *      Log.enable is blind to them and reports a false CLEAN)
+ *   -> shopifydesign-rebuild (--no-external assertion for the offline gate,
+ *      --walk full-page scroll walk).
  */
 import { spawn } from 'node:child_process';
 import { writeFile, mkdtemp, rm, access } from 'node:fs/promises';
@@ -50,7 +63,7 @@ const flag = (name, dflt) => {
 };
 const has = (name) => args.includes('--' + name);
 if (!url) {
-  console.error('usage: probe.mjs <url> [--shot out.png] [--wait ms] [--scroll frac] [--eval expr] [--evalAfter expr] [--mobile]');
+  console.error('usage: probe.mjs <url> [--shot out.png] [--wait ms] [--scroll frac] [--walk steps] [--walk-dwell ms] [--no-external] [--eval expr] [--evalAfter expr] [--mobile]');
   process.exit(2);
 }
 const WAIT = Number(flag('wait', 6000));
@@ -111,6 +124,9 @@ const consoleMsgs = [];
 const pageErrors = [];
 const failures = [];
 const requests = new Map();
+const external = new Map(); // host -> count
+const SELF_ORIGIN = new URL(url).origin;
+const NO_EXTERNAL = has('no-external');
 
 ws.onmessage = (ev) => {
   const m = JSON.parse(ev.data);
@@ -131,9 +147,17 @@ ws.onmessage = (ev) => {
     case 'Runtime.exceptionThrown':
       pageErrors.push(m.params.exceptionDetails.exception?.description ?? m.params.exceptionDetails.text);
       break;
-    case 'Network.requestWillBeSent':
-      requests.set(m.params.requestId, m.params.request.url);
+    case 'Network.requestWillBeSent': {
+      const u = m.params.request.url;
+      requests.set(m.params.requestId, u);
+      // Anything leaving the served origin breaks the offline gate: the page is
+      // still reaching for the live site. Counted here, fatal under --no-external.
+      if (/^https?:/.test(u) && new URL(u).origin !== SELF_ORIGIN) {
+        const h = new URL(u).host;
+        external.set(h, (external.get(h) || 0) + 1);
+      }
       break;
+    }
     case 'Network.responseReceived': {
       const s = m.params.response.status;
       if (s >= 400) failures.push(`HTTP ${s} ${m.params.response.url}`);
@@ -191,6 +215,24 @@ if (scroll > 0) {
   await new Promise((r) => setTimeout(r, 1500));
 }
 
+// Full scroll walk: step the page top-to-bottom so every lazily-mounted scene
+// boots inside the observation window, then return to the top. Each step also
+// dispatches a wheel event, for decks that advance on wheel rather than scroll.
+const walk = Number(flag('walk', 0));
+if (walk > 0) {
+  const dwell = Number(flag('walk-dwell', 700));
+  for (let i = 0; i <= walk; i += 1) {
+    await send('Runtime.evaluate', {
+      expression: `(() => { const max = document.documentElement.scrollHeight - innerHeight;
+        window.scrollTo({ top: max * ${i} / ${walk}, behavior: 'instant' });
+        window.dispatchEvent(new WheelEvent('wheel', { deltaY: 400, bubbles: true, cancelable: true })); })()`,
+    });
+    await new Promise((r) => setTimeout(r, dwell));
+  }
+  await send('Runtime.evaluate', { expression: `window.scrollTo({ top: 0, behavior: 'instant' })` });
+  await new Promise((r) => setTimeout(r, 1200));
+}
+
 const evalExpr = flag('eval', null);
 if (evalExpr) {
   const r = await send('Runtime.evaluate', { expression: evalExpr, returnByValue: true });
@@ -218,7 +260,14 @@ console.log(`=== page errors (${pageErrors.length}) ===`);
 for (const e of pageErrors.slice(0, 20)) console.log(e);
 console.log(`=== request failures (${failures.length}) ===`);
 for (const f of failures.slice(0, 40)) console.log(f);
+const extCount = [...external.values()].reduce((a, b) => a + b, 0);
+console.log(`=== external requests (${extCount}${NO_EXTERNAL ? ', FATAL' : ''}) ===`);
+for (const [h, n] of [...external].sort((a, b) => b[1] - a[1])) console.log(`${n}x ${h}`);
 
-const errCount = pageErrors.length + failures.length + consoleMsgs.filter((c) => c.startsWith('[error]')).length;
+const errCount =
+  pageErrors.length +
+  failures.length +
+  (NO_EXTERNAL ? extCount : 0) +
+  consoleMsgs.filter((c) => c.startsWith('[error]')).length;
 console.log(`\nRESULT: ${errCount === 0 ? 'CLEAN' : errCount + ' problems'}`);
 await cleanup(errCount === 0 ? 0 : 1);

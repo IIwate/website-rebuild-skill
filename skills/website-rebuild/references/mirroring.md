@@ -10,9 +10,20 @@
 
 三目录分离：`legacy-mirror/`（只读证据）≠ `public/`（运行资产）≠ `dist/`（部署产物）【oryzo】。运行侧消费镜像资产用符号链接/中间件映射，永不复制重资产（详见 `references/asset-management.md`）。
 
-## 1. 镜像三遍法 + 一条实测
+## 1. 镜像四遍法 + 一条实测
 
-单一手段必漏。HTML 外壳信息量决定主手段：Webflow/静态站资源在 HTML/CSS 里可爬；Next/RSC 站资源藏在 hash chunk 与 flight payload 的转义字符串里，"链接跟随式爬虫第一层就走到头"【kimi】。所以标准动作是三遍互补 + 一条实测：
+单一手段必漏。HTML 外壳信息量决定主手段：Webflow/静态站资源在 HTML/CSS 里可爬；Next/RSC 站资源藏在 hash chunk 与 flight payload 的转义字符串里，"链接跟随式爬虫第一层就走到头"【kimi】。所以标准动作是四遍互补 + 一条实测。
+
+**每一遍都有别的遍够不到的"唯一发现区"，不可互相替代**——shopify.design 322 文件的逐遍战果【shopifydesign】：
+
+| 遍 | 手段 | 净得 | 该遍**唯一**能发现的东西 |
+|---|---|---|---|
+| 1 | 正则 BFS 爬虫 | 226 文件 | HTML/CSS/JS 里**字面出现**的一切 |
+| 2 | CDP 真实浏览器抓包（3 路由 × 桌面/移动） | **+44** | GLB 模型 / mp3 / favicon 序列 / draco wasm / 懒加载 chunk——**全部只在运行时被拼出来** |
+| 3 | bundle 模板字面量静态求解 | **+52** | 编解码器分支的另一半（webm）、完整 13 组 favicon 序列、`.woff.txt` 字体变体 |
+| 4 | 静态闭包校验（引用集 − 磁盘集） | **+1** | 抓包与求解都够不到的 chunk（要点开特定 modal 才加载的 `WistiaPlayerWrapper-*.js`） |
+
+反过来说：webm 分支只有静态求解拿得到、GLB 只有抓包拿得到、那个 wrapper chunk 只有闭包校验拿得到。**少跑任何一遍都会留下静默缺口**。
 
 ### 第一遍：正则 BFS 爬虫（`scripts/mirror-site.mjs`）
 
@@ -42,6 +53,28 @@ rogier 首创、noomo/lando 三代实战传承的骨架【rogier】【noomo】�
 - deck 深处资源（`about-us/process/step1..4.png` 等 6 个）靠解析 bundle 模板字面量补齐【kimi】。
 - 基址变量拼接：lando 的 GL 资产基址 `vQ="https://lando.itsoffbrand.io/gl"`（4 GLB + 3 HDRI + 解码器 + MSDF 字体）与 Rive 基址 `mj=".../rive/"`（8 个 .riv）都是变量拼接，静态正则不可见——从 bundle 读出基址后枚举补抓【lando】。
 - 语言变体：浏览器只请求当前语言那份，`en-US` 等按同构路径手工拉【kimi】。
+- **能力探测分支**：`` `/video/${i}.${SU}` `` 里的 `SU` 由 `canPlayType` 决定，抓包只走当前浏览器那半边——两个分支都要求解补抓（详见 §8 盲区 checklist）【shopifydesign】。
+
+### 第四遍：静态闭包校验（引用集 − 磁盘集 = ∅）【shopifydesign】
+
+前三遍跑完仍会漏一类东西：**既不字面出现在 HTML、又不被抓包触发、也不是模板拼接**的 chunk。shopify.design 的 `WistiaPlayerWrapper-*.js` 三条全占——它是普通 import 名（模板求解看不见），要点开特定视频 modal 才加载（6 次路由 × 视口抓包全程未触发），任何 HTML 里都没有它。
+
+抓法成本极低（一个 grep + 一次集合差），却能兜住前三遍的共同盲区：
+
+1. 在**所有已镜像的 js/css/html** 里 grep 构建器产物的文件名形态 `<name>-<hash>.{js,css}`，取并集 = **引用集**；
+2. 列出磁盘上同类文件的 basename 集合 = **磁盘集**；
+3. 做差 `引用集 − 磁盘集`，逐个补抓（走与前三遍同一个下载器，账本才是一本），直到差集为空。
+
+```bash
+# 引用集（hash 长度按目标站构建器调整；Vite 常见 8 位）
+grep -rhoE '[A-Za-z0-9_.$-]+-[A-Za-z0-9_-]{8}\.(js|css)' legacy-mirror \
+  --include='*.js' --include='*.css' --include='*.html' | sort -u > /tmp/refs.txt
+# 磁盘集
+find legacy-mirror -type f \( -name '*.js' -o -name '*.css' \) -exec basename {} \; | sort -u > /tmp/disk.txt
+comm -23 /tmp/refs.txt /tmp/disk.txt        # 输出非空 = 还有没抓到的 chunk
+```
+
+shopify.design 实测 26 个引用 vs 25 个文件 → 缺 1，补抓后归零。**差集为空是 M0 关账条件之一（§10）**；差集里若确有故意不入库的外部 chunk，按 §6 外部依赖决策表逐条登记，不许无声留着。
 
 ### 逐 URL 实测状态码（不可省略）
 
@@ -131,6 +164,11 @@ M0.5 之后，`serve.mjs` 终身兼任后续所有对拍的"源站参照服"（�
 - [ ] 非当前语言的本地化资源（浏览器只请求当前语言）【kimi】
 - [ ] 抓包滚动深度够不到的深处资源（回第三遍模板字面量求解）【kimi】
 - [ ] 字体文件（rogier 首轮漏抓，后补齐并验证与源站逐字节一致）【rogier】
+- [ ] **编解码器 / 能力探测分支变体**：源站按浏览器能力选资产格式，抓包只会拿到当前浏览器那一半分支——
+      `SU = document.createElement("video").canPlayType('video/mp4; codecs="hvc1"') !== "" ? "mp4" : "webm"`，
+      Chrome 走 mp4，**另一半 4 个 webm 文件只有第三遍静态求解拿得到**；同类还有 webp/avif、ktx2/basis 的能力分叉。
+      做法：在 bundle 里 grep `canPlayType` / `createImageBitmap` / 扩展名三元表达式，把**每个分支的取值全枚举**后补抓【shopifydesign】
+- [ ] 前三遍共同盲区：既不字面出现、又不被抓包触发、也非模板拼接的 chunk → 用第四遍静态闭包校验兜底【shopifydesign】
 
 销账方式：每项要么"已补录（见 manifest 行）"，要么"确认源站不存在此类"，不许留空。
 
@@ -150,6 +188,7 @@ M0.5 之后，`serve.mjs` 终身兼任后续所有对拍的"源站参照服"（�
 
 - [ ] `legacy-mirror/`：目录结构 = 源站 URL 空间，磁盘纯净、只读
 - [ ] 账本齐备：manifest（含 sha256）、redirects.tsv、netcapture GAP 对账（=0）、external.txt
+- [ ] **静态闭包校验通过**：全镜像的 `<name>-<hash>.{js,css}` 引用集 − 磁盘集 **= ∅**（差集里的外部 chunk 须在 external.txt 有决策）【shopifydesign】
 - [ ] `scripts/serve.mjs` 可伺服镜像，服务层改写清单逐项登记
 - [ ] 断网验收全绿：零 404 / 零控制台错误（probe CLEAN，含全滚动）/ 零外联 / 重定向状态码断言通过
 - [ ] 外部依赖决策表：每条外部 URL 有归属决策（保留引用/换端点/接受降级）

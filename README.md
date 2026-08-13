@@ -64,6 +64,7 @@ README.md                  # 本文件
 ## Roadmap
 
 - **v0.1.1（已合并）**：首个实战项目（racing.shop，B 类 Shopify 店）的回流——Shopify 平台层指南、HLS 流媒体阶梯补录、爬虫协议相对 URL 修复、零外联门断言面补全、stub 双模式规则、localhost 语义分叉策略
+- **v0.1.2（已合并）**：第二个实战项目（shopify.design，A 类 WebGL 单页）的回流。三处**出厂脚本与出厂文档自相矛盾**已修（爬虫违反自己的 `redirect:manual` 红线、manifest 缺 sha256、抓包只录同源会静默报假 GAP=0）；新增**场景图数值门**（比像素门更早建、更可归因）、**第九种冻结协议：能力探测**（GPU 基准把画质档烘进 shader 源码）、**镜像第四遍静态闭包校验**、**DOM 策略 D：DOM 即场景图**；判定树升级为"框架模式 × 引擎范式"二维；Step 0 计数硬约束（`grep -c` 数的是行数不是次数 + vendor 归属剔除）
 - **v0.2+（剩余 B 类缺口，按需求频率排序）**：第三方存储桶/manifest 驱动资产发现、运行时 API 与 headless CMS 快照、Nuxt/Vue SSG payload 展开、多 chunk 大型 bundle 切片、Wayback 抢救流程
 - **远期（C 类分支）**：声明式架构的"重构式逆向"方法论。实测显示大厂创意页正在向该形态漂移（Shopify Editions 三代 B→B→C），此分支迟早需要
 - 每完成一个新的复刻项目，将其新经验合并回本 skill

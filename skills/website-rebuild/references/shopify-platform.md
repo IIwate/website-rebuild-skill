@@ -30,7 +30,7 @@
 
 ## 1. 平台层清单（实测确定规格）
 
-以下两张表逐条来自 `racingshop-rebuild` 的 `scripts/serve-rebuild.mjs` 与 `scripts/build-site.mjs` 实际代码 + 镜像 HTML 取证【racingshop】。**先照此表建 stub，再用探针反查你的目标是否有表外项**。
+以下两张表逐条来自 `racingshop-rebuild` 项目侧的 `serve-rebuild.mjs` 与 `build-site.mjs` 实际代码 + 镜像 HTML 取证【racingshop】（这两个是**项目脚本、不在本 skill 的 `scripts/` 里**——它们是每个项目按本表自己写的产物）。**先照此表建 stub，再用探针反查你的目标是否有表外项**。
 
 ### 1.1 运行期端点（服务层 stub，`serve-rebuild.mjs` 的 STUBS 表，首个命中生效）
 

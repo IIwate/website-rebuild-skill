@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // netcapture.mjs — second mirror pass: drive the live site in a real headless
-// Chrome, record every same-origin request it actually makes, then diff that
-// against what the static crawler (mirror-site.mjs) already pulled to disk.
+// Chrome, record every request it actually makes to the recorded hosts, then
+// diff that against what the static crawler (mirror-site.mjs) pulled to disk.
 //
 // A regex crawl cannot see assets whose URLs are computed at runtime — scene
 // textures built from an id, locale-suffixed sprites, media a component only
@@ -15,8 +15,20 @@
 //     [--viewports desktop,mobile]      which emulated viewports to run
 //     [--steps 12] [--dwell 1500]       scroll-walk: wheel steps and per-step dwell (ms)
 //     [--settle 9000]                   post-navigation settle before scrolling (ms)
+//     [--hosts cdn.x.com,media.y.net]   extra hosts to record besides the origin
 //     [--out <mirror>/netcapture.tsv]   HAVE/GAP ledger destination
 //     [--fetch]                         also download anything the mirror is missing
+//
+// --hosts IS NOT OPTIONAL ON A CDN-BACKED SITE. Records are keyed by absolute
+// URL over an allow-list of hosts, whose semantics match mirror-site.mjs's
+// ASSET_HOSTS: pass this pass the same host list you passed the crawler. An
+// earlier version filtered on startsWith(ORIGIN), so on a site serving its
+// assets from a separate CDN host it recorded the HTML and nothing else and
+// then reported a triumphant GAP=0 having observed ~2% of the traffic (field
+// case: 208 of 246 URLs on cdn.shopify.com). Any host left off the list is
+// counted and printed at the end, and running without --hosts while off-list
+// traffic dominates prints a loud warning — a GAP=0 under that warning means
+// nothing.
 //
 // The scroll walk dispatches WheelEvents AND window.scrollTo per step: covers
 // both wheel-hijacking scene decks (advance one scene per wheel, then lock) and
@@ -25,7 +37,10 @@
 //
 // Adapted from careers-kimi-rebuild/legacy-mirror/_scripts/netcapture.mjs
 // (samsyninja had the same real-browser capture idea; storytellingnoomo
-// cross-checked with performance.getEntriesByType('resource')).
+// cross-checked with performance.getEntriesByType('resource'))
+//   -> shopifydesign-rebuild (--hosts allow-list replacing the same-origin
+//      filter, off-host census + under-observation warning, disk diff that
+//      knows the assets/<host>/ layout).
 
 import fs from "node:fs/promises";
 import path from "node:path";
@@ -40,7 +55,7 @@ const flag = (name, dflt) => {
 
 const ORIGIN_RAW = flag("origin", null);
 if (!ORIGIN_RAW) {
-  console.error("usage: netcapture.mjs --origin https://example.com [--mirror legacy-mirror] [--routes /,/a] [--viewports desktop,mobile] [--steps 12] [--dwell 1500] [--settle 9000] [--out file.tsv] [--fetch]");
+  console.error("usage: netcapture.mjs --origin https://example.com [--mirror legacy-mirror] [--routes /,/a] [--viewports desktop,mobile] [--steps 12] [--dwell 1500] [--settle 9000] [--hosts cdn.x.com,media.y.net] [--out file.tsv] [--fetch]");
   process.exit(2);
 }
 const ORIGIN = ORIGIN_RAW.replace(/\/+$/, "");
@@ -50,6 +65,10 @@ const STEPS = Number(flag("steps", 12));
 const DWELL = Number(flag("dwell", 1500));
 const SETTLE = Number(flag("settle", 9000));
 const OUT_TSV = path.resolve(flag("out", path.join(ROOT, "netcapture.tsv")));
+const ORIGIN_HOST = new URL(ORIGIN).hostname;
+const HOSTS_FLAG = flag("hosts", "").split(",").map((s) => s.trim()).filter(Boolean);
+// Same semantics as mirror-site.mjs's ASSET_HOSTS: origin + whatever you name.
+const RECORD_HOSTS = new Set([ORIGIN_HOST, ...HOSTS_FLAG]);
 const CDP_PORT = Number(process.env.CDP_PORT || 9333);
 const DO_FETCH = args.includes("--fetch");
 
@@ -178,13 +197,21 @@ const cdp = client(ws);
 
 // requestId -> record, so the response event can complete what the request started
 const inflight = new Map();
-const requests = new Map(); // "path?search" -> {path, status, type, bytes}
+const requests = new Map(); // absolute url -> {path, status, type, bytes}
 const consoleErrors = [];
+const offHost = new Map(); // host -> count, for hosts not on the allow-list
 
 cdp.on((msg) => {
   const p = msg.params || {};
-  if (msg.method === "Network.requestWillBeSent" && p.request?.url?.startsWith(ORIGIN)) {
-    inflight.set(p.requestId, new URL(p.request.url).pathname + new URL(p.request.url).search);
+  if (msg.method === "Network.requestWillBeSent" && p.request?.url?.startsWith("http")) {
+    const u = new URL(p.request.url);
+    if (!RECORD_HOSTS.has(u.hostname)) {
+      offHost.set(u.hostname, (offHost.get(u.hostname) || 0) + 1);
+      return;
+    }
+    // Key by absolute URL: two hosts can serve the same pathname, and the disk
+    // diff needs the host to find the file under assets/<host>/.
+    inflight.set(p.requestId, u.origin + u.pathname + u.search);
   } else if (msg.method === "Network.responseReceived") {
     const sitePath = inflight.get(p.requestId);
     if (!sitePath) return;
@@ -241,8 +268,14 @@ chrome.kill();
 
 // --- Diff against what is on disk ------------------------------------------
 
-function localPathFor(sitePath) {
-  const clean = sitePath.split("?")[0];
+// Mirrors mirror-site.mjs's localPathFor(): origin pages/assets land at the
+// bare path, every other host under assets/<host>/<path>.
+function localPathFor(absUrl) {
+  const u = new URL(absUrl);
+  const clean = decodeURIComponent(u.pathname);
+  if (u.hostname !== ORIGIN_HOST) {
+    return path.join("assets", u.hostname, clean.endsWith("/") ? clean + "index" : clean);
+  }
   if (clean === "/") return "index.html";
   let p = clean.replace(/^\/+/, "");
   if (p.endsWith("/")) return p + "index.html";
@@ -265,7 +298,9 @@ for (const r of rows) {
 await fs.mkdir(path.dirname(OUT_TSV), { recursive: true });
 await fs.writeFile(
   OUT_TSV,
-  ["STATUS", "CODE", "BYTES", "PATH", "TYPE"].join("\t") +
+  // URL, not PATH: records are keyed by absolute URL now that more than one
+  // host can be recorded, and two hosts can serve the same pathname.
+  ["STATUS", "CODE", "BYTES", "URL", "TYPE"].join("\t") +
     "\n" +
     rows
       .map((r) => [missing.includes(r) ? "GAP" : "HAVE", r.status, r.bytes, r.path, r.type].join("\t"))
@@ -273,16 +308,35 @@ await fs.writeFile(
     "\n",
 );
 
-console.log(`\nrequests observed: ${rows.length}`);
+const offHostTotal = [...offHost.values()].reduce((a, b) => a + b, 0);
+
+console.log(`\nrequests observed: ${rows.length} (hosts: ${[...RECORD_HOSTS].join(", ")})`);
 console.log(`already mirrored:  ${rows.filter((r) => r.status === 200).length - missing.length}`);
 console.log(`MIRROR GAPS:       ${missing.length}`);
 for (const m of missing) console.log(`  ${m.status} ${m.path}`);
+if (offHost.size) {
+  console.log(`\noff-list hosts seen (NOT recorded, decide each in the external table):`);
+  for (const [h, n] of [...offHost].sort((a, b) => b[1] - a[1])) console.log(`  ${n}x ${h}`);
+}
+// A GAP=0 that was computed while most of the traffic went unobserved is worse
+// than no answer, because it reads as a pass. Say so, loudly, before the caller
+// records the number.
+if (offHostTotal && (offHostTotal >= rows.length || offHostTotal >= 10) && !HOSTS_FLAG.length) {
+  const pct = Math.round((offHostTotal / (offHostTotal + rows.length)) * 100);
+  console.log(
+    `\n!! UNDER-OBSERVED: ran without --hosts and ignored ${offHostTotal} requests (${pct}% of all\n` +
+      `!! traffic) to ${offHost.size} other host(s), listed above. This capture only covered ${ORIGIN_HOST},\n` +
+      `!! so the GAP count above is NOT a verdict on the mirror. Re-run with the asset hosts:\n` +
+      `!!   --hosts ${[...offHost.keys()].slice(0, 4).join(",")}`,
+  );
+}
 if (consoleErrors.length) console.log(`\npage exceptions: ${consoleErrors.length}`);
 
 if (DO_FETCH && missing.length) {
   console.log("\nfetching gaps...");
   for (const m of missing) {
-    const res = await fetch(ORIGIN + m.path, {
+    // m.path is an absolute URL (records are keyed by host + path).
+    const res = await fetch(m.path, {
       headers: { "user-agent": "Mozilla/5.0 local static mirror", accept: "*/*", referer: ORIGIN + "/" },
     });
     if (!res.ok) {

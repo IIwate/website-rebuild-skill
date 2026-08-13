@@ -3,14 +3,17 @@
  * mirror-site.mjs — BFS crawler: snapshot a live site into a byte-faithful
  * local mirror. Pages land at <out>/<path>/index.html, cross-host assets at
  * <out>/assets/<host>/<path>; every fetched text file is rescanned for asset
- * URLs until no new ones appear; writes <out>/mirror-manifest.json
- * (url -> local path, size, type).
+ * URLs until no new ones appear. Three ledgers are written next to the bytes:
+ * <out>/mirror-manifest.json (url -> local path, size, sha256, type),
+ * <out>/inventory.tsv (SHA256 BYTES PATH URL) and <out>/redirects.tsv
+ * (CODE FROM TO — replayed by serve.mjs).
  *
  * Usage:
  *   node mirror-site.mjs --origin https://example.com [--out legacy-mirror]
  *     [--hosts cdn.example.com,media.example.net]  extra asset hosts to follow
  *     [--pages /pricing,/contact]                  extra seed pages
  *     [--probe-404 /no-such-page-mirror-probe]     fetch origin 404 template -> 404.html
+ *     [--seeds urls.txt]                           newline-delimited extra asset URLs
  *     [--rounds 4] [--workers 8]
  *
  * NOTE a static crawl always misses three classes of URL: worker-fetched WASM,
@@ -22,10 +25,15 @@
  *   -> storytellingnoomo-rebuild ("Adapted from rogierdeboeve-rebuild": same-origin
  *      absolute paths, css url() refs, glTF buffer/image URIs)
  *   -> landonorris-rebuild (asset-host whitelist, same-origin Referer header for
- *      asset CDNs that require it, 404-template probe).
+ *      asset CDNs that require it, 404-template probe)
+ *   -> shopifydesign-rebuild (redirect:"manual" + redirects.tsv instead of
+ *      following — the script used to violate its own red line; per-file sha256
+ *      in the manifest + inventory.tsv; --seeds so URLs solved out of bundles
+ *      and payloads go through the same downloader and land in the same ledger).
  */
-import { mkdir, writeFile } from 'node:fs/promises';
+import { mkdir, writeFile, readFile } from 'node:fs/promises';
 import { dirname, join, relative, extname } from 'node:path';
+import { createHash } from 'node:crypto';
 
 // ---------------------------------------------------------------------------
 // CONFIG — per-project constants; site specifics come from the CLI instead.
@@ -58,7 +66,7 @@ const flag = (name, dflt) => {
 };
 const ORIGIN_RAW = flag('origin', null);
 if (!ORIGIN_RAW) {
-  console.error('usage: mirror-site.mjs --origin https://example.com [--out legacy-mirror] [--hosts a,b] [--pages /x,/y] [--probe-404 /slug] [--rounds 4] [--workers 8]');
+  console.error('usage: mirror-site.mjs --origin https://example.com [--out legacy-mirror] [--hosts a,b] [--pages /x,/y] [--probe-404 /slug] [--seeds urls.txt] [--rounds 4] [--workers 8]');
   process.exit(2);
 }
 const ORIGIN = ORIGIN_RAW.replace(/\/+$/, '');
@@ -67,6 +75,7 @@ const OUT = join(process.cwd(), flag('out', 'legacy-mirror'));
 const ROUNDS = Number(flag('rounds', 4));
 const WORKERS = Number(flag('workers', 8));
 const PROBE_404 = flag('probe-404', null);
+const SEEDS_FILE = flag('seeds', null);
 
 const ASSET_HOSTS = new Set([
   ...DEFAULT_ASSET_HOSTS,
@@ -77,6 +86,9 @@ const ASSET_HOSTS = new Set([
 const TEXT_EXT = /\.(css|js|mjs|json|svg|html?)($|\?)/i;
 const manifest = {};
 const fetched = new Set();
+// Redirects are SOURCE-SITE BEHAVIOR, not crawler bookkeeping: they get their
+// own ledger and are never collapsed into the source path's file.
+const redirects = []; // {from, status, to}
 
 function decodeEntities(s) {
   return s
@@ -109,6 +121,7 @@ async function save(url, buf, contentType) {
   manifest[url] = {
     path: relative(OUT, p),
     bytes: buf.length,
+    sha256: createHash('sha256').update(buf).digest('hex'),
     type: contentType || '',
   };
 }
@@ -118,8 +131,17 @@ async function get(url) {
     // Some asset CDNs require a same-origin Referer and return 403 without one
     // (landonorris lesson); supply it so legitimate requests are served.
     headers: { 'user-agent': UA, accept: '*/*', referer: ORIGIN + '/' },
-    redirect: 'follow',
+    // RED LINE (references/mirroring.md §2): never follow. A followed 301
+    // writes the target's body at the source path and fabricates a file the
+    // origin never served at that URL. Record it and re-queue the target so it
+    // lands at its own place in URL space instead.
+    redirect: 'manual',
   });
+  if (res.status >= 300 && res.status < 400) {
+    const to = res.headers.get('location') || '';
+    redirects.push({ from: url, status: res.status, to });
+    return { redirectTo: to ? new URL(to, url).href : null };
+  }
   if (!res.ok) throw new Error(`HTTP ${res.status}`);
   const buf = Buffer.from(await res.arrayBuffer());
   return { buf, type: res.headers.get('content-type') || '' };
@@ -181,6 +203,19 @@ if (PROBE_404) pageQueue.push(PROBE_404);
 const pagesDone = new Set();
 let assetQueue = new Set();
 
+// Extra seeds: URLs solved out of escaped payloads / bundle string literals,
+// which the HTML-attribute regexes structurally cannot see. Feeding them here
+// (rather than fetching them by hand) keeps one downloader and one ledger.
+if (SEEDS_FILE) {
+  const lines = (await readFile(SEEDS_FILE, 'utf8')).split('\n').map((s) => s.trim());
+  let n = 0;
+  for (const l of lines) {
+    if (!l || l.startsWith('#')) continue;
+    try { new URL(l); assetQueue.add(l); n += 1; } catch {}
+  }
+  console.log(`[seeds] ${n} urls from ${SEEDS_FILE}`);
+}
+
 // --- crawl pages ---
 while (pageQueue.length) {
   const path = pageQueue.shift();
@@ -188,7 +223,17 @@ while (pageQueue.length) {
   pagesDone.add(path);
   const url = ORIGIN + (path === '/' ? '/' : path);
   try {
-    const res = await fetch(url, { headers: { 'user-agent': UA } });
+    const res = await fetch(url, { headers: { 'user-agent': UA }, redirect: 'manual' });
+    if (res.status >= 300 && res.status < 400) {
+      const to = res.headers.get('location') || '';
+      redirects.push({ from: url, status: res.status, to });
+      console.log(`[page REDIRECT ${res.status}] ${path} -> ${to}`);
+      if (to && new URL(to, url).hostname === ORIGIN_HOST) {
+        const p2 = new URL(to, url).pathname;
+        if (!pagesDone.has(p2)) pageQueue.push(p2);
+      }
+      continue;
+    }
     const buf = Buffer.from(await res.arrayBuffer());
     const html = buf.toString('utf8');
     const isNotFoundProbe = PROBE_404 !== null && path === PROBE_404;
@@ -196,7 +241,12 @@ while (pageQueue.length) {
       // Save the origin's 404 template so serve.mjs can replay 404 semantics.
       await mkdir(OUT, { recursive: true });
       await writeFile(join(OUT, '404.html'), buf);
-      manifest[url] = { path: '404.html', bytes: buf.length, type: 'text/html (404 template)' };
+      manifest[url] = {
+        path: '404.html',
+        bytes: buf.length,
+        sha256: createHash('sha256').update(buf).digest('hex'),
+        type: 'text/html (404 template)',
+      };
     } else {
       await save(url, buf, res.headers.get('content-type'));
     }
@@ -222,7 +272,12 @@ for (let round = 1; round <= ROUNDS && assetQueue.size; round++) {
       if (fetched.has(url)) continue;
       fetched.add(url);
       try {
-        const { buf, type } = await get(url);
+        const { buf, type, redirectTo } = await get(url);
+        if (redirectTo !== undefined) {
+          console.log(`[asset REDIRECT] ${url.slice(0, 90)} -> ${redirectTo}`);
+          if (redirectTo && !fetched.has(redirectTo)) assetQueue.add(redirectTo);
+          continue;
+        }
         await save(url, buf, type);
         console.log(`[asset] ${url.slice(0, 110)} (${buf.length}b)`);
         if (TEXT_EXT.test(url) || /text|javascript|json|css/.test(type)) {
@@ -242,6 +297,22 @@ await writeFile(
   join(OUT, 'mirror-manifest.json'),
   JSON.stringify({ origin: ORIGIN, mirroredAt: new Date().toISOString(), files: manifest }, null, 2)
 );
+await writeFile(
+  join(OUT, 'redirects.tsv'),
+  // Column order is CODE FROM TO because serve.mjs's replay reader destructures
+  // in that order; a FROM-first ledger silently replays nothing.
+  ['CODE', 'FROM', 'TO'].join('\t') + '\n' +
+    redirects.map((r) => [r.status, r.from, r.to].join('\t')).join('\n') + (redirects.length ? '\n' : '')
+);
+await writeFile(
+  join(OUT, 'inventory.tsv'),
+  ['SHA256', 'BYTES', 'PATH', 'URL'].join('\t') + '\n' +
+    Object.entries(manifest)
+      .filter(([, f]) => f.path && f.sha256)
+      .sort((a, b) => a[1].path.localeCompare(b[1].path))
+      .map(([url, f]) => [f.sha256, f.bytes, f.path, url].join('\t'))
+      .join('\n') + '\n'
+);
 const ok = Object.values(manifest).filter((f) => f.path).length;
 const fail = Object.values(manifest).filter((f) => !f.path).length;
-console.log(`\nDone: ${ok} files saved, ${fail} failed. Manifest written.`);
+console.log(`\nDone: ${ok} files saved, ${fail} failed, ${redirects.length} redirects. Ledgers written.`);

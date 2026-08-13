@@ -65,7 +65,7 @@ npx --yes js-beautify@1.15.1 legacy-mirror/<path>/<bundle>.js \
 
 **第一段：源站事实**（全部带行号）
 
-- **bundle 区段地图**：vendor 边界逐段标行号——lando 给 47k 行画了全区段地图（GSAP 5043-6743、three 10334-30143、Lenis 46469-47010、应用代码各段），"先画地图再挖矿"【lando】；samsy 同样逐段标 vendor 边界【samsy】；
+- **bundle 区段地图**：vendor 边界逐段标行号——lando 给 47k 行画了全区段地图（GSAP 5043-6743、three 10334-30143、Lenis 46469-47010、应用代码各段），"先画地图再挖矿"【lando】；samsy 同样逐段标 vendor 边界【samsy】。**边界怎么划见 §2.2——只按 license banner 划会错**【shopifydesign】；
 - 启动链 / 路由 / store（逐字段用途）；
 - 渲染管线、RenderTarget 清单、材质清单（samsy 26 项 TSL 材质、后处理链逐步拆解）【samsy】；
 - 协议与数据 schema（VAT worker 协议、PartyKit 协议全量【samsy】；i18n/数据 schema【kimi】）；
@@ -76,11 +76,24 @@ npx --yes js-beautify@1.15.1 legacy-mirror/<path>/<bundle>.js \
 
 **第三段：对复刻的直接结论**：如 noomo 的 10 条（"先实现三个元系统再写任何材质"、"缺 colorsMap 玻璃会变灰白"）【noomo】；samsy 的"不要发明"清单（engine-notes §16）【samsy】。
 
-### 2.2 笔记纪律
+### 2.2 区段地图的边界校准（license banner 只给起点）【shopifydesign】
+
+**vendor 区不是连续的一块，license banner 也不标终点。** shopify.design 初版按"最后一段 license banner"定 vendor 边界，把应用起点标在 L28141，**错了 5,832 行**——真实边界是 L22309：three.js 的**后处理 addon**（`Pass` L22057 / `ShaderPass` L22091 / `EffectComposer` L22128 / `RenderPass` L22198 / `OutputPass` L22293）整段排在最后一段 license 之后，而应用区间内部还夹着三座 **vendor 岛**（troika-three-text L23527–L26525、SVGLoader L28869–L29895、GLTFLoader+DRACOLoader L31727–L33785）。
+
+三条操作规则：
+
+1. **起点用 banner，终点用 `class X extends Y` 的收尾校准**：banner 之后继续往下扫到最后一个 vendor 类定义的闭合处（本站 `class c3 extends sc` L22292），再往下第一处**应用配置常量/魔数**才是真起点（本站 `const ac = 800, Pn = 0, v1 = 50 …` L22309——设计基准高度、相机 Y 这类值只可能是应用配置）。
+2. **应用区间内要标出 vendor 岛**：构建器会把按需引入的 vendor（loader、字体引擎、后处理 addon）散插在应用代码之间。岛内代码不属应用层，规模统计与计数都要扣掉；岛的边界同样用 `class X extends Y` / `self.xxxDefine` 这类库自身入口锚点定。
+3. **地图先于计数**：所有"多少段 GLSL / 多少次 X"的数字都必须**在应用区间内**数。Step 0 的原始计数含 vendor，必然虚高——见 `references/scope-and-fingerprint.md` §2《计数硬约束》。
+
+**下游代价**（为什么这不是洁癖）：区段地图错 → 应用层规模误判（本站虚高 5,832 行）→ **难度评级与工期估算一起偏**；且后续每一次"这段要不要移植"的判断都建在错的坐标上，返工时整片行号引用作废。
+
+### 2.3 笔记纪律
 
 - **只陈述源站事实，不做"应该怎么改"的判断**——决策写进 REBUILD_PLAN，不写进笔记【kimi】【noomo】；
 - **未坐实的一律标注"未确认"，不猜**【kimi】；
-- 事实与决策分离，防止"边看边写"导致的臆造【samsy】。
+- 事实与决策分离，防止"边看边写"导致的臆造【samsy】；
+- **上一阶段（Step 0）的数字与附带结论一律当假设复核**，不要直接抄进笔记——shopify.design 的 Step 0 判级正确，但附带的路由数、资产数、漏抓归因三条全被 M0 证伪【shopifydesign】。
 
 ## 3. 技术栈从 bundle 取证、精确钉死【6/6】
 
@@ -107,7 +120,7 @@ npx --yes js-beautify@1.15.1 legacy-mirror/<path>/<bundle>.js \
 
 ### 4.1 signature grep 只提假设，不当结论
 
-grep 命中只是假设，**每条必须回上下文确认**：kimi 站 grep 到 `leva` 实为 React SVG 属性列表里 `…decelerate|descent…` 的子串误命中，`swr` 同类；`zustand` 反而真实存在只是被内联【kimi】。samsy 早期指纹误判"有 GPU compute"，M1 证伪——`dispatchWorkgroups` 字符串全部来自 three 内部；KTX2/meshopt 能力在 GLTFLoader 里但从未挂载【samsy】。
+grep 命中只是假设，**每条必须回上下文确认**；**计数同理**——`grep -c` 数的是匹配行数不是出现次数，且 vendor 自带字符串（报错串、内置 shader chunk）会把应用层用量抬高一个数量级（shopify.design：`ScrollTrigger ×8` 实为 0 次真实使用、`GLSL ×107` 实为应用层 27 段）。这条纪律已前移复述到 Step 0，见 `references/scope-and-fingerprint.md` §2《计数硬约束》【shopifydesign】。逐条实例：kimi 站 grep 到 `leva` 实为 React SVG 属性列表里 `…decelerate|descent…` 的子串误命中，`swr` 同类；`zustand` 反而真实存在只是被内联【kimi】。samsy 早期指纹误判"有 GPU compute"，M1 证伪——`dispatchWorkgroups` 字符串全部来自 three 内部；KTX2/meshopt 能力在 GLTFLoader 里但从未挂载【samsy】。
 
 ### 4.2 架构假设先证否再动工
 
@@ -144,7 +157,8 @@ grep 命中只是假设，**每条必须回上下文确认**：kimi 站 grep 到
 4. **搜名搜不到**：REVISION 等常量被重命名【noomo】。对策：§5 搜值不搜名。
 5. **数值基准覆盖不全导致后段失明**（18 变量在 3.2 后饱和）【kimi】。对策：§6 先确认全部驱动量。
 6. **正则假阳性污染 diff/取证**：`.15` 无前导零、十六进制色值记法差异造成两轮假阳性，samsy 改用"数字字面量多重集 + 结构对比"才收敛出真实增量【samsy】。对策：数值比较先归一化记法。
-7. **逆向笔记混入改进判断**导致移植阶段"顺手修 bug"。对策：§2.2 事实/判断分离 + 怪癖单列"照抄不修"。
+7. **逆向笔记混入改进判断**导致移植阶段"顺手修 bug"。对策：§2.3 事实/判断分离 + 怪癖单列"照抄不修"。
+8. **区段地图只按 license banner 划**：vendor 尾部的 addon 段与散插的"vendor 岛"被算进应用层，应用规模虚高（shopify.design 虚高 5,832 行），评级与工期跟着偏【shopifydesign】。对策：§2.2 的收尾校准 + vendor 岛标注。
 
 ## 8. 阶段产出物与通过判据
 

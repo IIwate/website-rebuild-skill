@@ -14,7 +14,7 @@
 
 判级的真正变量不是框架名、年代或站点类型，而是**签名行为（让这个站获奖的那些效果）住在哪里**【probe】：
 - 住在**静态资产**里（minified/未混淆 bundle、GLSL、GLB、视频、Rive 文件）→ A/B；
-- 住在**声明式组件树**里（RSC flight 流、Vue/Nuxt 编译产物、R3F+Theatre）→ C；
+- 住在**声明式组件树/时间轴数据**里（RSC flight 流、R3F+Theatre 的场景即组件树、动画即数据）→ C。注意"框架是 Vue/Nuxt/React Router"本身**不构成** C——框架名与引擎范式是两个维度，见 §3/§4 二维表【shopifydesign】；
 - 住在**服务端函数**里（WordPress、电商库存、A/B 分桶、个性化）→ D。
 
 ## 2. 指纹探测流程（六步，curl-only 可执行）
@@ -73,14 +73,17 @@ grep -ciE 'shopify|Prestige|Dawn|elementor' probe/a.html       # 商店主题替
 perl -0777 -pe 's/<!--.*?-->//gs' probe/a.html | grep -oE '<script[^>]*src="[^"]*"' | sort -u
 # 现代站可能没有任何 <script src>（Shopify Editions 三代全靠内联 import()）——再搜内联动态导入
 grep -oE 'import\("[^"]+"\)' probe/a.html | sort -u
-# 框架/架构标记
-grep -c 'self.__next_f' probe/a.html                 # Next RSC flight → C 信号
-grep -c '__reactRouterContext' probe/a.html          # React Router SSR → C 信号
-grep -c '__NUXT__' probe/a.html                      # Nuxt → 不直接判级，过三判据（§4）
+# 维度① 框架模式（框架下不下发行为源）——这些标记单独命中一律不判级，见 §3/§4
+grep -o 'self.__next_f'          probe/a.html | wc -l   # Next App Router RSC flight → 不下发组件源
+grep -o '__reactRouterContext'   probe/a.html | wc -l   # React Router framework 模式 → 下发 route module
+grep -o '__NUXT__'               probe/a.html | wc -l   # Nuxt → 下发组件源
 grep -o 'data-v-[0-9a-f]\{6,8\}' probe/a.html | wc -l   # Vue scoped 密度
-grep -c '<!--\[-->' probe/a.html                     # Vue3 SSR fragment 注释
-grep -ciE 'theatre|@react-three/fiber' probe/a.html  # 动画即数据 → C 信号
+grep -o '<!--\[-->'              probe/a.html | wc -l   # Vue3 SSR fragment 注释
+# 维度② 引擎范式（签名行为怎么写的）
+grep -oiE 'theatre|@react-three' probe/a.html | wc -l   # R3F / Theatre.js → 声明式引擎 → C
 ```
+
+> 出现次数一律 `grep -o … | wc -l`，**不用 `grep -c`**（数的是匹配行数，不是出现次数）——理由与实测见本节末《计数硬约束》【shopifydesign】。
 
 ### 步骤 5：bundle 可逆向性
 
@@ -93,14 +96,29 @@ curl -s -A "$UA" -o probe/bundle.js -w 'size=%{size_download}\n' "$BUNDLE"
 wc -lc probe/bundle.js
 awk '{ if (length($0)>m) m=length($0) } END { print "longest_line=" m }' probe/bundle.js
 grep -c 'sourceMappingURL' probe/bundle.js
-# MB 级单行文件先注入换行再 grep，防有界量词正则卡死
+# MB 级单行文件先注入换行再 grep，防有界量词正则卡死（tr 只替换分隔符，不改变 token 出现次数）
 tr ';{}' '\n' < probe/bundle.js > probe/bundle.lines
-grep -c 'WebGLRenderer' probe/bundle.lines    # three 认强签名（WebGLRenderer/REVISION），不认弱字符串 "three"
-grep -c '/api/'         probe/bundle.lines    # >0 ⇒ 镜像阶段强制做运行时 API 快照（B 信号）
+grep -o 'WebGLRenderer'       probe/bundle.lines | wc -l  # three 认强签名（WebGLRenderer/REVISION），不认弱字符串 "three"
+grep -o 'THREE.WebGLRenderer' probe/bundle.lines | wc -l  # 其中属 three 自带报错串的份额 = vendor 污染量
+grep -o '/api/'               probe/bundle.lines | wc -l  # >0 ⇒ 镜像阶段强制做运行时 API 快照（B 信号）
 ```
 
 - 有公开 sourcemap（`sourcesContent` 完整，如 orano/linear）→ 直取源码替代 beautify 流程，但 linear 型 RSC 站仍按 C 处理（sourcemap 不改变行为归属）【probe】。
 - 未混淆产物（bruno-simon 4.86MB esbuild 标识符全保留、star-atlas）→ 跳过 js-beautify，行号坐标系直接建在原文件上【probe】。
+
+### ⛔ 计数硬约束（贯穿步骤 4/5；任何进难度评级表的数字必须先过这三条）【shopifydesign】
+
+shopify.design 的 Step 0 用 `tr ';{}' '\n' | grep -c` 数 token，一次产出三个假数字，且**直接进了难度评级表**——"滚动/动画编排 ★★★"整条建立在一个根本没被使用的 ScrollTrigger 上：
+
+| Step 0 报的 | 逆向后的实际 |
+|---|---|
+| `ScrollTrigger` ×8 | **0 次真实使用**——全是 gsap core 对未注册插件的兜底钩子，插件从未 `registerPlugin` |
+| `WebGLRenderer` ×33 | **1 处真实构造**；其余多为 three.js 自带的 `"THREE.WebGLRenderer: …"` 报错字符串 |
+| 内联 GLSL ×107 | 应用层 **27 段**——`gl_FragColor` / `gl_Position` 命中了 three.js 自带的 shader chunk 库 |
+
+1. **`grep -c` 数的是"匹配行数"，不是"出现次数"。** 同一行命中 5 次只记 1。独立复核实测同一 bundle：`ScrollTrigger` 原始字面量出现 **2** 次而 `grep -c` 报 1；`WebGLRenderer` 出现 **34** 次而 `grep -c` 报 33。**协议里凡是要"出现次数"的地方一律 `grep -o PATTERN FILE | wc -l`**；`grep -c` 只可用于回答"有没有"这种是非题。
+2. **vendor 库自带字符串会污染计数。** 上述 34 次 `WebGLRenderer` 里 **7** 次是 three.js 自己的 `"THREE.WebGLRenderer: …"` 报错串；GLSL 命中绝大多数来自 three 内置 shader chunk 库。**任何要进评级表的数字，必须先做一次 vendor 归属剔除**：先定位应用区间（license banner 定起点、`class X extends Y` 收尾校准终点，并扣除中间的"vendor 岛"——方法见 `references/reverse-engineering.md` §2.2），**只在应用区间内计数**。Step 0 阶段若还没建区段地图，至少要把该数字标为"含 vendor，未剔除"。
+3. **计数只提假设，不当结论。** 这条纪律原在 `references/reverse-engineering.md` §4.1，此处前移复述——因为**错误计数在 Step 0 就已经污染决策**（判级、评级、工期估算）。每个数字都是待证伪的假设：进评级表前至少回上下文确认一处**真实使用点**（构造调用 / `registerPlugin` / shader 被 material 消费），确认不了就在 verdict 里标"未确认"，不许拿它抬高或拉低星级。
 
 ### 步骤 6：行为归属 → 出判级
 
@@ -118,11 +136,15 @@ grep -c '/api/'         probe/bundle.lines    # >0 ⇒ 镜像阶段强制做运�
    ├─ wp-content 高密度 + WordPress generator meta（内容与行为主体在服务端 PHP+DB）
    ├─ 双抓为内容级差异（A/B 实验分桶、个性化注水 → 确定性验收彻底断裂）
    └─ 签名行为依赖 cart/checkout/GraphQL 数据面（行为主体是服务端函数）
-3. C 信号（命中 ≠ 判 C，必须过 §4 三判据）：
-   ├─ self.__next_f（RSC flight）/ __reactRouterContext
-   ├─ __NUXT__ / __NUXT_DATA__ / data-v- 高密度 + <!--[--> fragment 注释
-   └─ Theatre.js / R3F 标记（动画即数据、组件树声明式）
-   → 三判据全"是" → 继续按 4/5 判 A 或 B；判据③为"否" → C
+3. C 判定（**二维**，任何单信号命中都不判级）【shopifydesign】：先各取一维证据，再交叉查 §4 二维表
+   ├─ 维度① 框架模式 —— 框架下不下发行为源（HTML 层取证，用 §4 三判据坐实）
+   │    ├─ 下发 route module：__reactRouterContext（React Router framework 模式）/ Remix /
+   │    │    __NUXT__ / __NUXT_DATA__ / data-v- 高密度 + <!--[--> fragment 注释
+   │    └─ 不下发组件源：self.__next_f（Next App Router RSC flight 流）
+   └─ 维度② 引擎范式 —— 签名行为用哪种范式写的（bundle 层取证）
+        ├─ 命令式：three / GSAP / 裸 WebGL，渲染与交互逻辑本身在客户端 chunk 里
+        └─ 声明式：@react-three/fiber、Theatre.js（场景即组件树、动画即数据）
+   → 落"下发 route module × 命令式"格 → 继续按 4/5 判 A 或 B；其余三格 → C
 4. A 类签名（全部命中 → A）：
    ├─ 静态构建器产物（webpack/Vite/Astro/Browserify 皆可，年代无关——2019 老栈照样 A）
    ├─ ≥1MB 单体或少数几个 bundle（而非上百个组件粒度 chunk）
@@ -141,19 +163,32 @@ grep -c '/api/'         probe/bundle.lines    # >0 ⇒ 镜像阶段强制做运�
 
 杂交站可分层判级：kprverse 整体 C，但 three 子层（独立 chunk 的命令式代码）可局部按 A 手法转写【probe】。v0.1 政策仍按整体判级执行，分层结论写进 verdict 供用户参考。
 
-## 4. 三判据规则（防 noomo 型误判，宪法级）
+## 4. 二维判定表 + 三判据规则（防 noomo / shopify.design 型误判，宪法级）
 
-**"检测到 Vue/Nuxt/声明式框架 → 判 C"是被锚点站证伪的错误捷径**【probe】。noomo 是 Nuxt3 SSR 站（`__NUXT__`、74 处 `data-v-`），按单因子规则会误判 C，而地面真值是 A——它的签名动画（GSAP ScrollSmoother 滚动叙事）全在客户端 chunk 里，已被成功 1:1 复刻。框架标记命中后，必须逐条回答：
+**"检测到 Vue/Nuxt/声明式框架 → 判 C"是被锚点站证伪的错误捷径**【probe】。noomo 是 Nuxt3 SSR 站（`__NUXT__`、74 处 `data-v-`），按单因子规则会误判 C，而地面真值是 A——它的签名动画（GSAP ScrollSmoother 滚动叙事）全在客户端 chunk 里，已被成功 1:1 复刻。
+
+**同一类错误在 `__reactRouterContext` 上重犯过一次**【shopifydesign】：该信号此前被本文件列为 C 信号，出处是 Shopify Editions spring2026——但那站判 C 的**真因是 R3F + Theatre.js（声明式引擎）**，与 React Router 本身无关。shopify.design 命中同一信号，逆向后确认为 **A**：47,224 行**命令式** three.js 引擎全在客户端 chunk 里（无 R3F、无 Theatre），React Router framework 模式**下发 route module**，1.24MB `_index` chunk 就是引擎本体。**信号被记在了错误的维度上**——框架名带来的是"下不下发行为源"，引擎范式才决定"下发的东西能不能转写"。
+
+正确判据是 **框架模式 × 引擎范式** 二维：
+
+|  | 命令式引擎（three / GSAP / 裸 WebGL） | 声明式引擎（R3F / Theatre） |
+|---|---|---|
+| **框架下发 route module**（React Router framework 模式、Nuxt、Remix） | **A**（shopify.design、noomo） | **C** |
+| **框架不下发组件源**（Next App Router RSC） | **C**（opal-tadpole） | **C** |
+
+读法：**只有"下发行为源 × 命令式引擎"这一格是 A**。任一维塌向声明式或不下发，转写式移植要抓的那个"行为源"就不在客户端可读代码里，判 C。
+
+三判据规则**保留**——它是取维度①证据的操作方法（判定"框架是否下发行为源"），二维表是它的结论形式，二者并用不可省。框架标记命中后，必须逐条回答：
 
 1. **内容可镜像性**：同 URL 短间隔 HTML 是否确定（byte-identical / 仅 token 级差异）？全部内容能否落成静态文件？
 2. **签名交互的承载层**：获奖视觉/交互是否为可下载、可 beautify、行号稳定的**客户端命令式代码**（GSAP/three/WebGL）？
 3. **客户端是否持有行为源本身**：客户端 chunk 包含渲染/交互逻辑本身，还是仅有服务端序列化结果（RSC flight）？
 
-三判据全"是" → 按 A 处理（声明式框架只是抬高脚手架复刻成本，不改变签名行为的转写可移植性）。判据③为"否" → C（opal-tadpole 反例：Next App Router + RSC，服务端组件源码不下发客户端，只下发 flight 序列化结果——这才是真 C）【probe】。
+三判据全"是" → 维度①落"下发 route module"，再按维度②查表（声明式框架只是抬高脚手架复刻成本，不改变签名行为的转写可移植性）。判据③为"否" → 维度①落"不下发组件源"，无论维度②如何一律 C（opal-tadpole 反例：Next App Router + RSC，服务端组件源码不下发客户端，只下发 flight 序列化结果——这才是真 C）【probe】。
 
-区分口诀：**框架用于组织 DOM/状态的是脚手架；判级看的是签名行为存放在哪一层**。
+区分口诀：**框架用于组织 DOM/状态的是脚手架；判级看的是签名行为存放在哪一层、用哪种范式写的**。
 
-## 5. 探测纪律（12 条协议修正，逐条为实测教训）【probe】
+## 5. 探测纪律（14 条协议修正，逐条为实测教训）【probe】【shopifydesign】
 
 探测中的每一步都遵守本清单；违反任一条都产生过真实误判：
 
@@ -169,12 +204,15 @@ grep -c '/api/'         probe/bundle.lines    # >0 ⇒ 镜像阶段强制做运�
 10. 未混淆产物（bruno-simon、star-atlas）可跳过 js-beautify——先做 **minification 形态预检**再决定流程。
 11. 有公开 sourcemap（orano、linear）时直取 sourcesContent 源码，替代 beautify 流程。
 12. WAF/CDN 每次注入的轮换 token 是 nonce 级差异，**不要误判为动态渲染判 D**（把它当可掩码噪声即可）。
+13. **出现次数一律 `grep -o … | wc -l`，禁用 `grep -c`**——后者数的是匹配行数（shopify.design 实测：`ScrollTrigger` 真实 2 次报 1、`WebGLRenderer` 真实 34 次报 33）【shopifydesign】。
+14. **计数只提假设，不当结论**：vendor 自带字符串会污染计数，进评级表的数字必须先做 vendor 归属剔除并回上下文确认一处真实使用点（见 §2《计数硬约束》）【shopifydesign】。
 
 ## 6. 常见坑
 
 - **HEAD 假死 / GET 存活**：Lambda/API GW 托管静态站的常见形态，只用 `-I` 会把活站判 X【probe】。
 - **平台名预判**：凭"这是 Webflow/大厂站"直接预判会错——webflow.com 预判不适用，实测有手写 GSAP/three.js bundle，判 A【probe】。判级只认指纹证据。
-- **框架名单因子判级**：Nuxt 站可以是 A（noomo），Next RSC 站一定是 C（opal-tadpole）——差别在三判据③【probe】。
+- **框架名单因子判级**：Nuxt 站可以是 A（noomo），Next RSC 站一定是 C（opal-tadpole）——差别在三判据③【probe】。同理 `__reactRouterContext` 不是 C 信号，只是"下发 route module"这一维的证据【shopifydesign】。
+- **判级正确 ≠ 附带结论正确**：shopify.design 判 A 是对的，但同一份 verdict 附带的三条结论全被 M0 证伪——"单页站 / 1 条路由"实为 **3 条路由**（`/dap` 在 HTML 里写成绝对 URL，BFS 的 `href="/..."` 正则看不见）、"243 个媒体 URL"实为 **322 文件**、"漏抓因媒体 URL 埋在转义 JSON 里"也不成立（转义态独占仅 1 个），真因是**运行时构造的路径**。判级可以继承，**Step 0 的每个数字与每条附带结论都必须在 M0 逐条复核**【shopifydesign】。
 - **把 token 噪声当动态渲染**：nonce/装饰性随机串/WAF 轮换 token 都是可掩码的确定性站【probe】。
 - **只探根域**：获奖路径 404 而根域 200 的站会被误判存活【probe】。
 - **拖延镜像**：31 个历年获奖站 29% 已消失，集齐五种消亡形态（域名易主/转发、平台回收、域名抢注、路径移除、原地替换）。判级为 A/B 的瞬间，**第一时间全站镜像不是最佳实践，是抢救行为**——立即进入 `references/mirroring.md`【probe】。

@@ -5,6 +5,7 @@
 //   PORT=5175 SERVE_ROOT=legacy-mirror node serve.mjs     # the source site
 //   PORT=5173 SERVE_ROOT=dist          node serve.mjs     # the rebuild
 //   node serve.mjs --port 5175 --root legacy-mirror [--ext-hosts cdn.x.com,fonts.gstatic.com]
+//                  [--stub-ext-hosts telemetry.example.com]
 //
 // Discipline: the mirror on disk is SACRED — never rewritten. Every local-run
 // adaptation happens in the response layer:
@@ -17,7 +18,8 @@
 //     assets/<host>/<path>; SRI integrity attrs are dropped because rewritten
 //     bytes can no longer match their hash        [samsyninja, landonorris]
 //     ext hosts are auto-detected from <root>/assets/<host>/ dirs; add more
-//     with --ext-hosts.
+//     with --ext-hosts, and name the deliberately-unmirrored telemetry ones
+//     with --stub-ext-hosts so they answer with a JS stub instead of a 404
 //   * ?__probe instrumentation: HTML responses get probe-shim.js injected so
 //     both sides can be driven deterministically   [storytellingnoomo]
 //   * 404.html template replay when the mirror captured one   [landonorris]
@@ -31,7 +33,10 @@
 //   -> careers-kimi-rebuild (redirect replay from ledger, RSC layer)
 //   -> storytellingnoomo-rebuild ("Adapted from careers-kimi-rebuild/scripts/
 //      serve.mjs"; Range support, probe-shim injection)
-//   -> landonorris-rebuild (/ext/<host>/ mapping, 404 semantics, SRI strip).
+//   -> landonorris-rebuild (/ext/<host>/ mapping, 404 semantics, SRI strip)
+//   -> racingshop-rebuild (HLS/DASH ladder MIME types)
+//   -> shopifydesign-rebuild (.mov MIME, --stub-ext-hosts for hosts that are
+//      rewritten into /ext/ but deliberately not mirrored).
 
 import http from "node:http";
 import fs from "node:fs";
@@ -58,6 +63,19 @@ const ROOT = path.resolve(flag("root", process.env.SERVE_ROOT || "legacy-mirror"
 // (landonorris stubbed Webflow's GA proxies /nvhc, /avljl this way).
 const STUB_PREFIXES = [];
 
+// External hosts that get rewritten into /ext/<host>/ like any other ext host,
+// but are then answered with an empty JS stub instead of a file, because they
+// were deliberately NOT mirrored (pure telemetry: no behavior to reproduce, and
+// letting them out would break the zero-outbound gate). List them here per
+// project, or pass --stub-ext-hosts; register each one as a deviation.
+// The rewrite is what makes this work even for runtime-built URLs: a loader
+// that concatenates a "https://telemetry.example/tag/" literal with an id has
+// the literal rewritten in the JS response, so the built URL is redirected too,
+// and downstream hosts are never reached because their loaders never execute.
+const STUB_EXT_HOSTS = [
+  ...flag("stub-ext-hosts", "").split(",").map((s) => s.trim()).filter(Boolean),
+];
+
 // File extensions whose responses are eligible for external-host rewriting.
 const TEXT_REWRITE = new Set([".html", ".css", ".js", ".mjs", ".json", ".svg"]);
 
@@ -80,6 +98,9 @@ const MIME = {
   ".ico": "image/x-icon",
   ".webm": "video/webm",
   ".mp4": "video/mp4",
+  // .mov shows up in real mirrors; without this it goes out as
+  // application/octet-stream and <video> refuses to play it.
+  ".mov": "video/quicktime",
   ".mp3": "audio/mpeg",
   ".wav": "audio/wav",
   // HLS ladder (see scripts/gapfill-video.mjs). Serving a mirrored .m3u8 with
@@ -111,17 +132,33 @@ const EXT_HOSTS = [...new Set([
   ...(await fsp.readdir(path.join(ROOT, "assets"), { withFileTypes: true }).catch(() => []))
     .filter((d) => d.isDirectory() && d.name.includes("."))
     .map((d) => d.name),
+  // Stubbed hosts must be rewritten too, or the page calls them for real.
+  ...STUB_EXT_HOSTS,
   ...flag("ext-hosts", "").split(",").filter(Boolean),
 ])];
 
 // Redirect replay ledger (optional): "CODE\tFROM\tTO" per line, header skipped.
+// FROM may be a bare path or the absolute URL the crawler asked for; requests
+// arrive here as paths, so absolute FROMs are also keyed by their local
+// equivalent (ext hosts under /ext/<host>/), otherwise the ledger loads and
+// replays nothing at all.
 const REDIRECTS = new Map();
+const localizeUrl = (abs) => {
+  const u = new URL(abs);
+  return EXT_HOSTS.includes(u.hostname) ? `/ext/${u.hostname}${u.pathname}` : u.pathname;
+};
+const trimSlash = (p) => p.replace(/(.)\/$/, "$1");
 for (const ledger of ["_scripts/redirects.tsv", "redirects.tsv"]) {
   try {
     const tsv = await fsp.readFile(path.join(ROOT, ledger), "utf8");
     for (const line of tsv.trim().split("\n").slice(1)) {
       const [code, from, to] = line.split("\t");
-      if (from) REDIRECTS.set(from, { code: Number(code), to });
+      if (!from || !to) continue;
+      const rec = { code: Number(code), to };
+      REDIRECTS.set(trimSlash(from), rec);
+      if (/^https?:\/\//i.test(from)) {
+        try { REDIRECTS.set(trimSlash(localizeUrl(from)), rec); } catch {}
+      }
     }
     break;
   } catch {}
@@ -187,11 +224,18 @@ const server = http.createServer(async (req, res) => {
     const url = new URL(req.url, `http://${req.headers.host || "localhost"}`);
 
     // 1. redirect replay — origin behavior from the ledger, before anything else
-    const redirect = REDIRECTS.get(url.pathname.replace(/(.)\/$/, "$1"));
+    const redirect = REDIRECTS.get(trimSlash(url.pathname));
     if (redirect) {
-      // Rewrite the origin host to this server so local navigation stays local;
-      // the status code and the path are the origin's.
-      const to = redirect.to.replace(/^https?:\/\/[^/]+/, `http://${req.headers.host || "localhost"}`);
+      // Rewrite the origin host to this server so local navigation stays local
+      // (an ext host goes to its /ext/<host>/ home instead); the status code and
+      // the path are the origin's. A relative Location is already local.
+      let to = redirect.to;
+      if (/^https?:\/\//i.test(to)) {
+        const u = new URL(to);
+        to = EXT_HOSTS.includes(u.hostname)
+          ? `/ext/${u.hostname}${u.pathname}${u.search}`
+          : `http://${req.headers.host || "localhost"}${u.pathname}${u.search}${u.hash}`;
+      }
       res.writeHead(redirect.code, { location: to, "cache-control": "no-cache" });
       return res.end();
     }
@@ -200,6 +244,12 @@ const server = http.createServer(async (req, res) => {
     if (STUB_PREFIXES.some((p) => url.pathname.startsWith(p))) {
       res.writeHead(200, { "content-type": "text/javascript" });
       return res.end("/* stub */");
+    }
+
+    // 2b. telemetry hosts rewritten into /ext/ but never mirrored -> JS stub.
+    if (STUB_EXT_HOSTS.some((h) => url.pathname.startsWith(`/ext/${h}/`))) {
+      res.writeHead(200, { "content-type": "text/javascript; charset=utf-8" });
+      return res.end("/* unmirrored telemetry host: stubbed */");
     }
 
     // 3. file resolution (incl. /ext/<host>/ mapping)

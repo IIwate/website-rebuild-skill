@@ -31,7 +31,7 @@
 
 - **定义**：冻结全部熵源后，双侧同位姿截图（或 canvas `getImageData`/`readPixels` 直读），FNV 哈希相等即绿。
 - **实例**：kimi 32 个整页位姿（桌面 1440×900 × 8 + 移动 390×844 × 7 + 平板 768×1024 × 7 + hover 射线（CDP 真实鼠标）+ deck 内嵌覆盖层 ×2 + 过渡中间帧 + campus/social 独立页 6 位姿）与镜像逐字节相同；另有 4 个画布字节门（月球/星云/pixel-flow/WebGL Dither `readPixels` 直读）【kimi】。
-- **适用条件**：DOM 渲染为主、熵源可枚举冻结的站点。前提假设："同机同版本 Chrome 的 DOM 渲染是逐字节确定的"【kimi】——前提与八种冻结协议见 `references/determinism.md`。
+- **适用条件**：DOM 渲染为主、熵源可枚举冻结的站点。前提假设："同机同版本 Chrome 的 DOM 渲染是逐字节确定的"【kimi】——前提与九种冻结协议见 `references/determinism.md`。
 - **skill 脚本**：`scripts/pixelcompare.mjs`（byte-equal 档）+ `scripts/lib/png.mjs`。
 - **搭建流程**：每个门自起镜像/复刻两个服务器 → 同一冻结协议驱动到同一位姿 → 截图/直读 → 哈希比对 → 产物成对入库（kimi 的 `docs/*-check/`；`side-by-side.mjs` 渲染 [镜像|重建|热力图] 合成图到 `docs/side-by-side/`，26 对全部 meanAbsDiff 0）【kimi】。
 - **附带用法**："应当不影响画面"的架构改动用"位姿哈希不变"关账（kimi M7.1 加动态加载后桌面 8 位姿哈希不变，证明改造像素零影响）【kimi】。
@@ -58,6 +58,24 @@
   - noomo：相机位姿与基准插值小数点后三位全等、42 层与源站 `X.create` 全序一致、RT 尺寸精确值（"3650×1930→1460×772 = 视口×dpr×padding"）【noomo】。
 - **适用条件**：内部状态可暴露——复刻侧自建句柄（noomo 的 `window.__sweet3`、rogier 的 `window.__rogier*Probe`，均 query 门控并登记偏差）；源站侧读不到 state 时用拟合/重放绕过【kimi】。数据驱动动画必配此门（见 `references/animation-recovery.md`）。
 - **skill 脚本**：`scripts/probe.mjs` 的 `--eval/--evalAfter`（延迟二次求值，用于断言异步导航结果【lando】）。
+
+#### 1.4.1 场景图数值门（§1.4 最强的一个子类）【shopifydesign】
+
+- **定义**：把引擎"读 DOM 建场景"的那个函数**逐字转写成独立探针脚本**，两侧各跑一次，输出结构化 JSON 基准，**逐字段数值 diff**。差异为空即绿。
+- **适用判据（唯一一条）**：**引擎的场景构建是 DOM/CSS 的纯函数**——即场景是 (HTML 字节, CSS 字节, 视口, scrollY) 的函数。取证信号：同一个函数里同时出现 `querySelectorAll("[data-*]")` + `getBoundingClientRect()` + `getComputedStyle()`。命中即可建门。
+- **实例**【shopifydesign】：shopify.design 的 `QL` L30737–L30899 逐字转写为项目侧的 `dump-scene-graph.mjs`（零依赖、裸 CDP；**本 skill 不提供该脚本**——它是那个站 bundle 内部函数的逐字转写，换个站连挂载点都不存在，必须按目标站的引擎重写一份），产出 `objects[]`（world 坐标/尺寸/字号/对齐/行高/字距/圆角/旋转/颜色）+ `carousels[]`（`--card-width`/`--card-height`/`--card-gap` 与逐卡矩形）+ `docHeight`，入库 `docs/scene-baseline/`。
+- **实测数据**：
+  - 镜像自比（未冻结）：63 个对象里 2 个处于 mid-tween，**7 个字段漂移**；
+  - 镜像自比（冻结后）：**0 字段差异**；
+  - 镜像（冻结）vs 线上：63 个场景对象 + 轮播记录 + docHeight **全部 0 差异**（唯一需要归一的是镜像侧 `/ext/` URL 改写）。
+- **为什么优于像素门**：① **精确**——数值全等或不全等，没有容差、不需要噪声归类；② **可归因**——差异直接指向"哪个对象的哪个字段"，像素门只能告诉你"某处不像"；③ **它恰好卡住唯一会真正破坏 3D 的东西**：CSS 布局漂 1px = 3D 物体位移 1px×全局缩放。像素门此后只需负责 shader 输出。
+- **它比 §1.4 一般形态强在哪**：§1.4 的前提是"内部状态可暴露"（复刻侧自建句柄、源站侧靠拟合/重放绕过）。场景图数值门**两侧都不需要插桩**——转写出来的探针在源站的原混淆 bundle 上照样跑。因此它是**唯一能直接从线上源站取到同一份数值基准的数值门**，可以在移植开工前就建立，并终身作为 DOM/CSS 改动的回归门。
+- **搭建纪律**：
+  - **逐字转写，连 bug 一起转**：`QL` 里 carousel 元素在第一遍遍历中落不进 text/image/shape 任何分支、空转一次——照抄；"改进"它就等于在比另一个程序。minified 标识符与源行号保留在注释里，两边可肉眼 diff。
+  - **读取器的副作用同样要转写**：`mG.readLayout()` L46372–L46385 在解析前把场景根改成 `transform:""; position:fixed; height:100vh`，读完还原并 `scrollTo`。漏掉这一步实测得到统一 158px 的 Z 偏移——读到的是活布局，不是引擎看到的布局。
+  - **解析作用域按源站来**（本例是 `[data-dom-layout]` 而非 `document`）；退化到 body 时要在产物里显式打标（`layoutRoot: "body(FALLBACK)"`），否则会静默比错东西。
+  - **先冻结，再取基准**：未冻结时同一镜像两次采样就漂 7 个字段。单侧自比 0 差异是双侧对拍的前置条件（熵源清单见 `references/determinism.md` §1、§3）。
+  - **归一化只允许做偏差表里登记过的那一项**（本例 `/ext/` URL 改写），其余一律算真差异——否则这个门会退化成可调参的像素门。
 
 ### 1.5 CLEAN 探针门（底线门）
 
@@ -93,8 +111,15 @@
 该画面/场景是否"静止且熵源可枚举"？（DOM 渲染为主，无不可冻随机源）
 ├─ 是 → 冻结协议 + 整页 byte-equal 门（§1.2）；冻不住的局部用
 │        "同等隐藏"协议剥离并另建专门门覆盖【kimi】
-└─ 否（WebGL/视频/随机相位）→ 降级为量化像素对拍门（§1.3）
-         + 显式噪声归类（§6）+ 最差格/最差点目检归因
+└─ 否（WebGL/视频/随机相位）→ 先别急着降级，再问一层：
+    场景构建是否为 DOM/CSS 的纯函数？
+    （同一函数里同时出现 querySelectorAll("[data-*]")
+      + getBoundingClientRect() + getComputedStyle()）
+    ├─ 是 → 先建场景图数值门（§1.4.1）：逐字转写该函数为探针，
+    │        两侧逐字段数值 diff，0 差异关账；像素门退居其后，
+    │        只负责 shader 输出那一层【shopifydesign】
+    └─ 否 → 降级为量化像素对拍门（§1.3）
+             + 显式噪声归类（§6）+ 最差格/最差点目检归因
 
 动画/交互由数据或纯函数驱动？
 ├─ 是 → 补数值探针门（§1.4）：dump 基准 → 拟合/重放/全等断言
@@ -193,6 +218,7 @@ kimi 对"门"本身做了系统反思，六条全部有实锤事故。设计每�
 ## 8. 产出物
 
 - 门脚本 + 每次运行的结构化产物（summary.json / metric.json / 截图对）入库留证
+- 场景图数值基准（源站 / 镜像 / 复刻三份 JSON）+ 逐字段 diff 结果，每次改 DOM/CSS 后回归【shopifydesign】
 - "改动区域 → 最小门集合"映射表 + 分级命令清单进 REBUILD_PLAN
 - 每条里程碑日志记录门的运行结果（"SSR gates green" / "14/14 PASS" / "Gates: ... green"）
 - 冷头评审报告：清单对账结果 + 反向扫描判罪清单 + 偏差表/怪癖表终版

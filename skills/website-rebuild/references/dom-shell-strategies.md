@@ -1,13 +1,20 @@
-# DOM 层三策略选型指南
+# DOM 层策略选型指南（A/B/C + 正交约束 D）
 
-> **何时加载本文件**：完成镜像（M0）与逆向（M1）后、搭工程骨架（M2）前——需要决定"页面 HTML/CSS 外壳如何获得"时加载。本文件回答一个问题：DOM 层是零重写生成、脚本切分、还是框架内重建。
+> **何时加载本文件**：完成镜像（M0）与逆向（M1）后、搭工程骨架（M2）前——需要决定"页面 HTML/CSS 外壳如何获得"时加载。本文件回答两个问题：DOM 层是零重写生成、脚本切分、还是框架内重建（策略 A/B/C）；以及 DOM 是否同时被 3D 引擎当坐标源读取（策略 D 的正交约束，它会锁死上一问的答案）。
 
 ## 1. 选型决策树
 
-选型判据只有一条：**原站 DOM 的生成方是谁**。先在镜像 HTML / bundle 里取证，再按下表分支。
+选型判据有两条，**按序问**：先问"DOM 被谁消费"（决定字节门的性质与选型自由度），再问"DOM 由谁生成"（决定 A/B/C）。两条都在镜像 HTML / bundle 里取证。
 
 ```
-原站 DOM 由谁生成？
+先问：原站 DOM 的消费方是谁？【shopifydesign】
+├── 只有浏览器（DOM = 文档）
+│     → 无额外约束，继续问下一条
+└── 还有 3D 引擎：引擎用 getBoundingClientRect / getComputedStyle 把 CSS 排版结果读成世界坐标
+      → 命中策略 D：DOM 即场景图（§5）。它是**正交约束**而非第四种外壳来源——
+        外壳选型被锁死为策略 A，且字节门升格为几何门
+
+再问：原站 DOM 由谁生成？
 ├── 平台导出物（Webflow 等：镜像 HTML 即最终产物，含 webflow.js、平台 data-* 体系）
 │     → 策略 A：零重写 shells（镜像 HTML 经登记变换直接生成页面）【lando】
 ├── 静态单页（单个 index.html 巨页，构建器产物但结构可直接切分）
@@ -22,6 +29,7 @@
 - Nuxt 特征：`__NUXT_DATA__` payload、响应头 `x-powered-by: Nuxt`【noomo】。
 - Vue SPA 特征：scoped CSS 的 `data-v-xxxxxxxx` 属性【samsy】。
 - Astro/静态特征：`_astro/` 资产目录、单页巨型 HTML【oryzo】【rogier】。
+- **策略 D 特征**：同一个函数里同时出现 `querySelectorAll("[data-*]")` + `getBoundingClientRect()` + `getComputedStyle()` 三件套【shopifydesign】。
 - 分支可组合：lando 是"平台外壳（策略 A）+ 自定义 bundle 应用层手写重写"的混合——外壳与应用层可分别选策略【lando】。
 
 **共同验收（三策略通用）**：产出 HTML 与镜像做"空白归一化 diff 为空"或逐字节 diff 为空【oryzo】【noomo】【kimi】。字节层的门要**最先建立、终身保持全绿**——"字节层先行使后续所有视觉 debug 都能排除 DOM/payload 差异"【noomo】。
@@ -33,6 +41,7 @@
 | A 零重写 shells | 平台导出物 | 镜像 HTML + 登记变换直接生成 | 仅登记变换处不同，其余逐字一致 | 【lando】 |
 | B 脚本切组件 | 静态单页 | 切分脚本保守 pretty-print | 空白归一化后 diff 为空 | 【oryzo】 |
 | C 框架内重建 | 框架编译产物 | 同栈同版本框架内重建 | SSR/payload 逐字节 diff 为空 + CSS 双向 diff | 【samsy】【kimi】【noomo】【rogier】 |
+| **D DOM 即场景图**（正交约束） | DOM/CSS 被 3D 引擎当**坐标源**读取 | 同 A（约束一旦命中，A 是唯一正确解） | 场景图**逐字段数值全等**（几何门），字节门是它的前提 | 【shopifydesign】 |
 
 ## 2. 策略 A：零重写 shells（平台导出物）【lando】
 
@@ -131,7 +140,36 @@ else { /* 生产路径 */ }
 
 反模式：把分支**删掉**而不登记。这会让后续任何人无法从复刻侧还原源站真实行为，属未登记偏差 = bug。
 
-## 5. 常见坑（各策略通用）
+## 5. 策略 D：DOM 即场景图（DOM/CSS 是 3D 引擎的坐标源）【shopifydesign】
+
+不是第四种"外壳来源"，是一层**正交约束**：它不改变 DOM 由谁生成，只改变 DOM 层出错的**后果**——从"文档不像"变成"3D 物体位置错"。
+
+### 5.1 准确形态：不是"DOM 被标注了场景数据"，是"浏览器的 CSS 排版结果本身就是场景图"
+
+预想的形态是 SSR HTML 上挂 `data-webgl-src`/`data-depth`，引擎读属性建场景。逆向后的真实形态强一档（shopify.design 场景解析器 `QL(n)` `_pretty/_index-c3dAurQC.js` L30737–L30899、布局读取器 `mG.readLayout` L46372–L46385）——引擎取的**第一手数据不是属性，是排版结果**：
+
+| 引擎读什么 | 得到什么 |
+|---|---|
+| `getBoundingClientRect()` × 全局缩放因子 | 世界坐标 `worldX` / `worldZ` / `worldWidth` / `worldHeight` |
+| `getComputedStyle()` 的 `fontSize`/`textAlign`/`fontFamily`/`fontWeight`/`lineHeight`/`letterSpacing` | SDF 文字的全部排版参数 |
+| `getComputedStyle()` 的 `border-radius` | 图片圆角 / pill 圆角 |
+| `getComputedStyle()` 的 `transform: matrix(...)` | 形状旋转角（`Math.atan2` 反解） |
+| CSS 自定义属性 `--card-width` / `--card-height` / `--card-gap` | 轮播卡片几何 |
+| `data-*` 属性 | **只补 CSS 表达不了的维度**：Z 景深、切片数、SDF 模式、形状类型、颜色 |
+
+一句话记法：**HTML 与 CSS 不是外壳，是场景的坐标源。**
+
+### 5.2 取证判据（怎么认出自己遇到了策略 D）
+
+在 bundle 里搜：**`querySelectorAll("[data-*]")` + `getBoundingClientRect()` + `getComputedStyle()` 三件套同时出现在同一个函数里**——命中即按策略 D 处理。（三者单独出现不算数：测滚动位置、判响应式断点都会用到前两个。）
+
+### 5.3 三条推论（每条都改变工程决策）
+
+1. **字节门升格为几何门。** 现有三策略把 DOM 层当"外壳"，字节门是**文档保真**的门；策略 D 站上 **CSS 差 1px，3D 物体就位移 1px × 全局缩放**，字节门变成 **3D 正确性**的门。于是策略 A（零重写 shells）从"可选的省事做法"升级为**唯一正确做法**——任何重写、切分、框架内重建都是在往坐标源里注入误差，且误差会以"3D 位置不对"的形态显现，不会被当成 DOM 问题去查。
+2. **读取器自带副作用，必须逐字复刻。** `readLayout()` 在解析前把根节点改成 `transform:""; position:fixed; height:100vh`，读完立刻还原并 `window.scrollTo(0, a)`。语义是：清 `transform` 把**入场动画的位移排除在场景坐标之外**；`position:fixed` 让 `scrollY` 归零，使场景坐标成为**与滚动无关的绝对快照**。**实测漏掉这一步：镜像与线上出现统一 158px 的 Z 偏移**——那正是被 `transform=""` 抹掉的入场位移。移植时连同还原顺序一起抄，不许"优化掉"。
+3. **它顺带带来一个比像素门更该先建的门**：把引擎读 DOM 的那个函数逐字转写成探针，两侧逐字段比数值。判据与建门方法见 `references/verification-gates.md`。
+
+## 6. 常见坑（各策略通用）
 
 1. **自创补偿性 CSS 会反转成 bug**：JS 机制没对齐时用 CSS 补观感，等 JS 对齐后补丁全部反转——rogier 十余个视觉 bug 全部源于此。"宁可先不像，也不要发明规则"【rogier】。
 2. **门只断言想到的字段是盲的**：`<main>` 只比 3 个固定字段抓不到"shell 组件发明了源站没有的 DOM 属性"；修法是**并集全量比对**替代字段名单【kimi】。
@@ -142,3 +180,4 @@ else { /* 生产路径 */ }
 7. **坏链也要复刻**：源站 favicon.svg 404，重建应删除本地文件但保留 head 里的 link——补一个占位文件反而是偏离【rogier】。
 8. **策略 C 忘记钉传递依赖**：框架小版本、传递依赖都会改变输出字节序，字节门红了先查依赖树再查代码【noomo】。
 9. **策略 A/B 的生成脚本静默通过**：不加"零变换即 throw"防御，镜像结构变化后会静默产出坏 shells【lando】。
+10. **策略 D 站上按常规选型**：把 DOM 当外壳去切分/重建，等于改 3D 坐标源；症状显现为"物体位置不对"，排查方向天然跑偏。同类错误还有漏抄 `readLayout()` 的三处副作用（§5.3 推论 2，实测统一 158px Z 偏移）【shopifydesign】。
