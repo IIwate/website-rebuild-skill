@@ -21,11 +21,20 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { spawn } from "node:child_process";
+import { labelPort, resolvePort } from "./lib/ports.mjs";
 
 // ---------------------------------------------------------------------------
 // CONFIG — EDIT PER PROJECT. Everything the gate asserts lives here.
 // ---------------------------------------------------------------------------
-const PORT = Number(process.env.PORT || 5188);
+// Port: allocated per workspace on the rebuild side (scripts/lib/ports.mjs), so
+// this gate cannot land on the mirror server's port or on another checkout's —
+// which would make it assert the rebuild's route contract against a different
+// server entirely. PORT=... still overrides.
+const { port: PORT, label: PORT_LABEL } = resolvePort({
+  lane: "verify-routes.server",
+  side: "rebuild",
+  env: process.env.PORT || null,
+});
 const CONFIG = {
   // Base URL of the server under test.
   base: `http://127.0.0.1:${PORT}`,
@@ -124,6 +133,7 @@ if (CONFIG.server) {
     await fetch(CONFIG.base + "/", { redirect: "manual" });
   } catch {
     console.error(`no server at ${CONFIG.base} — start it first or set CONFIG.server`);
+    console.error(`  this gate's port is ${labelPort(PORT)}; override with PORT=...`);
     process.exit(1);
   }
 }

@@ -9,6 +9,19 @@
  *        [--height 1080] [--scroll 0.5] [--eval "expr"]
  *        [--evalAfter "expr"] [--evalAfterDelay 2000] [--mobile]
  *        [--walk 24] [--walk-dwell 700] [--no-external]
+ *        [--side mirror|rebuild] [--cdp-port N]
+ *
+ * PORTS AND IDENTITY (scripts/lib/ports.mjs — read its header once):
+ *   The debug port is allocated per (workspace, script, side) instead of being
+ *   randomized, --side is inferred from the target URL when that URL is one of
+ *   this toolchain's servers, a taken port is a loud exit, and after launch the
+ *   probe attaches ONLY to its own sentinel page. That last check is the real
+ *   gate: a probe that attaches to another script's browser reports that
+ *   browser's console and that browser's traffic as if they were this URL's —
+ *   the field case (§8.30) was exactly a "the rebuild calls the mirror" report
+ *   produced by a probe that had landed in the mirror's browser. The outbound
+ *   report below also names any loopback port it recognizes, so a stray request
+ *   to a sibling gate reads as what it is instead of as a leak.
  *
  * --no-external and --walk exist because the offline gate asks for things this
  * probe could not otherwise assert:
@@ -33,6 +46,16 @@ import { spawn } from 'node:child_process';
 import { writeFile, mkdtemp, rm, access } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import {
+  annotateHost,
+  assertOwnBrowser,
+  assertPortFree,
+  chromeSentinel,
+  describePort,
+  fatal,
+  fetchIdentity,
+  resolvePort,
+} from './lib/ports.mjs';
 
 // Chrome discovery: first existing candidate wins; override with CHROME_PATH.
 const CHROME_CANDIDATES = [
@@ -63,16 +86,55 @@ const flag = (name, dflt) => {
 };
 const has = (name) => args.includes('--' + name);
 if (!url) {
-  console.error('usage: probe.mjs <url> [--shot out.png] [--wait ms] [--scroll frac] [--walk steps] [--walk-dwell ms] [--no-external] [--eval expr] [--evalAfter expr] [--mobile]');
+  console.error('usage: probe.mjs <url> [--shot out.png] [--wait ms] [--scroll frac] [--walk steps] [--walk-dwell ms] [--no-external] [--eval expr] [--evalAfter expr] [--mobile] [--side mirror|rebuild] [--cdp-port N]');
   process.exit(2);
 }
 const WAIT = Number(flag('wait', 6000));
 const W = Number(flag('width', has('mobile') ? 390 : 1728));
 const H = Number(flag('height', has('mobile') ? 844 : 1080));
 
+// Which side this probe is looking at. It only selects the debug port, but that
+// is what lets a mirror probe and a rebuild probe run at the same time — the
+// case that produced the crossed-wires field report. Inferred from the target
+// URL when it is a registry port (serve.mjs names its side in the port), so the
+// common invocations need no new flag; --side overrides, unset is fine and just
+// means "this run gets the side-less port".
+const SIDE = flag('side', null) ?? describePort(new URL(url).port)?.side ?? 'unset';
+const { port, label: PORT_LABEL, explicit: PORT_EXPLICIT } = resolvePort({
+  lane: 'probe.cdp',
+  side: SIDE,
+  cli: flag('cdp-port', null),
+  env: process.env.CDP_PORT || null,
+  envName: 'CDP_PORT',
+});
+console.log(`[probe] target ${url} (side ${SIDE.toUpperCase()})`);
+console.log(`[probe] cdp port ${PORT_LABEL}`);
+
+// Optional: assert the server on the other end is the side we think it is.
+// Cheap, and it catches the copy-pasted command that probes the mirror twice.
+const EXPECT_SIDE = flag('expect-side', null);
+if (EXPECT_SIDE) {
+  const id = await fetchIdentity(url);
+  if (!id) fatal(`FATAL: --expect-side ${EXPECT_SIDE} but ${url} is not a serve.mjs instance (no identity to check)`);
+  if (id.side !== EXPECT_SIDE) {
+    fatal([
+      `FATAL: --expect-side ${EXPECT_SIDE}, but ${url} answers as side ${String(id.side).toUpperCase()}`,
+      `       (${id.tool}, root ${id.root}, pid ${id.pid}, token ${id.token}).`,
+    ]);
+  }
+  console.log(`[probe] server identity confirmed: side ${String(id.side).toUpperCase()} token ${id.token}`);
+}
+
+await assertPortFree(port, {
+  tool: 'probe.mjs',
+  note: PORT_EXPLICIT ? 'this port came from --cdp-port/CDP_PORT' : null,
+});
+
 const CHROME = await findChrome();
 const profile = await mkdtemp(join(tmpdir(), 'probe-chrome-'));
-const port = 9222 + Math.floor(Math.random() * 500);
+// One-shot landing page: the attach step below refuses anything else, so this
+// probe cannot end up driving a browser some other script started.
+const sentinel = chromeSentinel();
 const chrome = spawn(CHROME, [
   '--headless=new',
   `--remote-debugging-port=${port}`,
@@ -87,28 +149,19 @@ const chrome = spawn(CHROME, [
   '--disable-renderer-backgrounding',
   '--disable-backgrounding-occluded-windows',
   `--window-size=${W},${H}`,
-  'about:blank',
+  sentinel.url,
 ]);
 const cleanup = async (code) => {
   chrome.kill();
   await rm(profile, { recursive: true, force: true }).catch(() => {});
   process.exit(code);
 };
+process.on('exit', () => { try { chrome.kill('SIGKILL'); } catch {} });
 
-// wait for devtools endpoint
-let target;
-for (let i = 0; i < 50; i++) {
-  try {
-    const list = await (await fetch(`http://127.0.0.1:${port}/json`)).json();
-    target = list.find((t) => t.type === 'page');
-    if (target) break;
-  } catch {}
-  await new Promise((r) => setTimeout(r, 200));
-}
-if (!target) {
-  console.error('FATAL: no CDP target');
-  await cleanup(3);
-}
+// Attach ONLY to our own sentinel page. The old code took the first target of
+// type "page", which on a busy endpoint is whatever page happens to be first —
+// another script's page, or even chrome://newtab.
+const target = await assertOwnBrowser({ port, sentinel, tool: 'probe.mjs', pid: chrome.pid });
 
 const ws = new WebSocket(target.webSocketDebuggerUrl);
 let msgId = 0;
@@ -262,7 +315,10 @@ console.log(`=== request failures (${failures.length}) ===`);
 for (const f of failures.slice(0, 40)) console.log(f);
 const extCount = [...external.values()].reduce((a, b) => a + b, 0);
 console.log(`=== external requests (${extCount}${NO_EXTERNAL ? ', FATAL' : ''}) ===`);
-for (const [h, n] of [...external].sort((a, b) => b[1] - a[1])) console.log(`${n}x ${h}`);
+// annotateHost names a loopback port that belongs to this toolchain, so a hit
+// on a sibling gate reads as "that is the mirror's server" instead of as an
+// anonymous outbound call to an unknown host (the §8.30 false red).
+for (const [h, n] of [...external].sort((a, b) => b[1] - a[1])) console.log(`${n}x ${h}${annotateHost(h)}`);
 
 const errCount =
   pageErrors.length +

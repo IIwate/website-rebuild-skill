@@ -9,6 +9,13 @@
 //
 // Zero npm dependencies: raw CDP over Node's built-in WebSocket (needs Node 22+).
 //
+// PORTS AND IDENTITY (scripts/lib/ports.mjs — read its header once): the debug
+// port is allocated per (workspace, script) on the "live" side instead of a
+// fixed 9333, a taken port is a loud exit, and the browser must be the one this
+// script launched (sentinel page). Identity matters most here: this capture is
+// the evidence base for the whole mirror, and a session that recorded another
+// script's browser would produce a HAVE/GAP ledger for another program.
+//
 // Usage:
 //   node netcapture.mjs --origin https://example.com [--mirror legacy-mirror]
 //     [--routes /,/about,/contact]      routes to visit (default "/")
@@ -46,6 +53,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { spawn } from "node:child_process";
 import { tmpdir } from "node:os";
+import { assertOwnBrowser, assertPortFree, chromeSentinel, resolvePort } from "./lib/ports.mjs";
 
 const args = process.argv.slice(2);
 const flag = (name, dflt) => {
@@ -69,7 +77,14 @@ const ORIGIN_HOST = new URL(ORIGIN).hostname;
 const HOSTS_FLAG = flag("hosts", "").split(",").map((s) => s.trim()).filter(Boolean);
 // Same semantics as mirror-site.mjs's ASSET_HOSTS: origin + whatever you name.
 const RECORD_HOSTS = new Set([ORIGIN_HOST, ...HOSTS_FLAG]);
-const CDP_PORT = Number(process.env.CDP_PORT || 9333);
+// This pass drives the LIVE origin, which is its own side of the ledger.
+const { port: CDP_PORT, label: CDP_LABEL } = resolvePort({
+  lane: "netcapture.cdp",
+  side: "live",
+  cli: flag("cdp-port", null),
+  env: process.env.CDP_PORT || null,
+  envName: "CDP_PORT",
+});
 // Opt-in software GL — see the flag list below for why it is not the default.
 const SWIFTSHADER = args.includes("--swiftshader");
 const DO_FETCH = args.includes("--fetch");
@@ -168,9 +183,13 @@ function client(ws) {
 
 // ---------------------------------------------------------------------------
 
+console.log(`[netcapture] cdp port ${CDP_LABEL}`);
+await assertPortFree(CDP_PORT, { tool: "netcapture.mjs" });
+
 const chromePath = await findChrome();
 const profile = path.join(tmpdir(), `netcapture-${CDP_PORT}`);
 await fs.rm(profile, { recursive: true, force: true });
+const sentinel = chromeSentinel();
 
 const chrome = spawn(
   chromePath,
@@ -195,6 +214,9 @@ const chrome = spawn(
     "--disable-backgrounding-occluded-windows",
     "--mute-audio",
     `--user-data-dir=${profile}`,
+    // One-shot landing page whose URL only this browser can be showing; the
+    // ownership check below refuses to drive an endpoint that lacks it.
+    sentinel.url,
   ],
   { stdio: ["ignore", "ignore", "pipe"] },
 );
@@ -202,6 +224,11 @@ const chrome = spawn(
 process.on("exit", () => {
   try { chrome.kill("SIGKILL"); } catch {}
 });
+
+// Ownership before protocol: connect() would happily attach to whatever CDP
+// endpoint answers on this port, and every request recorded through a foreign
+// browser would be filed as this origin's traffic.
+await assertOwnBrowser({ port: CDP_PORT, sentinel, tool: "netcapture.mjs", pid: chrome.pid });
 
 const ws = await connect(CDP_PORT);
 const cdp = client(ws);

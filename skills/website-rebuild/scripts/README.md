@@ -2,21 +2,38 @@
 
 全部为零依赖 Node 脚本（Node 22+ 内置 fetch / WebSocket 直连 CDP，不装任何 npm 包）——六项目一致的工具哲学："避免工具链自身版本漂移污染比对"。站点相关常量已提升为 CLI 参数或文件顶部 CONFIG 块（各文件头部有用法示例与传承注释）。
 
+## ⚠ 端口与实例身份（`lib/ports.mjs`，凡起服务/起浏览器的脚本都受此约束）
+
+**串台既造假红也造假绿**，而假绿是不可见的：两个进程连到同一个浏览器/服务时，你会拿到一份完美的双侧对拍报告，而它测的是同一侧。旧版每个脚本各自 `9222 + random*500` / `CDP_PORT || 9333` / `PORT || 5175`，区间重叠且默认值全局固定（实战事故见 shopifydesign §8.30：前台探针连上后台自比脚本的浏览器，报回"复刻侧有 19 次到镜像端口的外联"）。现在统一为：
+
+    端口 = 21000 + slot×1000 + lane×10 + side        # 21000..29999
+
+- **slot（0..8）= 一个工作区**：由 git 根路径哈希得到，同机多项目并发默认不撞；`WRS_PORT_SLOT` 可显式指定（同一项目要并发跑两份同名脚本时也用它）。
+- **lane（0..99）= 一个脚本角色**：编号写死在 `lib/ports.mjs` 的 `LANES` 里，**当 ABI 对待**；10–49 已为项目自带的 CDP 门（scroll/audio/scene-graph…）预留，50–99 留给项目自定义。
+- **side（0..9）= 对拍的哪一侧**：`1=mirror 2=rebuild 3=live 0=不分侧`。所以**端口自己说明自己是谁**：`25001` 是镜像服务、`25002` 是复刻服务、`25012` 是探针在探复刻侧。
+- **占用即响亮失败**（退 3，并打印占用方是谁：CDP 端点/serve.mjs 的 side+root+pid+token/普通 HTTP）。**绝不静默换端口**——换了端口的进程，伙伴脚本就会去跟留在原地的东西说话，这正是假绿的成因。
+- **显式覆盖照常支持**（`--port` / `--cdp-port` / `PORT` / `CDP_PORT`），覆盖值一样走占用预检与身份校验，日志里标 `[EXPLICIT]`。
+- **最后一道闸是身份校验，不是端口**：CDP 脚本用随机 sentinel 页启动浏览器，attach 时只认自己那一页，认不出立刻退 3 并打印实际看到的 target 列表；`serve.mjs` 每个响应带 `x-wrs-identity` token 并提供 `GET /__wrs/identity`，`pixelcompare.mjs` 据此断言 A/B 确实是两个进程（同 origin、或两个 URL 同一 token，都判死）。
+
+    node scripts/lib/ports.mjs          # 打印本工作区的完整端口表
+    node scripts/lib/ports.mjs 25012    # 反解某个端口是谁
+
 | 脚本 | 用途 | 典型用法 | 出处 | 成熟度 |
 |---|---|---|---|---|
 | `mirror-site.mjs` | BFS 爬虫镜像源站（页面/跨域资产，文本资产迭代到不动点；对要求同源 Referer 的资产域补齐 Referer 头、404 模板探测）。**`redirect: "manual"` 硬纪律**：重定向只记进 `redirects.tsv` 并把目标重新入队，绝不把 301 的 body 写在来源路径下。产出三本账：`mirror-manifest.json`（含逐文件 sha256）、`inventory.tsv`、`redirects.tsv`。`--seeds` 让第三遍从 bundle/payload 里解出来的 URL 走同一个下载器，账才是一本 | `node mirror-site.mjs --origin https://example.com --hosts cdn.x.com --probe-404 /no-such-page --seeds solved-urls.txt` | lando 版（rogier→noomo→lando→shopifydesign 四代传承） | 高 |
 | `netcapture.mjs` | 真实浏览器 CDP 抓包，与磁盘镜像 diff 对账（HAVE/GAP），补运行时拼接 URL。**`--hosts` 在 CDN 站上不是可选项**：记录范围是 host 白名单（语义同 mirror-site 的 `ASSET_HOSTS`，把同一份 host 清单传给它）；不在白名单的 host 只计数并在末尾列出，未传 `--hosts` 却漏掉大量流量时打印 UNDER-OBSERVED 告警——旧版只记同源，会在只看到约 2% 流量时报 GAP=0（实测 246 个 URL 里 208 个在 CDN 上） | `node netcapture.mjs --origin https://example.com --hosts cdn.x.com --routes /,/about --fetch` | kimi 版（+shopifydesign host 白名单） | 高 |
 | `gapfill-video.mjs` | HLS 流媒体阶梯补录：master m3u8 → 递归取 variant/备用音轨/I-frame 播放列表 → 逐段下载 `.ts`/`.m4s`（含 EXT-X-MAP 初始化段、EXT-X-KEY）→ 追加进 manifest 账本。补的是静态爬虫的结构性盲区：HTML 里只有 master，其余全由播放器运行时 fetch，只有探针 404 才暴露（`serve.mjs` 的 MIME 表已含 `.m3u8`/`.ts`/`.m4s`/`.mpd`，补录后即可本地回放） | `node gapfill-video.mjs --master https://cdn.x.com/vp/<id>/<id>.m3u8 --origin https://example.com`（`--dry-run` 先看阶梯全貌） | racingshop 版（通用化：递归下降 + 相对 URI 解析 + 备用轨道/fMP4 分支） | 高（racingshop 实战验证扁平阶梯；递归与备用轨道分支为通用化新增，已用 fixture + 原站数据回归） |
-| `serve.mjs` | 零依赖静态服务器：MIME 补全（含 HLS 阶梯与 `.mov`）、Range、redirects.tsv 重定向回放（FROM 写绝对 URL 或裸路径都能命中）、`/ext/<host>/` 服务层改写（镜像磁盘神圣不改）、`--stub-ext-hosts` 把"改写进 `/ext/` 但故意不镜像"的遥测 host 回 JS stub（否则要么真外联、要么 404）、`?__probe` 注入 probe-shim、404.html 回放 | `PORT=5175 SERVE_ROOT=legacy-mirror node serve.mjs`；有遥测时 `node serve.mjs --root legacy-mirror --stub-ext-hosts www.googletagmanager.com,www.clarity.ms` | noomo+lando 合并版（samsy→kimi→noomo→lando→racingshop→shopifydesign；kimi 的 RSC 层需按项目自加） | 高 |
-| `probe.mjs` | CDP 无头探针：console/异常/网络采集 + Log 域监听（SRI 拦截盲区修复）、`--eval/--evalAfter/--shot/--mobile`、CLEAN 判定退出码进 CI。`--no-external` 把"任何离开本服务 origin 的请求"记为失败（断网门要求的零外联，此前无人断言）；`--walk N` 全页滚动走查（`--scroll` 只跳单点，跳过的场景根本不挂载） | `node probe.mjs http://localhost:5175/ --shot out.png --walk 24 --no-external` | lando 版（rogier 探针家族→samsy regression→lando→shopifydesign） | 高 |
+| `serve.mjs` | 零依赖静态服务器：MIME 补全（含 HLS 阶梯与 `.mov`）、Range、redirects.tsv 重定向回放（FROM 写绝对 URL 或裸路径都能命中）、`/ext/<host>/` 服务层改写（镜像磁盘神圣不改）、`--stub-ext-hosts` 把"改写进 `/ext/` 但故意不镜像"的遥测 host 回 JS stub（否则要么真外联、要么 404）、`?__probe` 注入 probe-shim、404.html 回放。**`--side mirror|rebuild` 必填**（除非显式给 `--port`/`PORT`）：它决定端口（…1 镜像 / …2 复刻）并写进每个响应的 `x-wrs-identity`，端口被占直接退 3 并点名占用方 | `node serve.mjs --side mirror --root legacy-mirror`；复刻侧 `node serve.mjs --side rebuild --root dist`；有遥测时加 `--stub-ext-hosts www.googletagmanager.com,www.clarity.ms` | noomo+lando 合并版（samsy→kimi→noomo→lando→racingshop→shopifydesign；kimi 的 RSC 层需按项目自加） | 高 |
+| `probe.mjs` | CDP 无头探针：console/异常/网络采集 + Log 域监听（SRI 拦截盲区修复）、`--eval/--evalAfter/--shot/--mobile`、CLEAN 判定退出码进 CI。`--no-external` 把"任何离开本服务 origin 的请求"记为失败（断网门要求的零外联，此前无人断言）；`--walk N` 全页滚动走查（`--scroll` 只跳单点，跳过的场景根本不挂载）。调试端口按 side 分配（side 从目标 URL 的端口自动反解，可用 `--side` 覆盖），attach 只认自己的 sentinel 页；外联清单里凡是本工具链的回环端口都会标注归属（`1x 127.0.0.1:25001 <- serve.mjs side MIRROR`），`--expect-side` 可断言对面服务确实是那一侧 | `node probe.mjs http://127.0.0.1:25001/ --shot out.png --walk 24 --no-external` | lando 版（rogier 探针家族→samsy regression→lando→shopifydesign） | 高 |
 | `verify-routes.mjs` | 路由/重定向/head 契约门：head+`<main>` 全属性逐字段对镜像比、重定向断言状态码本身 | 编辑文件顶部 CONFIG 后 `node verify-routes.mjs` | kimi 版 | 高（CONFIG 需按项目填写） |
-| `verify-ssr.mjs` | SSR 逐字节门：body DOM / 数据 payload / config / 序列化顺序四项对镜像 byte-equal（buildId 掩码） | `PORT=3100 node verify-ssr.mjs`（页面可自动发现） | noomo 版 | 高（提取器为 Nuxt 专用，换框架需替换） |
-| `pixelcompare.mjs` | 双服务器 A/B 截图 + 64×40 网格量化（适合活体场景）+ 并排合成图 + metric.json；`--max-mean` 可作门 | `node pixelcompare.mjs --a http://localhost:5173/ --b http://localhost:5175/ --name home` | samsy 版为主 | 高（驱动到特定状态的逻辑属调用方） |
+| `verify-ssr.mjs` | SSR 逐字节门：body DOM / 数据 payload / config / 序列化顺序四项对镜像 byte-equal（buildId 掩码） | `node verify-ssr.mjs`（端口取自 `lib/ports.mjs` 并打印；`PORT=3100` 可覆盖；页面可自动发现） | noomo 版 | 高（提取器为 Nuxt 专用，换框架需替换） |
+| `pixelcompare.mjs` | 双服务器 A/B 截图 + 64×40 网格量化（适合活体场景）+ 并排合成图 + metric.json；`--max-mean` 可作门。**开拍前先证明 A/B 是两个进程**：同 origin 或两个 URL 拿到同一个 `serve.mjs` identity token 一律退 3（否则那份完美报告测的是同一侧），标签与服务自报的 side 不符则告警 | `node pixelcompare.mjs --a http://127.0.0.1:25002/ --b http://127.0.0.1:25001/ --name home` | samsy 版为主 | 高（驱动到特定状态的逻辑属调用方） |
 | `side-by-side.mjs` | 消费门产出的 mirror-/rebuild- PNG 对，合成 [镜像\|重建\|8× 差异热力图] + 汇总表 | `node side-by-side.mjs --dir docs` | kimi 版 | 高 |
 | `probe-shim.js` | 确定性驱动 shim：接管**整个熵面**——rAF / setTimeout / setInterval / visibility / `performance.now` / `Date.now` / `new Date` / `Math.random`（定种 mulberry32，可 `__reseed(n)`），`__pump(dt,frames)` 手动泵帧后这些时钟全部与帧时间锁步，双侧同位注入（serve.mjs `?__probe` 自动注入）。只冻 rAF 不够：漏掉的时钟会让同一镜像两次采样差出数值（实测 7 个字段） | 由 serve.mjs 注入；探针侧调 `window.__pump(16.7, 60)` | noomo 版（+shopifydesign 熵面补全） | 高 |
 | `dump-timelines.mjs` | 手写 GLB 解析器，动画曲线 dump 成 JSON 数值账本——"数值基准先行"范例（先 dump 源数据再移植再数值验收） | `node dump-timelines.mjs legacy-mirror/timelines/cam.glb` | noomo 版 | 中（GLB 专用，范式可泛化） |
 | `beautify-bundle.mjs` | 薄封装：钉死 `js-beautify@1.15.1` 展开 bundle 到 `legacy-mirror/_pretty/` 并自动生成含再生成命令的 `_pretty/README.md`（版本漂移作废行号坐标系） | `node beautify-bundle.mjs legacy-mirror/assets/cdn.x.com/bundle.js` | 新写薄封装（oryzo 引入流程、samsy 钉版本、kimi/noomo/lando 统一 1.15.1） | 中（新写，未经项目实战） |
 | `extract-source.mjs` | 字节切片器：按钉死行号区间从 `_pretty/` 切字节、按**源序**拼成生成文件（`AUTO-GENERATED … DO NOT EDIT BY HAND` 头注 + 别名/桩 import + 导出表），逐字移植的首选实现形式（纪律见 [porting-discipline.md §2.2](../references/porting-discipline.md)）。三件套齐备：切片表 `{from,to,note,symbols}`（`to` 含尾行）/ 源文件 **sha256 守卫**（不符退 3 并打印"坐标系已移动，全部 `L####` 引用作废"，而不是静默切错行）/ **符号别名表**（可逐符号注明解析依据，与桩文件同为 import 组）。`--check` 生成物过期即失败（直接进验收门）；`--balance-check` 用 `new Function()` 抓切片边界错（§6.2 (c)）。**机器与数据分离**：路径/sha256/切片表/别名表全在 `--slices` 配置（`.mjs` 或 `.json`），带注释样例见同目录 `slices.config.example.mjs` | `node extract-source.mjs --slices slices.config.mjs`；门：`node extract-source.mjs --slices slices.config.mjs --check` | shopifydesign 版（原脚本切片表硬编码，通用化为配置驱动） | 高（shopifydesign 实战：M2 33 段/2,475 行，M3 增至 41 段；配置化 + `--balance-check` 为通用化新增，已 fixture 验证切片/守卫/`--check`/边界错四路） |
+| `lib/ports.mjs` | **端口分配 + 实例身份注册表**（见本文件顶部一节）：`21000 + slot×1000 + lane×10 + side` 的确定性分配（默认互不重叠、端口自带语义）、占用即退 3 并点名占用方、CDP sentinel 归属校验、`serve.mjs` 身份 token 与双侧同一性断言。带 CLI：打印本工作区端口表 / 反解端口 | `node scripts/lib/ports.mjs`；脚本内 `import { resolvePort, assertPortFree, assertOwnBrowser } from "./lib/ports.mjs"` | 新写（shopifydesign §8.30 串台事故的根治） | 高（本仓 fixture 实跑验证：并发不冲突 / 占用响亮失败 / 双侧各连各的） |
 | `lib/png.mjs` | 零依赖 PNG 编解码 + 图像统计/比对（恒输出 RGBA——kimi M7.3 colorType 事故的防呆） | `import { decodePng, encodePng, compare, imageStats } from "./lib/png.mjs"` | kimi 版 | 高 |
 
 ## TODO（未打包的缺口，需要时去源项目手工移植）

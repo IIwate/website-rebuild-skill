@@ -70,6 +70,7 @@ npx --yes js-beautify@1.15.1 legacy-mirror/<path>/<bundle>.js \
 - 渲染管线、RenderTarget 清单、材质清单（samsy 26 项 TSL 材质、后处理链逐步拆解）【samsy】；
 - 协议与数据 schema（VAT worker 协议、PartyKit 协议全量【samsy】；i18n/数据 schema【kimi】）；
 - 混淆名对照表（noomo：`nn`=RenderingPipeline、`X`=Root…）【noomo】；
+- **跨 chunk 导入/导出重命名表**（多 chunk 站必写）【shopifydesign】：同一个符号在两个 chunk 里叫两个名字——`SiteHeader` chunk 里写 `export { Ye as R }`，主 chunk L8 写 `import { R as Pa }`，于是笔记、bundle、移植代码要靠三个名字（`Ye` / `R` / `Pa`）对上号。**逐条记"符号 → 源 chunk → 导出名 → 主 chunk 内名 → 两侧行号"**：它是阶段 2 跨 chunk 字节切片的直接输入——切片器要靠这张表把那两句 import/export 转写成一句绑定（`porting-discipline.md` §2.2）。没有它，跨 chunk 的符号在笔记里表现为"来历不明的自由标识符"；
 - 页面 init/destroy 矩阵（每个页面的初始化/销毁函数及行号）——它直接变成移植阶段的任务清单【lando】。
 
 **第二段：怪癖清单（照抄不修）**：源站 bug / 死代码 / 怪写法逐条登记并带行号，移植时逐字照抄。规模参考：noomo Q1–Q14、samsy 13 条、kimi 26 条【noomo】【samsy】【kimi】。
@@ -165,6 +166,7 @@ grep 命中只是假设，**每条必须回上下文确认**；**计数同理**�
 - [ ] `legacy-mirror/_pretty/`：全部 bundle/chunk 已展开（或按 §0 预检登记"无需 beautify，坐标系 = 原文件行号"）
 - [ ] `_pretty/README.md`：含 js-beautify@1.15.1 版本声明 + 逐文件再生成命令 + 版本漂移警告
 - [ ] `docs/engine-notes.md`：三段式齐全（事实带行号 / 怪癖清单 / 复刻直接结论），全文无"应该怎么改"，未坐实处标"未确认"
+- [ ] 多 chunk 站：**跨 chunk 导入/导出重命名表**已进笔记（符号 → 源 chunk → 导出名 → 主 chunk 内名 → 行号），供阶段 2 的多源切片消费
 - [ ] 技术栈取证表：每个依赖版本都有 bundle 内证据，`package.json` 计划为 `--save-exact`，传递依赖风险已评估
 - [ ] 架构假设已做过一轮显式证否（记录证否手段与结论）
 - [ ] 数据驱动动画的数值基准已 dump 入库（`docs/*-baseline/`），驱动量覆盖已确认

@@ -12,6 +12,8 @@
   4. **双侧的能力探测结果不同**（画质档、编解码器分支、设备分支）——此时两侧跑的根本不是同一个程序（shader 源码都可能不同），任何门都无意义；先按 §2.9 在两侧钉死同一探测结果再谈对拍【shopifydesign】；
   5. 字体加载时序被改动。kimi 拒绝子集化 4.8MB 字体的首要理由：字体是首屏渲染门控（deck 等 `document.fonts.ready` 才渲染），子集化会污染时序基线；canvas `measureText` 折行会变、点阵字体对坐标舍入极敏感【kimi】。**测量基准的稳定性优先于"看起来该做的优化"**。
 
+**⚠ 还有一个熵面整个落在本文件射程之外：取样时刻。** 冻结协议管的是"**跑起来之后**的熵"；"**什么时候算测完**"——网络到达顺序、媒体元数据解码完成顺序、字体就绪——九种协议一条也覆盖不到。实证【shopifydesign】：该项目 `?__probe` 冻了 rAF / `setTimeout` / `performance.now` / `Date.now` / `Math.random` / `setInterval`，采样脚本却仍是 `navigate → sleep(8000) → 读`，于是**同一个镜像连跑两次差 35 个字段**（8 秒内到齐的视频元数据子集不同，而布局是它的函数）。**settle 必须是页面状态判据，不能是墙钟**——判据、三条做法与"先让基准侧连跑两次"的自检见 `references/verification-gates.md` §2.2。
+
 ## 1. 方法内核：枚举熵源，逐个消掉
 
 kimi M4.3 日志原话："**找出渲染器的全部熵源，逐个用环境补丁消掉**"【kimi】。熵源按类型分型，每型对应一种冻结手段：
@@ -185,7 +187,7 @@ shopify.design 上，出厂 shim 冻的三样（rAF + `setTimeout` + visibility�
 2. **jump 后补发同位跳转唤醒事件**：源站 jump-immediate 会让事件门控内容休眠，需补发唤醒事件，否则截到的是休眠态【kimi】。
 3. **自拍两次先验证单侧确定性**：同侧同协议连续两次哈希不等 → 熵源没枚举完，回 §1 补。
 4. **资产预检**：先确认镜像服务能出图再截图，否则截图误导归因【rogier】。
-5. **状态到达要有独立证据**：等语义条件（IDLE、`hasStarted`）而不是裸 sleep【samsy】【oryzo】。
+5. **状态到达要有独立证据**：等语义条件（IDLE、`hasStarted`）而不是裸 sleep【samsy】【oryzo】。**"等够了"本身也要有判据**：连续 N 次采样的页面状态签名不变才算 settle；没 settle 就非零退出、绝不落盘；settle 指纹写进产物，两侧指纹不同时判**"不可比、重采"**而不是判红或判绿（`verification-gates.md` §2.2）【shopifydesign】。
 
 ## 5. 无头驱动的通用旗标与手段清单
 
@@ -236,6 +238,7 @@ shopify.design 上，出厂 shim 冻的三样（rAF + `setTimeout` + visibility�
 - [ ] 每条绝对断言都写明了**期望值出处**（镜像基线 + 源站计数规则 + 行号），没有一条是从复刻侧读出来钉死的自比（§2.10 第 2 步）【shopifydesign】
 - [ ] 能力探测（GPU 基准 / codec / 硬件参数 / matchMedia）在两侧被强制为同一结果，强制值已登记为偏差【shopifydesign】
 - [ ] 每条位姿的 freeze 协议已显式声明在位姿表里
+- [ ] **每次采样有 settle 判据**（页面状态签名 + 地板时长，不是固定 sleep），未 settle 的采样直接丢弃不落盘，产物里带 settle/可比性指纹（`verification-gates.md` §2.2）【shopifydesign】
 - [ ] 单侧连续两次截图哈希相等（单侧确定性成立）
 - [ ] 同会话不同位姿哈希互异（驱动确实生效）
 - [ ] 同等隐藏剥离的区域已有专门门覆盖
@@ -245,7 +248,7 @@ shopify.design 上，出厂 shim 冻的三样（rAF + `setTimeout` + visibility�
 
 ## 8. 产出物
 
-- 位姿表：每条位姿 = 路由 + 视口 + 驱动步骤 + **显式 freeze 协议声明**【kimi】
+- 位姿表：每条位姿 = 路由 + 视口 + 驱动步骤 + **显式 freeze 协议声明**【kimi】 + **settle 判据**（页面状态签名，不是 sleep 毫秒数）【shopifydesign】
 - **本站熵源清单**（时钟 / 随机 / 定时器 / 媒体 / 能力探测点及其阈值常量）+ 逐项对照的 shim 覆盖面验收记录【shopifydesign】
 - **被冻源的下游入口清单**：被冻源 → 挂在其上的事件/promise/就绪标志 → 消费它的子系统（带源行号）→ **产物类别（写不写 DOM）** → **哪道门看得见它** → 处置（泵到 / 不冻结抽查 / 不需要），每次新增冻结项或新移植子系统落地时**重做枚举**（不是复用）【shopifydesign】
 - **不冻结结构性抽查脚本**（如 `verify-scene-content.mjs`）：绝对断言逐条带**期望值出处**（镜像基线文件 + 源站计数规则行号），期望值以 `expectations(baseline)` 函数形式推导而非常量表，且脚本在镜像侧也能跑（哪怕只跑事件/DOM 那一半）【shopifydesign】

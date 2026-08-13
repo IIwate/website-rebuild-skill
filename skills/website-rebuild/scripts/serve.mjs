@@ -2,10 +2,20 @@
 // serve.mjs — zero-dependency static server for the pristine mirror (and the
 // rebuild), so source and rebuild can be diffed side-by-side without network.
 //
-//   PORT=5175 SERVE_ROOT=legacy-mirror node serve.mjs     # the source site
-//   PORT=5173 SERVE_ROOT=dist          node serve.mjs     # the rebuild
-//   node serve.mjs --port 5175 --root legacy-mirror [--ext-hosts cdn.x.com,fonts.gstatic.com]
-//                  [--stub-ext-hosts telemetry.example.com]
+//   node serve.mjs --side mirror  --root legacy-mirror   # the source site
+//   node serve.mjs --side rebuild --root dist            # the rebuild
+//   node serve.mjs --side mirror --root legacy-mirror [--ext-hosts cdn.x.com,fonts.gstatic.com]
+//                  [--stub-ext-hosts telemetry.example.com] [--port N]
+//   PORT=3200 SERVE_ROOT=legacy-mirror node serve.mjs    # explicit port still wins
+//
+// PORTS AND IDENTITY (scripts/lib/ports.mjs — read its header once):
+//   --side is what picks the port, and it is REQUIRED unless you pass an
+//   explicit --port/PORT. The mirror and the rebuild therefore always land on
+//   two different, self-describing ports (…1 = mirror, …2 = rebuild), and a
+//   port that is already taken is a loud exit, never a silent slide to the next
+//   free one. Every response also carries an x-wrs-identity token and this
+//   server answers /__wrs/identity, which is how pixelcompare.mjs proves its
+//   two sides are two processes instead of one server reached by two URLs.
 //
 // Discipline: the mirror on disk is SACRED — never rewritten. Every local-run
 // adaptation happens in the response layer:
@@ -42,7 +52,18 @@ import http from "node:http";
 import fs from "node:fs";
 import fsp from "node:fs/promises";
 import path from "node:path";
+import { randomBytes } from "node:crypto";
 import { fileURLToPath } from "node:url";
+import {
+  IDENTITY_HEADER,
+  IDENTITY_PATH,
+  SIDES,
+  SIDE_HEADER,
+  describeOccupant,
+  fatal,
+  labelPort,
+  resolvePort,
+} from "./lib/ports.mjs";
 
 const args = process.argv.slice(2);
 const flag = (name, dflt) => {
@@ -50,9 +71,49 @@ const flag = (name, dflt) => {
   return i >= 0 && args[i + 1] !== undefined ? args[i + 1] : dflt;
 };
 
-const PORT = Number(flag("port", process.env.PORT || 5175));
 const HOST = flag("host", process.env.HOST || "127.0.0.1");
 const ROOT = path.resolve(flag("root", process.env.SERVE_ROOT || "legacy-mirror"));
+
+// Which side of the comparison this instance is. It selects the port, it is
+// stamped on every response, and it is the thing that makes a two-sided run
+// legible at a glance ("…1 is the mirror, …2 is the rebuild").
+const SIDE = flag("side", process.env.SERVE_SIDE || null);
+if (SIDE !== null && !(SIDE in SIDES)) {
+  fatal(`FATAL: --side must be one of ${Object.keys(SIDES).join(", ")}, got ${JSON.stringify(SIDE)}`, 2);
+}
+if (SIDE === null && !flagGiven("port") && !process.env.PORT) {
+  fatal([
+    "FATAL: serve.mjs needs to know which side it is serving.",
+    "         node serve.mjs --side mirror  --root legacy-mirror",
+    "         node serve.mjs --side rebuild --root dist",
+    "       The side picks a distinct, self-describing port for each side of the",
+    "       comparison; without it two instances can end up on one port and a",
+    "       later A/B run compares one side with itself (lib/ports.mjs header).",
+    "       Pass --port/PORT explicitly if you really want to choose the number.",
+  ], 2);
+}
+const { port: PORT, label: PORT_LABEL } = resolvePort({
+  lane: "serve",
+  side: SIDE ?? "unset",
+  cli: flagGiven("port") ? flag("port", null) : null,
+  env: process.env.PORT || null,
+});
+
+// Per-process identity. Two serve.mjs instances never share it, so an A/B
+// script can prove its two URLs are two servers and not one server twice.
+const IDENTITY = {
+  tool: "serve.mjs",
+  side: SIDE ?? "unset",
+  root: ROOT,
+  port: PORT,
+  pid: process.pid,
+  token: randomBytes(8).toString("hex"),
+  started: new Date().toISOString(),
+};
+
+function flagGiven(name) {
+  return args.includes("--" + name);
+}
 
 // ---------------------------------------------------------------------------
 // CONFIG — per-project constants.
@@ -223,6 +284,17 @@ const server = http.createServer(async (req, res) => {
   try {
     const url = new URL(req.url, `http://${req.headers.host || "localhost"}`);
 
+    // 0. instance identity. Stamped on EVERY response (so any client can tell
+    // which side answered it) and served in full at /__wrs/identity. This is
+    // what turns "two URLs" into "two provably different processes" for the
+    // A/B scripts; the path is namespaced so it cannot shadow a mirrored one.
+    res.setHeader(IDENTITY_HEADER, IDENTITY.token);
+    res.setHeader(SIDE_HEADER, IDENTITY.side);
+    if (url.pathname === IDENTITY_PATH) {
+      res.writeHead(200, { "content-type": "application/json; charset=utf-8" });
+      return res.end(JSON.stringify(IDENTITY));
+    }
+
     // 1. redirect replay — origin behavior from the ledger, before anything else
     const redirect = REDIRECTS.get(trimSlash(url.pathname));
     if (redirect) {
@@ -311,9 +383,25 @@ const server = http.createServer(async (req, res) => {
   }
 });
 
+// A taken port is a hard stop, not a nudge to the next free one: the whole
+// point of the allocation is that the other scripts can find this server where
+// they expect it, and a server that moved leaves them talking to whatever else
+// answers there.
+server.on("error", async (e) => {
+  if (e.code !== "EADDRINUSE") throw e;
+  fatal([
+    `FATAL: serve.mjs cannot bind port ${PORT_LABEL} — it is already taken.`,
+    `       occupant: ${await describeOccupant(PORT)}`,
+    `       (if that is a stale serve.mjs of yours, stop it; if it is another`,
+    `        workspace, give this one its own slot: WRS_PORT_SLOT=<0..8>)`,
+  ]);
+});
+
 server.listen(PORT, HOST, () => {
-  console.log(`serving ${ROOT}`);
+  console.log(`serving ${ROOT}  [side ${IDENTITY.side.toUpperCase()}]`);
   console.log(`  http://${HOST}:${PORT}/`);
+  console.log(`  port ${labelPort(PORT)}`);
+  console.log(`  identity ${IDENTITY.token}  (GET ${IDENTITY_PATH})`);
   if (EXT_HOSTS.length) console.log(`  ext hosts: ${EXT_HOSTS.join(", ")}`);
   if (REDIRECTS.size) console.log(`  replaying ${REDIRECTS.size} redirects from ledger`);
 });

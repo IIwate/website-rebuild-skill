@@ -20,6 +20,16 @@
 // --seed combination (the samsyninja original walked its menu states inline;
 // that drive logic is site-specific and belongs in the caller).
 //
+// PORTS AND IDENTITY (scripts/lib/ports.mjs — read its header once):
+//   The debug port is allocated per (workspace, script) instead of being a
+//   fixed 9333 every project shares, a taken port is a loud exit, and the
+//   browser this script attaches to must be the one it started (sentinel page).
+//   Before shooting anything it also proves A and B are TWO SERVERS: same
+//   origin, or two URLs with the same serve.mjs identity token, is fatal. That
+//   check exists because this script's failure mode is silent — one side
+//   photographed twice produces a flawless report in which every number is
+//   real and the comparison is empty.
+//
 // Zero npm dependencies: raw CDP over Node's built-in WebSocket (Node 22+).
 // Adapted from samsyninja-rebuild/scripts/pixelcompare.mjs (64x40 grid +
 // metric.json). For per-pixel byte gates + diff heatmaps see side-by-side.mjs.
@@ -28,6 +38,13 @@ import { spawn } from 'node:child_process';
 import { mkdtempSync, rmSync, writeFileSync, readFileSync, mkdirSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import {
+  assertDistinctSides,
+  assertOwnBrowser,
+  assertPortFree,
+  chromeSentinel,
+  resolvePort,
+} from './lib/ports.mjs';
 
 const args = process.argv.slice(2);
 const flag = (name, dflt) => {
@@ -53,7 +70,13 @@ const SEED = flag('seed', null);
 const LABEL_A = flag('label-a', 'REBUILD');
 const LABEL_B = flag('label-b', 'MIRROR');
 const MAX_MEAN = flag('max-mean', null);
-const CDP_PORT = Number(process.env.CDP_PORT || 9333);
+// One browser drives both sides here, so the CDP lane carries no side digit.
+const { port: CDP_PORT, label: CDP_LABEL } = resolvePort({
+  lane: 'pixelcompare.cdp',
+  cli: flag('cdp-port', null),
+  env: process.env.CDP_PORT || null,
+  envName: 'CDP_PORT',
+});
 
 const CHROME =
   process.env.CHROME_BIN ||
@@ -79,17 +102,35 @@ await waitFor(async () => (await fetch(URL_A)).ok, 10000, 'server A ' + URL_A);
 await waitFor(async () => (await fetch(URL_B)).ok, 10000, 'server B ' + URL_B);
 console.log('[pixel] servers up');
 
+// --- and they must be TWO servers (the false-green gate) ---
+const { idA, idB } = await assertDistinctSides(URL_A, URL_B, {
+  tool: 'pixelcompare.mjs',
+  labelA: LABEL_A,
+  labelB: LABEL_B,
+});
+// Labels drive the output filenames and the composite captions, so a label that
+// contradicts the server's own declared side would mislabel the evidence.
+for (const [label, id] of [[LABEL_A, idA], [LABEL_B, idB]]) {
+  if (id && id.side !== 'unset' && !label.toLowerCase().includes(String(id.side).toLowerCase())) {
+    console.error(`[pixel] WARNING: label "${label}" is attached to a server that declares side ${String(id.side).toUpperCase()}`);
+  }
+}
+
 // --- chrome ---
+console.log(`[pixel] cdp port ${CDP_LABEL}`);
+await assertPortFree(CDP_PORT, { tool: 'pixelcompare.mjs' });
 const profile = mkdtempSync(join(tmpdir(), 'pixelcompare-'));
+const sentinel = chromeSentinel();
 children.push(spawn(CHROME, [
   '--headless=new', `--remote-debugging-port=${CDP_PORT}`, `--user-data-dir=${profile}`,
   '--no-first-run', '--disable-background-timer-throttling', '--disable-renderer-backgrounding',
-  '--mute-audio', `--window-size=${W},${H}`, '--autoplay-policy=no-user-gesture-required', 'about:blank',
+  '--mute-audio', `--window-size=${W},${H}`, '--autoplay-policy=no-user-gesture-required', sentinel.url,
 ], { stdio: 'ignore' }));
-const target = await waitFor(async () => {
-  const list = await (await fetch(`http://localhost:${CDP_PORT}/json`)).json();
-  return list.find((t) => t.type === 'page');
-}, 15000, 'cdp');
+// Our own page or nothing: attaching to a browser this script did not start
+// would shoot whatever that browser is showing and file it under these labels.
+const target = await assertOwnBrowser({
+  port: CDP_PORT, sentinel, tool: 'pixelcompare.mjs', pid: children[children.length - 1].pid,
+});
 
 const ws = new WebSocket(target.webSocketDebuggerUrl);
 await new Promise((resolve, reject) => { ws.onopen = resolve; ws.onerror = reject; });
@@ -193,7 +234,12 @@ writeFileSync(join(OUT, 'metric.json'), JSON.stringify(metrics, null, 2));
 console.log('[pixel] wrote', OUT);
 
 ws.close();
-rmSync(profile, { recursive: true, force: true });
+// Kill the browser BEFORE deleting its profile, and never let the cleanup
+// decide the exit code: a live Chrome keeps writing into the profile dir, so
+// rmSync throws ENOTEMPTY and a passing comparison exits non-zero — a red that
+// says nothing about the pixels (observed under concurrent runs).
+for (const c of children) { try { c.kill('SIGKILL'); } catch {} }
+try { rmSync(profile, { recursive: true, force: true }); } catch {}
 
 if (MAX_MEAN !== null && metric.meanAbsDiff > Number(MAX_MEAN)) {
   console.error(`[pixel] GATE FAIL: meanAbsDiff ${metric.meanAbsDiff} > ${MAX_MEAN}`);

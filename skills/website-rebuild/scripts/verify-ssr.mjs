@@ -4,7 +4,14 @@
 // the legacy mirror EXACTLY (build-specific values are masked first). Run the
 // rebuild's SSR server, then:
 //
-//   PORT=3100 node verify-ssr.mjs
+//   node verify-ssr.mjs            # port comes from scripts/lib/ports.mjs
+//   PORT=3100 node verify-ssr.mjs  # or name it yourself
+//
+// The default port is allocated per workspace on the rebuild side, so this gate
+// cannot silently point at the mirror server or at another checkout's rebuild —
+// a byte gate aimed at the wrong server is either a mystery red or, if that
+// server happens to be the mirror, a perfect green (scripts/lib/ports.mjs).
+// Start the SSR server on the port this prints (or set PORT for both).
 //
 // Exits non-zero on any diff.
 //
@@ -18,11 +25,18 @@
 
 import { readFileSync, readdirSync, existsSync, statSync } from "node:fs";
 import path from "node:path";
+import { resolvePort } from "./lib/ports.mjs";
 
 // ---------------------------------------------------------------------------
 // CONFIG — edit per project.
 // ---------------------------------------------------------------------------
-const BASE = `http://127.0.0.1:${process.env.PORT || 3100}`;
+const { port: PORT, label: PORT_LABEL } = resolvePort({
+  lane: "verify-ssr.server",
+  side: "rebuild",
+  env: process.env.PORT || null,
+});
+const BASE = `http://127.0.0.1:${PORT}`;
+console.log(`[verify-ssr] server under test ${BASE}  (${PORT_LABEL})`);
 const MIRROR_DIR = process.env.MIRROR_DIR || "legacy-mirror";
 
 // Explicit [route, mirrorFile] pairs; null = auto-discover every index.html
@@ -91,6 +105,15 @@ const check = (route, name, ok) => {
 const pages = PAGES ?? discoverPages();
 if (pages.length === 0) {
   console.error(`no pages found under ${MIRROR_DIR} — set PAGES explicitly`);
+  process.exit(1);
+}
+
+// Say which server is missing before the first fetch throws a bare ECONNREFUSED.
+try {
+  await fetch(BASE, { redirect: "manual" });
+} catch {
+  console.error(`no SSR server at ${BASE}  (${PORT_LABEL})`);
+  console.error(`  start the rebuild's SSR server on this port, or set PORT for both.`);
   process.exit(1);
 }
 
