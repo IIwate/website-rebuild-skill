@@ -69,6 +69,33 @@ import { join } from "node:path";
 
 export const POLICY_FILE = "urlpath-policy.json";
 
+/**
+ * The identity of a fetched resource. RFC 3986: the FRAGMENT is never sent to
+ * the server, so `x.css?v=1` and `x.css?v=1#Shape-Arch` are ONE resource with
+ * one set of bytes — not two URLs that collapsed onto one file.
+ *
+ * This helper exists because two different things were both true and only one
+ * of them was right:
+ *   - localRelPath() already ignores the fragment (it reads pathname + search),
+ *     so the BYTES on disk were always correct;
+ *   - but a crawler that enqueues the raw href records TWO ledger rows for that
+ *     one resource, and verify-mirror's injectivity gate then reports a
+ *     collapse that never happened ("whichever fetch finished last won" — when
+ *     in fact both fetches asked the origin for the identical thing).
+ * Measured on objectandarchive M2: exactly one such pair, from a `#Shape-Arch`
+ * reference on a stylesheet URL. Canonicalise on the way INTO the queue and on
+ * the way into the gate, or the two disagree about how many URLs exist.
+ */
+export function canonicalUrl(abs) {
+  try {
+    const u = new URL(abs);
+    u.hash = "";
+    return u.href;
+  } catch {
+    return String(abs);
+  }
+}
+
 const MAX_SUFFIX = 96;
 // Anything that is illegal, magic or lossy in a path segment on macOS, Linux or
 // Windows. Hitting one of these sends the whole suffix to its hash form.

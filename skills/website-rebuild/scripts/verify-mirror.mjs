@@ -69,7 +69,7 @@ import { createReadStream } from "node:fs";
 import { readdir, readFile, stat } from "node:fs/promises";
 import path from "node:path";
 import { createHash } from "node:crypto";
-import { localRelPath, loadPolicy, describePolicy } from "./lib/urlpath.mjs";
+import { localRelPath, loadPolicy, describePolicy, canonicalUrl } from "./lib/urlpath.mjs";
 import { createRefExtractor } from "./lib/extract-refs.mjs";
 
 const args = process.argv.slice(2);
@@ -160,13 +160,18 @@ if (!SKIP.has("mapping")) {
   console.log(`\n--- gate MAPPING INJECTIVITY ---`);
 
   // (a) the collapse as it actually happened: two URLs, one recorded path.
+  // URLs are canonicalised first (fragment stripped). RFC 3986: the fragment
+  // never reaches the server, so two spellings that differ only there are ONE
+  // resource and one set of bytes — reporting them as a collapse is a false
+  // red, and a loud false red on the mirror gate is expensive: it teaches you
+  // to skim this gate's output. Everything else is compared verbatim.
   const byRecorded = new Map();
   for (const [url, f] of saved) {
     const key = norm(f.path);
-    if (!byRecorded.has(key)) byRecorded.set(key, []);
-    byRecorded.get(key).push(url);
+    if (!byRecorded.has(key)) byRecorded.set(key, new Set());
+    byRecorded.get(key).add(canonicalUrl(url));
   }
-  const collided = [...byRecorded].filter(([, urls]) => urls.length > 1);
+  const collided = [...byRecorded].map(([p, s]) => [p, [...s]]).filter(([, urls]) => urls.length > 1);
   if (collided.length) {
     fail(
       "recorded",
@@ -175,7 +180,7 @@ if (!SKIP.has("mapping")) {
     );
     list(collided, ([p, urls]) => `         ${p}\n${urls.map((u) => `           <- ${u}`).join("\n")}`);
   } else {
-    ok("recorded", `${saved.length} ledger URLs -> ${byRecorded.size} distinct files (injective)`);
+    ok("recorded", `${saved.length} ledger rows -> ${byRecorded.size} distinct files, injective on canonical URLs`);
   }
 
   // (b) the mapping as it stands today, under the mirror's stored policy.
@@ -189,11 +194,11 @@ if (!SKIP.has("mapping")) {
     } catch {
       continue;
     }
-    if (!byComputed.has(rel)) byComputed.set(rel, []);
-    byComputed.get(rel).push(url);
+    if (!byComputed.has(rel)) byComputed.set(rel, new Set());
+    byComputed.get(rel).add(canonicalUrl(url));
     if (rel !== norm(f.path)) drift.push({ url, recorded: norm(f.path), computed: rel });
   }
-  const wouldCollide = [...byComputed].filter(([, urls]) => urls.length > 1);
+  const wouldCollide = [...byComputed].map(([p, s]) => [p, [...s]]).filter(([, urls]) => urls.length > 1);
   if (wouldCollide.length) {
     fail(
       "computed",
@@ -360,10 +365,23 @@ if (!SKIP.has("closure")) {
       for (const line of (await readFile(ALLOW_FILE, "utf8")).split("\n")) {
         const t = line.trim();
         if (!t || t.startsWith("#")) continue;
-        // external.txt lines are "<url or host> <decision> …"; the first token
-        // is the thing being decided about.
-        const tok = t.split(/\s+/)[0];
-        if (/^https?:\/\//i.test(tok) || /^[a-z0-9.-]+\.[a-z]{2,}/i.test(tok)) allow.push(tok);
+        // external.txt has no single fixed column order in the wild. This
+        // toolchain's own template writes "<DECISION> | <target> | why", the
+        // older shape was "<url or host> <decision> …". Splitting on BOTH the
+        // pipe and whitespace and taking the first URL-or-host-looking token
+        // reads either. Measured: with the old first-token-only rule, a whole
+        // external.txt parsed to ZERO prefixes and the gate silently ran with
+        // an empty allow-list, so its CLOSURE failures could never be excused
+        // no matter what the file said.
+        //
+        // A MIRROR decision is deliberately NOT an excuse: that decision says
+        // "this host's files are on disk", so a missing one is a real hole.
+        // Only the not-a-file / degraded / stubbed / content decisions excuse.
+        const cells = t.split(/[|\s]+/).filter(Boolean);
+        const decision = /^(MIRROR|STUB|DEGRADE|CONTENT|LATENT|NOTFILE)$/i.exec(cells[0] || "");
+        if (decision && /^MIRROR$/i.test(decision[0])) continue;
+        const tok = cells.find((c) => /^https?:\/\//i.test(c) || /^[a-z0-9.-]+\.[a-z]{2,}(\/|$)/i.test(c));
+        if (tok) allow.push(tok);
       }
       console.log(`  info ${allow.length} allow-list prefix(es) from ${ALLOW_FILE}`);
     } catch (e) {
