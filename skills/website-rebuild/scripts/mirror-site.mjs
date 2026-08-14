@@ -6,7 +6,8 @@
  * URLs until no new ones appear. Three ledgers are written next to the bytes:
  * <out>/mirror-manifest.json (url -> local path, size, sha256, type),
  * <out>/inventory.tsv (SHA256 BYTES PATH URL) and <out>/redirects.tsv
- * (CODE FROM TO — replayed by serve.mjs).
+ * (CODE FROM TO — replayed by serve.mjs). A fourth file, <out>/urlpath-policy.json,
+ * records the url -> path mapping policy these bytes were written under.
  *
  * Usage:
  *   node mirror-site.mjs --origin https://example.com [--out legacy-mirror]
@@ -15,10 +16,14 @@
  *     [--probe-404 /no-such-page-mirror-probe]     fetch origin 404 template -> 404.html
  *     [--seeds urls.txt]                           newline-delimited extra asset URLs
  *     [--rounds 4] [--workers 8]
+ *     [--query-ignore v,cb]                        params that do NOT change the bytes
+ *     [--query-only width,height]                  the only params that do
  *
  * NOTE a static crawl always misses three classes of URL: worker-fetched WASM,
  * lazy-loaded assets, and runtime-concatenated paths. Follow up with
  * netcapture.mjs (real-browser CDP capture + disk diff) to find the gaps.
+ * Then audit the mirror itself with verify-mirror.mjs — the render-level gates
+ * downstream cannot tell a right mirror from a wrong one.
  *
  * Adapted from landonorris-rebuild/scripts/mirror-site.mjs.
  * Lineage: rogierdeboeve-rebuild (BFS regex crawler + manifest, ~250 lines)
@@ -29,11 +34,28 @@
  *   -> shopifydesign-rebuild (redirect:"manual" + redirects.tsv instead of
  *      following — the script used to violate its own red line; per-file sha256
  *      in the manifest + inventory.tsv; --seeds so URLs solved out of bundles
- *      and payloads go through the same downloader and land in the same ledger).
+ *      and payloads go through the same downloader and land in the same ledger)
+ *   -> objectandarchive-rebuild (query-aware url -> path mapping shared through
+ *      lib/urlpath.mjs; srcset candidate lists extracted per candidate).
  */
 import { mkdir, writeFile, readFile } from 'node:fs/promises';
-import { dirname, join, relative, extname } from 'node:path';
+import { dirname, join, relative } from 'node:path';
 import { createHash } from 'node:crypto';
+// The url -> local-path mapping is QUERY-AWARE and lives in one module shared
+// with netcapture.mjs, serve.mjs and verify-mirror.mjs. Read its header once:
+// a pathname-only mapping collapses `x.jpg?width=320|600|1200` into one file on
+// every query-parameterised image CDN, and nothing downstream can see it —
+// the page renders from whichever variant landed last.
+import {
+  localRelPath,
+  loadPolicy,
+  policyFromArgs,
+  savePolicy,
+  describePolicy,
+} from './lib/urlpath.mjs';
+// The reference extractor is shared with verify-mirror.mjs's closure gate, so
+// the gate cannot inherit a blind spot from the crawler it audits.
+import { createRefExtractor } from './lib/extract-refs.mjs';
 
 // ---------------------------------------------------------------------------
 // CONFIG — per-project constants; site specifics come from the CLI instead.
@@ -66,7 +88,7 @@ const flag = (name, dflt) => {
 };
 const ORIGIN_RAW = flag('origin', null);
 if (!ORIGIN_RAW) {
-  console.error('usage: mirror-site.mjs --origin https://example.com [--out legacy-mirror] [--hosts a,b] [--pages /x,/y] [--probe-404 /slug] [--seeds urls.txt] [--rounds 4] [--workers 8]');
+  console.error('usage: mirror-site.mjs --origin https://example.com [--out legacy-mirror] [--hosts a,b] [--pages /x,/y] [--probe-404 /slug] [--seeds urls.txt] [--rounds 4] [--workers 8] [--query-ignore v,cb | --query-only width,height]');
   process.exit(2);
 }
 const ORIGIN = ORIGIN_RAW.replace(/\/+$/, '');
@@ -76,6 +98,15 @@ const ROUNDS = Number(flag('rounds', 4));
 const WORKERS = Number(flag('workers', 8));
 const PROBE_404 = flag('probe-404', null);
 const SEEDS_FILE = flag('seeds', null);
+// Query policy: CLI wins, else whatever this mirror was already written with,
+// else the conservative default (every param is part of the path key). A
+// gap-filling run therefore inherits the first run's policy automatically —
+// re-fetching a handful of URLs under a different mapping would scatter them
+// next to, instead of over, the files they are meant to replace.
+await mkdir(OUT, { recursive: true });
+const QUERY_POLICY = policyFromArgs(args) ?? (await loadPolicy(OUT));
+await savePolicy(OUT, QUERY_POLICY);
+console.log(`[urlpath] ${describePolicy(QUERY_POLICY)}`);
 
 const ASSET_HOSTS = new Set([
   ...DEFAULT_ASSET_HOSTS,
@@ -90,28 +121,11 @@ const fetched = new Set();
 // own ledger and are never collapsed into the source path's file.
 const redirects = []; // {from, status, to}
 
-function decodeEntities(s) {
-  return s
-    .replace(/&amp;/g, '&')
-    .replace(/&#38;/g, '&')
-    .replace(/&quot;/g, '"')
-    .replace(/&#34;/g, '"');
-}
-
+// Delegated to lib/urlpath.mjs so the crawler, the capture pass, the server and
+// the mirror gate cannot drift apart on where a URL lives — and so the query
+// string is part of the answer (lib/urlpath.mjs header for the measured case).
 function localPathFor(url) {
-  const u = new URL(url);
-  let path = decodeURIComponent(u.pathname);
-  if (u.hostname === ORIGIN_HOST) {
-    // Extension-less same-origin URLs are pages; extensioned ones are assets
-    // served from the origin itself (e.g. /_nuxt/*.js, /assets/*.css).
-    if (!extname(path)) {
-      if (path === '/' || path === '') return join(OUT, 'index.html');
-      return join(OUT, path, 'index.html');
-    }
-    return join(OUT, path);
-  }
-  if (path.endsWith('/')) path += 'index';
-  return join(OUT, 'assets', u.hostname, path);
+  return join(OUT, localRelPath(url, ORIGIN_HOST, QUERY_POLICY));
 }
 
 async function save(url, buf, contentType) {
@@ -147,45 +161,16 @@ async function get(url) {
   return { buf, type: res.headers.get('content-type') || '' };
 }
 
-function addIfAsset(rawUrl, urls) {
-  try {
-    const u = new URL(rawUrl);
-    if (!ASSET_HOSTS.has(u.hostname)) return;
-    // Same-origin URLs without an extension are pages, not assets.
-    if (u.hostname === ORIGIN_HOST && !/\.[a-z0-9]{2,5}($|\?)/i.test(u.pathname)) return;
-    urls.add(u.href);
-  } catch {}
-}
-
-function extractAssetUrls(text, baseUrl) {
-  const urls = new Set();
-  // absolute URLs
-  for (const m of text.matchAll(/https?:\/\/[a-z0-9.-]+\/[^\s"'`\\<>{}|^\][]+/gi)) {
-    addIfAsset(decodeEntities(m[0]).replace(/[),.;:!]+$/, ''), urls);
-  }
-  // protocol-relative (//host/path)
-  for (const m of text.matchAll(/["'(]\/\/([a-z0-9.-]+\/[^\s"')<>]+)/gi)) {
-    addIfAsset('https://' + decodeEntities(m[1]), urls);
-  }
-  // root-relative refs on the origin itself (noomo-generation behavior: sites
-  // that serve their own bundles/media reference them as /path/file.ext).
-  // The (?!\/) guard is load-bearing: protocol-relative refs (//host/path) also
-  // start with "/", and without it they get joined onto ORIGIN as
-  // https://host//host/path — 77 phantom 404s on the first Shopify target
-  // (racingshop-rebuild). Those refs are already handled by the branch above.
-  for (const m of text.matchAll(/(?:src|href)=["'](\/(?!\/)[^"']+?\.[a-z0-9]{2,5}(?:\?[^"']*)?)["']/gi)) {
-    addIfAsset(ORIGIN + decodeEntities(m[1]), urls);
-  }
-  // relative url(...) inside CSS
-  if (baseUrl && /\.css($|\?)/i.test(baseUrl)) {
-    for (const m of text.matchAll(/url\(\s*['"]?(?!data:|https?:|\/\/)([^'")]+)['"]?\s*\)/gi)) {
-      try {
-        addIfAsset(new URL(m[1], baseUrl).href, urls);
-      } catch {}
-    }
-  }
-  return urls;
-}
+// Absolute / protocol-relative / root-relative / srcset-candidate / css-url()
+// extraction now lives in lib/extract-refs.mjs, shared with verify-mirror.mjs's
+// closure gate. Its header records why srcset needs per-candidate extraction:
+// only the first candidate of a list is preceded by a quote, so a quote-keyed
+// regex sees 1 of ~5 and the ledger still looks complete.
+const extractAssetUrls = createRefExtractor({
+  origin: ORIGIN,
+  originHost: ORIGIN_HOST,
+  assetHosts: ASSET_HOSTS,
+});
 
 function extractPageLinks(html) {
   const pages = new Set();

@@ -54,6 +54,11 @@ import path from "node:path";
 import { spawn } from "node:child_process";
 import { tmpdir } from "node:os";
 import { assertOwnBrowser, assertPortFree, chromeSentinel, resolvePort } from "./lib/ports.mjs";
+// Shared, query-aware url -> local path. This pass keys its records by url+search
+// but used to resolve disk by pathname alone, so on a query-parameterised image
+// CDN every responsive variant after the first reported HAVE against a file that
+// is a DIFFERENT image — a false GAP=0 with no symptom. See lib/urlpath.mjs.
+import { localRelPath, loadPolicy, describePolicy } from "./lib/urlpath.mjs";
 
 const args = process.argv.slice(2);
 const flag = (name, dflt) => {
@@ -306,19 +311,13 @@ chrome.kill();
 
 // --- Diff against what is on disk ------------------------------------------
 
-// Mirrors mirror-site.mjs's localPathFor(): origin pages/assets land at the
-// bare path, every other host under assets/<host>/<path>.
+// The same mapping the crawler wrote with and the server reads with — one
+// module, loaded with the policy this mirror was written under, so the three
+// cannot drift (scripts/lib/urlpath.mjs).
+const QUERY_POLICY = await loadPolicy(ROOT);
+console.log(`[urlpath] ${describePolicy(QUERY_POLICY)}`);
 function localPathFor(absUrl) {
-  const u = new URL(absUrl);
-  const clean = decodeURIComponent(u.pathname);
-  if (u.hostname !== ORIGIN_HOST) {
-    return path.join("assets", u.hostname, clean.endsWith("/") ? clean + "index" : clean);
-  }
-  if (clean === "/") return "index.html";
-  let p = clean.replace(/^\/+/, "");
-  if (p.endsWith("/")) return p + "index.html";
-  if (!path.extname(p)) return p + "/index.html";
-  return p;
+  return localRelPath(absUrl, ORIGIN_HOST, QUERY_POLICY);
 }
 
 const rows = [...requests.values()].sort((a, b) => a.path.localeCompare(b.path));
@@ -371,7 +370,13 @@ if (offHostTotal && (offHostTotal >= rows.length || offHostTotal >= 10) && !HOST
 if (consoleErrors.length) console.log(`\npage exceptions: ${consoleErrors.length}`);
 
 if (DO_FETCH && missing.length) {
-  console.log("\nfetching gaps...");
+  // NOTE --fetch writes bytes but NOT ledger rows, so what it lands is off the
+  // books: verify-mirror.mjs reports every one of these as an orphan ("a file
+  // nobody can name a URL for"), and inventory.tsv will never describe it. Use
+  // it to eyeball a gap quickly; to actually close one, write the URLs to a file
+  // and re-run mirror-site.mjs --seeds so gap-filling goes through the one
+  // downloader and lands in the one ledger.
+  console.log("\nfetching gaps... (bytes only — no ledger rows; prefer mirror-site.mjs --seeds)");
   for (const m of missing) {
     // m.path is an absolute URL (records are keyed by host + path).
     const res = await fetch(m.path, {

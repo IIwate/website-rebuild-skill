@@ -1,10 +1,12 @@
 # 逆向建坐标系（阶段 1：Reverse）
 
-> **何时加载本文件**：镜像已完成且本地断网跑通（M0/M0.5 阻塞门通过）之后、写下任何复刻代码之前，进入逆向阶段时加载。本阶段产出 `_pretty/` 行号坐标系、`docs/engine-notes.md` 逆向笔记、技术栈取证表、数值基准——它们是移植与验证的全部地基。
+> **何时加载本文件**：镜像已完成且本地断网跑通（M0/M0.5 阻塞门通过）之后、写下任何复刻代码之前，进入逆向阶段时加载。本阶段产出**唯一溯源坐标系**（bundle 分支为 `_pretty/` 行号，无 bundle 分支为内容哈希，见 §0）、`docs/engine-notes.md` 逆向笔记、技术栈取证表、数值基准——它们是移植与验证的全部地基。
 
-## 0. 预检：bundle 形态判定
+## 0. 预检：先问"有没有 bundle"，再判 bundle 形态
 
-先判定 bundle 形态，再决定是否需要 beautify：
+**本文件的主干（`_pretty/` 行号坐标系、混淆别名表、区段地图、vendor 岛、字节切片器）整体建立在"签名行为住在可下载的 bundle 里"这个前提上。** 前八个项目无一例外满足它；objectandarchive 第一次不满足——行为住在 Liquid 渲染出来的 62 个内联 `<script>` 块里，且是**带作者注释的未压缩源码**【objectarchive】。所以预检先问载体，再问形态；命中"无 bundle"就走 §0.1 的**平行分支**。
+
+有 bundle 时，先判形态，再决定是否需要 beautify：
 
 ```bash
 head -c 600 legacy-mirror/<path-to-bundle>.js          # 看开头形态
@@ -17,10 +19,74 @@ grep -c 'sourceMappingURL' <bundle>.js                 # 有无 sourcemap 指针
 | minified/混淆产物（常态） | 单行或数万字符长行；标识符压成 1–2 字符 | 走 §1 beautify 流程 |
 | **未混淆 esbuild 产物** | 标识符全保留、自带换行缩进——开头即 `var __defProp = Object.defineProperty;`、内部函数名（如 `copyAttributeData`）原样可读 | **跳过 beautify**，直接以原文件行号为坐标系（边界探测实录：bruno-simon 4.86MB 产物、star-atlas 均属此类） |
 | 带公开 sourcemap 且 sourcesContent 完整 | map 可下载且含完整源码 | 直取 sourcesContent 替代 beautify（边界探测实录：orano） |
+| **无 bundle：行为在 HTML 内联块里** | 站点自己的 js 只有 vendor 与主题存量，签名行为的字面量只在 HTML 的 `<script>` 块内命中 | **走 §0.1 平行分支**：坐标系建在内联块上，主坐标是**内容哈希**而非行号【objectarchive】 |
 
-无论走哪个分支，**"行号 = 全项目唯一溯源坐标系"的制度不变**，只是坐标系落在哪份文件上不同。
+无论走哪个分支，**"坐标系是全项目唯一溯源坐标"的制度不变**——唯一、贯穿四处引用（§1.3）、笔记先行（§2）、取证钉版本（§3）、假设先证否（§4）全部照旧；变的只是坐标落在哪份字节上、以什么做主键（行号 / 内容哈希）。
+
+### 0.1 无 bundle 站：平行分支（不是替代分支）【objectarchive】
+
+**两条分支并列。** 判据是"签名行为的**载体**是什么"，不是站的好坏、也不是方法论偏好。同一个项目里两者常常并存——objectandarchive 的 vendor（gsap / ScrollTrigger / lenis / jQuery）是 CDN 上的独立文件，自研行为在内联块里——此时**按载体分别建坐标系**：需要读的 vendor 文件按 §1 走 `_pretty/`，内联块按本节走内容哈希。这不违反 §1.3 的"不允许第二套坐标系"——那条禁的是**同一份字节有两种坐标**，不是禁止不同载体各有各的坐标；要求是**每条引用一眼能看出落在哪个载体上**（`B:` 前缀 vs `pretty L`）。
+
+**识别判据**（四条同时成立才判；有一条不成立要回头核，别急着删步骤）：
+
+1. **签名行为的字面量只在 HTML 里命中**：对镜像全量 grep 行为特征（`new Lenis` / `gsap.` / `ScrollTrigger` / `addEventListener("pointerdown"` / 自研类名前缀），命中集落在 `*.html` 的 `<script>` 块内，站点自己的 `.js` 文件里没有。
+2. **vendor 走 CDN 且 URL 内即钉版本**：`cdn.jsdelivr.net/npm/gsap@3.12.5/…`、`lenis@1.1.14/…`、`code.jquery.com/jquery-3.7.1.min.js`——版本无需逆向，照 URL 钉即可（§3.1）。
+3. **内联块未压缩且带作者注释**：框线注释（`/* ── Drag-to-scroll (carousel) ── */`）、完整标识符、正常缩进——这是源码风格，不是构建产物。
+4. **页面由服务端模板渲染**（Liquid / ERB / Blade / 各类 PHP 模板）：块的位置与顺序由模板与平台注入决定，不由构建器决定——这正是下面坐标不稳的根源。
+
+**直接删掉的步骤**（bundle 分支的专属成本，无 bundle 站一项都不需要）：
+
+| 删掉 | 因为 |
+|---|---|
+| §1 的 `js-beautify` 展开与版本钉死（`_pretty/`、`scripts/beautify-bundle.mjs`） | 代码本来就是格式化好的源码；再 beautify 一遍等于**凭空造出一份与源站字节不同的产物**，逐字移植的字节门会失去基准 |
+| §2.1 的混淆名对照表、跨 chunk 导入/导出重命名表 | 标识符与注释都在，没有混淆，也没有 chunk |
+| §0 的 minification 形态预检（最长行、`sourceMappingURL`） | 没有被压缩的对象 |
+| §2.2 的 vendor 区段地图与 vendor 岛边界校准 | vendor 是独立的 CDN 文件，边界即文件边界；"应用层规模"改由内联块归属表给出（见下） |
+
+**替换掉的步骤**（形式变了，制度没变）：
+
+| bundle 分支 | 无 bundle 分支 |
+|---|---|
+| `_pretty/` 行号坐标系 | **内容哈希坐标系 `B:<sha12>`**（§0.1.1） |
+| `_pretty/README.md` 钉死 beautifier 版本 | **快照 sha256 钉死表 + 漂移守卫命令**（§0.1.1） |
+| §2.1 的 bundle 区段地图 | **内联块普查表 + 逐块层归属**（Shopify 站按 `shopify-platform.md` §0.3 的四层；零 UNCLASSIFIED 才算完成） |
+| `scripts/extract-source.mjs` 按行号切 `_pretty/` | 同一把切片器改切**镜像 HTML 的内联块**：切片表的 `source` 变成 HTML 文件，sha256 守卫照旧 |
+
+#### 0.1.1 坐标系：内容哈希作主坐标，行号降级为快照内导航
+
+**朴素方案"行号建在镜像 HTML 上"实测不成立。** objectandarchive 抓了六份同一路由的 HTML（同时刻双抓 / 60 秒间隔三抓 / 移动 UA / `Accept-Language: fr-FR` / 隔一天），全部 486,622 字节 10,410 行，逐块比：
+
+| 比较 | 块数（首页全部 `<script>`，含外链） | sha 不同 | 起始行不同 |
+|---|---|---|---|
+| 同时刻双抓 · 60 秒间隔 · 换语言 | 80 | 0 | 0 |
+| 换移动 UA | 80 | 4（**全是 nonce 字段**） | 0 |
+| **隔一天（跨 CDN 缓存条目）** | 80 | 12 | **4** |
+
+隔天那 4 处行号差异不是内容变化，**是两个平台 app-embed 块换了注入顺序**：Hulk Form Builder 昨天是第 44 块（L850），今天是第 41 块（L817）。掩掉 nonce 后整页 diff 只有 87 行、全部落在 app-embed 区段内、总行数不变——**同一份内容，两种注入顺序**。
+
+三条结论直接决定坐标系形状：**① 块序号不是稳定标识**；**② 行号在被平台注入的区段内不稳定**；**③ 区段外这次没漂是运气不是保证**——两个 app 块恰好占用同样多的行，所以后面的行号回到原位；多一个 app 或某个 app 改版，整页后半段就整体位移。**行号可以用来找路，不可以用来当契约。**
+
+定案：
+
+| 用途 | 形式 | 稳定性 |
+|---|---|---|
+| **主坐标（权威）** | `B:<sha12>` = 块正文字节的 sha256 前 12 位；块内定位写 `B:<sha12>+<行内偏移>`（1-based，块首行为 1） | 内容寻址：跨渲染、跨页面、跨抓取不变 |
+| 辅坐标（导航） | `<page> L<起>-<止>` | **仅对钉死的快照有效**，不得进契约类文档的证据位 |
+| 漂移守卫 | `inline-scripts.mjs <新抓> <钉死快照> --compare`：逐块比 sha / 字节 / 起始行，有差异即退非零 | 等价于 bundle 分支"钉死 beautifier 版本"那条红线 |
+
+配套三件，缺一不可：
+
+1. **快照钉死表**：每份镜像 HTML 的 sha256 / 字节数 / 行数写进 REBUILD_PLAN（等价于 `_pretty/README.md` 的版本声明），并写明红线——**重抓镜像后 sha256 一变，全部 `L####` 引用作废；`B:` 引用不受影响**。
+2. **漂移守卫进流程**：每次重抓镜像后必跑 `--compare`。sha 变了是**响亮失败**，该块的全部 `B:` 引用必须重新定位，而不是静默漂走。
+3. **块名带语义**：普查表里每块起描述性 id（`oa-lenis-gsap-orchestration`、`oa-pdp-frame-compositor`），**不要 `block-37`**——序号会漂，而这些名字要直接当移植任务表的行标题用。
+
+**旁证（免费得到的正确性检查）**：同一个块在三条路由上出现在完全不同的行号——Lenis+GSAP 脊柱 `B:41e7f747ed2a` 在首页 L9564-9687 / collection L8468-8591 / product L11658-11781——而 `B:` 值一致。按行号编目会记成 9 条互不相干的条目；按内容哈希编目自动收敛成 3 条，且"三页共用同一份实现"这个事实白送。
+
+**先掩 nonce 再谈任何字节门**：逐请求变化但**长度固定**的字段（`<meta name="shopify-y">` UUID、`__st.reqid`、`eventMetadataId`、`requestId`）不引起行号位移，却会让哈希变。做法是在归属表里给这类块标 `nonce` 并改用锚点字面量匹配（`shopify-platform.md` §0.3 步骤 4）。**注意"跨请求"和"跨缓存条目"是两个不同的自变量**——只有后者会动结构；只抓前者会得出"完全稳定"的错误结论。
 
 ## 1. 建立 `_pretty/` 行号坐标系
+
+> **分支提示**：§1.1–§1.3 属 **bundle 分支**；无 bundle 站按 §0.1 建内容哈希坐标系后跳到 **§1.4**（该节两个分支通用）。
 
 ### 1.1 展开命令（版本钉死 1.15.1）
 
@@ -56,6 +122,20 @@ npx --yes js-beautify@1.15.1 legacy-mirror/<path>/<bundle>.js \
   3. 里程碑日志的"下一步断点待办"——如 samsy M7a 待办直接写 "字体管理器 **pretty L60740-L60844（未读）**"，跨会话交接靠它【samsy】；
   4. 怪癖表与偏差表的每条证据。
 - 实践规模参考：oryzo 107 处 / samsy 276 处 / noomo 161 处 / lando 400+ 处行号引用【oryzo】【samsy】【noomo】【lando】。
+- **无 bundle 站**：把上面四处的"行号"整体替换为 `B:<sha12>`（块内定位 `B:<sha12>+<n>`），格式与制度同构；行号只能作为**快照内导航**出现在这四处之外【objectarchive】。
+
+### 1.4 坐标系稳定性是 M1 的第一道必答题（两个分支通用）【objectarchive】
+
+bundle 分支的坐标稳定性是**买来的**：文件字节固定 + beautifier 版本钉死 ⇒ 行号是不变量，红线只需一句"别换版本"。**只要坐标载体不是"钉死的文件"，稳定性就变成必须实测的经验问题**——无 bundle 站（内联块随模板与平台注入漂）、每请求重渲染的 SSR 页面、随 A/B 分桶变化的产物，都属此类。
+
+纪律（硬规则）：
+
+1. **Step 0 就预登记**：判级时若发现坐标载体不是固定文件，把"坐标系是否稳定"写进 `probe/verdict.md` 的待验风险清单。
+2. **M1 第一件事就是验它**——**在写任何移植代码、落下任何坐标引用之前**。验法：同一路由多次抓取，**把自变量拆开分别抓**：同时刻双抓 / 分钟级间隔 / **跨天（跨 CDN 缓存条目）** / 换 UA / 换 `Accept-Language`；逐块比 sha、字节、起始行（objectandarchive 的实现是 `inline-scripts.mjs --compare`）。
+3. **结论写成区段级，不是全局级**：objectandarchive 的答案不是"稳/不稳"，而是"**平台 app-embed 区段不稳，其余（含全部 26 个自研块）稳**"。这个更细的答案才可用——自研块的行号可以放心当导航坐标；而它只有把"同缓存条目 / 跨缓存条目"当成两个自变量分开抓才看得见。
+4. **结论进 `engine-notes.md` 第一节 + REBUILD_PLAN 的坐标系节**，并配一条可复跑的守卫命令（重抓镜像后必跑）。
+
+**为什么必须前置**：objectandarchive 在 Step 0 预登记、M1 开头证伪，于是**在写第一行移植代码之前**就换掉了坐标方案，代价是半天。**同样的发现若拖到 M2 中途才撞上，笔记、移植文件头注释、里程碑待办、怪癖/偏差表里的坐标引用早已铺开（前作规模 107–400+ 处），一次性全部作废且无法自动修复**——与"beautifier 版本漂移"是同一类灾难（§1 ⛔），只是触发源不同。
 
 ## 2. 逆向笔记 `docs/engine-notes.md` 先行
 
@@ -63,7 +143,7 @@ npx --yes js-beautify@1.15.1 legacy-mirror/<path>/<bundle>.js \
 
 ### 2.1 三段式内容结构
 
-**第一段：源站事实**（全部带行号）
+**第一段：源站事实**（全部带坐标：bundle 分支为行号，无 bundle 分支为 `B:<sha12>`）
 
 - **bundle 区段地图**：vendor 边界逐段标行号——lando 给 47k 行画了全区段地图（GSAP 5043-6743、three 10334-30143、Lenis 46469-47010、应用代码各段），"先画地图再挖矿"【lando】；samsy 同样逐段标 vendor 边界【samsy】。**边界怎么划见 §2.2——只按 license banner 划会错**【shopifydesign】；
 - 启动链 / 路由 / store（逐字段用途）；
@@ -72,8 +152,9 @@ npx --yes js-beautify@1.15.1 legacy-mirror/<path>/<bundle>.js \
 - 混淆名对照表（noomo：`nn`=RenderingPipeline、`X`=Root…）【noomo】；
 - **跨 chunk 导入/导出重命名表**（多 chunk 站必写）【shopifydesign】：同一个符号在两个 chunk 里叫两个名字——`SiteHeader` chunk 里写 `export { Ye as R }`，主 chunk L8 写 `import { R as Pa }`，于是笔记、bundle、移植代码要靠三个名字（`Ye` / `R` / `Pa`）对上号。**逐条记"符号 → 源 chunk → 导出名 → 主 chunk 内名 → 两侧行号"**：它是阶段 2 跨 chunk 字节切片的直接输入——切片器要靠这张表把那两句 import/export 转写成一句绑定（`porting-discipline.md` §2.2）。没有它，跨 chunk 的符号在笔记里表现为"来历不明的自由标识符"；
 - 页面 init/destroy 矩阵（每个页面的初始化/销毁函数及行号）——它直接变成移植阶段的任务清单【lando】。
+- **无 bundle 站的等价物**：区段地图换成**内联块普查表**（逐块：语义 id / 层归属 / 字节 / `B:<sha12>` / 各页行号 / 首条作者注释）。它同时承担 §2.2 的职责——**应用层规模 = 归属为"站点自研"的那些块**，平台层与上游主题存量都要从规模统计里扣掉，否则任务表虚高（objectandarchive 若把 Dawn 存量算进去，虚高 65%）【objectarchive】。
 
-**第二段：怪癖清单（照抄不修）**：源站 bug / 死代码 / 怪写法逐条登记并带行号，移植时逐字照抄。规模参考：noomo Q1–Q14、samsy 13 条、kimi 26 条【noomo】【samsy】【kimi】。
+**第二段：怪癖清单（照抄不修）**：源站 bug / 死代码 / 怪写法逐条登记并带坐标（行号或 `B:`），移植时逐字照抄。规模参考：noomo Q1–Q14、samsy 13 条、kimi 26 条【noomo】【samsy】【kimi】。
 
 **第三段：对复刻的直接结论**：如 noomo 的 10 条（"先实现三个元系统再写任何材质"、"缺 colorsMap 玻璃会变灰白"）【noomo】；samsy 的"不要发明"清单（engine-notes §16）【samsy】。
 
@@ -106,6 +187,7 @@ npx --yes js-beautify@1.15.1 legacy-mirror/<path>/<bundle>.js \
 | 全局变量 | `window.next={version:"16.1.6",appDir:!0}`、`window.__THREE__="184"`【kimi】 |
 | pnpm 路径泄漏 | 一条路径一次性钉死 next/react/babel/sass 四个版本【kimi】 |
 | wasm/CDN URL | Rive 版本从 bundle 内 wasm URL 取证【lando】 |
+| **CDN URL 内即钉版本**（无 bundle 站常态） | `cdn.jsdelivr.net/npm/gsap@3.12.5/…`、`lenis@1.1.14/…`、`code.jquery.com/jquery-3.7.1.min.js`——URL 给版本，**下载到的文件里再复核一次**（`gsap.min.js` banner `GSAP 3.12.5`、`ScrollTrigger.min.js` 内 `version="3.12.5"`、文件内 `jQuery v3.7.1`），两处对得上才算取证【objectarchive】 |
 | API 指纹 | zustand `getInitialState` 无 `destroy` ⇒ v5【kimi】 |
 | CSS 特征 | `@property --tw-drop-shadow-alpha` ⇒ Tailwind v4.1.0+【kimi】 |
 | 响应头 | `x-powered-by: Nuxt`【noomo】 |
@@ -160,14 +242,18 @@ grep 命中只是假设，**每条必须回上下文确认**；**计数同理**�
 6. **正则假阳性污染 diff/取证**：`.15` 无前导零、十六进制色值记法差异造成两轮假阳性，samsy 改用"数字字面量多重集 + 结构对比"才收敛出真实增量【samsy】。对策：数值比较先归一化记法。
 7. **逆向笔记混入改进判断**导致移植阶段"顺手修 bug"。对策：§2.3 事实/判断分离 + 怪癖单列"照抄不修"。
 8. **区段地图只按 license banner 划**：vendor 尾部的 addon 段与散插的"vendor 岛"被算进应用层，应用规模虚高（shopify.design 虚高 5,832 行），评级与工期跟着偏【shopifydesign】。对策：§2.2 的收尾校准 + vendor 岛标注。
+9. **把坐标系稳定性拖到 M2 才发现**：坐标载体不是钉死文件时（内联块 / 每请求渲染的 SSR），行号会随平台注入顺序漂，而"同一时刻双抓完全一致"极易让人提前收工【objectarchive】。对策：§1.4——M1 开头多自变量实测，结论按区段记录，主坐标改内容寻址。
+10. **在无 bundle 站上照跑 bundle 流程**：对已经是源码的内联块跑 beautify（凭空造出与源站不同的字节，字节门失基准）、用块序号当标识（序号会漂）、按 license banner 找 vendor 边界（vendor 根本在别的文件里）【objectarchive】。对策：§0.1 的"删掉/替换"两张表逐条对照。
 
 ## 8. 阶段产出物与通过判据
 
-- [ ] `legacy-mirror/_pretty/`：全部 bundle/chunk 已展开（或按 §0 预检登记"无需 beautify，坐标系 = 原文件行号"）
-- [ ] `_pretty/README.md`：含 js-beautify@1.15.1 版本声明 + 逐文件再生成命令 + 版本漂移警告
-- [ ] `docs/engine-notes.md`：三段式齐全（事实带行号 / 怪癖清单 / 复刻直接结论），全文无"应该怎么改"，未坐实处标"未确认"
+- [ ] `legacy-mirror/_pretty/`：全部 bundle/chunk 已展开（或按 §0 预检登记"无需 beautify，坐标系 = 原文件行号"；**无 bundle 站按 §0.1 登记"坐标系 = 内容哈希 `B:<sha12>`"**）
+- [ ] `_pretty/README.md`：含 js-beautify@1.15.1 版本声明 + 逐文件再生成命令 + 版本漂移警告（**无 bundle 站的等价物**：快照 sha256 钉死表 + 漂移守卫命令 + "重抓即全部行号引用作废"警告）
+- [ ] **坐标系稳定性有实测结论**（§1.4）：多自变量抓取比对已跑（含跨缓存条目），结论按**区段**写进 engine-notes，守卫命令可复跑
+- [ ] 无 bundle 站：**内联块普查表 + 逐块层归属**完成，每块有语义 id，归属门零 UNCLASSIFIED（Shopify 站见 `shopify-platform.md` §0.3）
+- [ ] `docs/engine-notes.md`：三段式齐全（事实带坐标 / 怪癖清单 / 复刻直接结论），全文无"应该怎么改"，未坐实处标"未确认"
 - [ ] 多 chunk 站：**跨 chunk 导入/导出重命名表**已进笔记（符号 → 源 chunk → 导出名 → 主 chunk 内名 → 行号），供阶段 2 的多源切片消费
-- [ ] 技术栈取证表：每个依赖版本都有 bundle 内证据，`package.json` 计划为 `--save-exact`，传递依赖风险已评估
+- [ ] 技术栈取证表：每个依赖版本都有镜像内证据（bundle 内字符串，或**无 bundle 站的 CDN URL + 文件内复核**，§3.1），`package.json` 计划为 `--save-exact`，传递依赖风险已评估
 - [ ] 架构假设已做过一轮显式证否（记录证否手段与结论）
 - [ ] 数据驱动动画的数值基准已 dump 入库（`docs/*-baseline/`），驱动量覆盖已确认
 - [ ] bundle 内联资产已提取到 `_extracted/`（如有）

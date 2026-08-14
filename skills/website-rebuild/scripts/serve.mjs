@@ -5,7 +5,7 @@
 //   node serve.mjs --side mirror  --root legacy-mirror   # the source site
 //   node serve.mjs --side rebuild --root dist            # the rebuild
 //   node serve.mjs --side mirror --root legacy-mirror [--ext-hosts cdn.x.com,fonts.gstatic.com]
-//                  [--stub-ext-hosts telemetry.example.com] [--port N]
+//                  [--stub-ext-hosts telemetry.example.com] [--origin-host example.com] [--port N]
 //   PORT=3200 SERVE_ROOT=legacy-mirror node serve.mjs    # explicit port still wins
 //
 // PORTS AND IDENTITY (scripts/lib/ports.mjs — read its header once):
@@ -20,16 +20,24 @@
 // Discipline: the mirror on disk is SACRED — never rewritten. Every local-run
 // adaptation happens in the response layer:
 //   * full MIME map + Range requests, so <video>/<audio> can seek
+//   * QUERY-AWARE file resolution (lib/urlpath.mjs): ?width=320 and ?width=1200
+//     are two files, not one, on any transform CDN     [objectandarchive]
 //   * redirect replay from <root>/_scripts/redirects.tsv or <root>/redirects.tsv
 //     (tab-separated "CODE FROM TO" lines, header row skipped): origin routing
 //     behavior is replayed from the ledger, not re-invented   [careers-kimi]
+//     — minus entries that localize to a self-redirect, which would loop
 //   * /ext/<host>/ mapping: text responses get absolute external-host URLs
 //     rewritten to /ext/<host>/<path>, which resolves back into the mirror's
 //     assets/<host>/<path>; SRI integrity attrs are dropped because rewritten
 //     bytes can no longer match their hash        [samsyninja, landonorris]
 //     ext hosts are auto-detected from <root>/assets/<host>/ dirs; add more
 //     with --ext-hosts, and name the deliberately-unmirrored telemetry ones
-//     with --stub-ext-hosts so they answer with a JS stub instead of a 404
+//     with --stub-ext-hosts so they answer with a JS stub instead of a 404.
+//     All four spellings are rewritten — plain, protocol-relative, JSON-escaped
+//     and BARE HOST CONSTANT (no trailing slash)      [objectandarchive]
+//   * --origin-host: the origin's own absolute/protocol-relative self-references
+//     become root-relative, so an offline mirror stops phoning the live site
+//     for bytes it already has                        [objectandarchive]
 //   * ?__probe instrumentation: HTML responses get probe-shim.js injected so
 //     both sides can be driven deterministically   [storytellingnoomo]
 //   * 404.html template replay when the mirror captured one   [landonorris]
@@ -64,6 +72,11 @@ import {
   labelPort,
   resolvePort,
 } from "./lib/ports.mjs";
+// File resolution is QUERY-AWARE, using the same mapping — and the same stored
+// policy — the crawler wrote with. Resolving by pathname alone answers every
+// ?width=N with one arbitrary variant: the page renders, so the zero-404 gate
+// goes green while the server hands out the wrong bytes. See lib/urlpath.mjs.
+import { serveCandidates, loadPolicy, policyFromArgs, describePolicy } from "./lib/urlpath.mjs";
 
 const args = process.argv.slice(2);
 const flag = (name, dflt) => {
@@ -198,12 +211,29 @@ const EXT_HOSTS = [...new Set([
   ...flag("ext-hosts", "").split(",").filter(Boolean),
 ])];
 
+// --origin-host <host>[,<host>] — the ORIGIN's own hostname(s). Plenty of
+// origins address their own assets absolutely or protocol-relatively
+// (`//example.com/cdn/...`, common on platforms that serve the store CDN under
+// the custom domain). Served from 127.0.0.1 those resolve to
+// http://example.com/..., i.e. THE OFFLINE MIRROR SILENTLY PHONES THE LIVE SITE
+// for bytes that are already on disk. Rewriting them to root-relative is a
+// response-layer transform, so the mirror on disk stays byte-pristine — and it
+// must be registered as a deviation in the project's plan.
+const ORIGIN_HOSTS = flag("origin-host", "").split(",").map((s) => s.trim()).filter(Boolean);
+
+// Query policy the mirror was written under (mirror-site.mjs writes it into the
+// root). --query-ignore/--query-only override it, but doing so means serving a
+// mirror under a mapping different from the one that produced it: fix the
+// mirror instead. verify-mirror.mjs reports the mismatch as MAPPING DRIFT.
+const QUERY_POLICY = policyFromArgs(args) ?? (await loadPolicy(ROOT));
+
 // Redirect replay ledger (optional): "CODE\tFROM\tTO" per line, header skipped.
 // FROM may be a bare path or the absolute URL the crawler asked for; requests
 // arrive here as paths, so absolute FROMs are also keyed by their local
 // equivalent (ext hosts under /ext/<host>/), otherwise the ledger loads and
 // replays nothing at all.
 const REDIRECTS = new Map();
+let selfRedirects = 0;
 const localizeUrl = (abs) => {
   const u = new URL(abs);
   return EXT_HOSTS.includes(u.hostname) ? `/ext/${u.hostname}${u.pathname}` : u.pathname;
@@ -215,6 +245,21 @@ for (const ledger of ["_scripts/redirects.tsv", "redirects.tsv"]) {
     for (const line of tsv.trim().split("\n").slice(1)) {
       const [code, from, to] = line.split("\t");
       if (!from || !to) continue;
+      // Drop entries that LOCALIZE TO A SELF-REDIRECT. Origins routinely carry
+      // http->https redirects on the same path, and a crawler that meets one
+      // http:// reference records the pair faithfully. Both sides then localize
+      // to the same local path — the scheme is gone and the lookup key is the
+      // pathname — so replaying the entry is an infinite loop:
+      // ERR_TOO_MANY_REDIRECTS on a file that is really on disk. Measured on
+      // objectandarchive: one genuinely mirrored image, dead, looking exactly
+      // like a mirror gap. The ledger is not wrong; replaying it locally is.
+      let localFrom = from, localTo = to;
+      try { if (/^https?:\/\//i.test(from)) localFrom = localizeUrl(from); } catch {}
+      try { if (/^https?:\/\//i.test(to)) localTo = localizeUrl(to); } catch {}
+      if (trimSlash(localFrom) === trimSlash(localTo)) {
+        selfRedirects++;
+        continue;
+      }
       const rec = { code: Number(code), to };
       REDIRECTS.set(trimSlash(from), rec);
       if (/^https?:\/\//i.test(from)) {
@@ -234,16 +279,59 @@ try {
   );
 } catch {}
 
+// A host reference has FOUR spellings in a real page, and each one that is left
+// unhandled is an outbound request the render-level gates cannot show you:
+//
+//   plain          https://host/path        http://host/path
+//   protocol-rel   //host/path
+//   JSON-escaped   https:\/\/host\/path  and  \/\/host\/path
+//   BARE CONSTANT  "https://host"           then code does host + "/v1/metrics"
+//
+// The escaped protocol-relative form is what Liquid's `| json` filter emits for
+// a theme asset URL inside an inline script; the bare constant is how telemetry
+// SDKs and platform boilerplate store their base URL (`window.shopUrl =
+// 'https://example.com'`). Measured on objectandarchive with only the
+// trailing-slash forms handled: the last 6 outbound requests of an otherwise
+// "zero-outbound" run were 4 telemetry beacons and 2 fetches to the LIVE ORIGIN
+// for a 229 KB theme asset that was on disk the whole time. Because the URL is
+// built at runtime, it appears nowhere in the mirror, and the natural (wrong)
+// conclusion is that it is unfixable.
 function rewrite(text, ext) {
   // Rewritten bytes can no longer match SRI hashes; drop integrity attrs (HTML only).
   if (ext === ".html") text = text.replace(/ integrity="[^"]*"/g, "");
+  for (const h of ORIGIN_HOSTS) {
+    text = text.replaceAll(`https://${h}/`, "/").replaceAll(`http://${h}/`, "/");
+    text = text.replaceAll(`https:\\/\\/${h}\\/`, "\\/").replaceAll(`http:\\/\\/${h}\\/`, "\\/");
+    text = text.replaceAll(`\\/\\/${h}\\/`, "\\/");
+    if (ext === ".html" || ext === ".css") text = text.replaceAll(`//${h}/`, "/");
+    text = text.replace(bareHostRe(h), "");
+  }
   for (const h of EXT_HOSTS) {
     text = text.replaceAll(`https://${h}/`, `/ext/${h}/`).replaceAll(`http://${h}/`, `/ext/${h}/`);
-    // Protocol-relative form only in markup/styles: inside JS it is often
-    // concatenated with a "https:" prefix and rewriting would corrupt it.
+    text = text
+      .replaceAll(`https:\\/\\/${h}\\/`, `\\/ext\\/${h}\\/`)
+      .replaceAll(`http:\\/\\/${h}\\/`, `\\/ext\\/${h}\\/`)
+      .replaceAll(`\\/\\/${h}\\/`, `\\/ext\\/${h}\\/`);
+    // Unescaped protocol-relative form only in markup/styles: inside JS it is
+    // often concatenated with a "https:" prefix and rewriting would corrupt it.
     if (ext === ".html" || ext === ".css") text = text.replaceAll(`//${h}/`, `/ext/${h}/`);
+    text = text.replace(bareHostRe(h), `/ext/${h}`);
   }
   return text;
+}
+
+// The trailing negative lookahead is load-bearing: without it the host
+// "shop.app" also matches inside "shop.apple.example.com", and the rewrite
+// mangles an unrelated third-party URL into a local path.
+const bareHostCache = new Map();
+function bareHostRe(h) {
+  let re = bareHostCache.get(h);
+  if (!re) {
+    re = new RegExp(`https?://${h.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}(?![\\w.-])`, "g");
+    bareHostCache.set(h, re);
+  }
+  re.lastIndex = 0;
+  return re;
 }
 
 async function statFile(p) {
@@ -254,7 +342,19 @@ async function statFile(p) {
   return null;
 }
 
-async function resolveFile(pathname) {
+async function resolveFile(pathname, search = "") {
+  // Try the query-suffixed name first, then the bare pathname. serveCandidates()
+  // returns [<name>@@<sorted-query><ext>, <name><ext>]; the bare fallback keeps
+  // cache-buster-only queries and pre-query-aware mirrors working, while
+  // ?width=320 and ?width=1200 now resolve to two different files.
+  for (const cand of serveCandidates(pathname, search, QUERY_POLICY)) {
+    const hit = await resolveOne(cand);
+    if (hit) return hit;
+  }
+  return null;
+}
+
+async function resolveOne(pathname) {
   // Reject traversal before touching the filesystem.
   const clean = path.normalize(decodeURIComponent(pathname)).replace(/^(\.\.[/\\])+/, "");
   if (clean.includes("..")) return null;
@@ -325,7 +425,7 @@ const server = http.createServer(async (req, res) => {
     }
 
     // 3. file resolution (incl. /ext/<host>/ mapping)
-    const hit = await resolveFile(url.pathname);
+    const hit = await resolveFile(url.pathname, url.search);
     if (!hit) {
       // Replay the origin's 404 template if the mirror captured one.
       const tpl = await statFile(path.join(ROOT, "404.html"));
@@ -347,9 +447,9 @@ const server = http.createServer(async (req, res) => {
 
     // 4. response-layer text transforms (ext-host rewrite + probe injection)
     const wantsProbe = ext === ".html" && url.searchParams.has("__probe") && PROBE_SHIM;
-    if ((TEXT_REWRITE.has(ext) && EXT_HOSTS.length) || wantsProbe) {
+    if ((TEXT_REWRITE.has(ext) && (EXT_HOSTS.length || ORIGIN_HOSTS.length)) || wantsProbe) {
       let text = await fsp.readFile(hit.file, "utf8");
-      if (EXT_HOSTS.length) text = rewrite(text, ext);
+      if (EXT_HOSTS.length || ORIGIN_HOSTS.length) text = rewrite(text, ext);
       if (wantsProbe) text = text.replace(/<head([^>]*)>/i, `<head$1><script>${PROBE_SHIM}</script>`);
       const body = Buffer.from(text, "utf8");
       res.writeHead(200, { ...headers, "content-length": body.length });
@@ -402,6 +502,11 @@ server.listen(PORT, HOST, () => {
   console.log(`  http://${HOST}:${PORT}/`);
   console.log(`  port ${labelPort(PORT)}`);
   console.log(`  identity ${IDENTITY.token}  (GET ${IDENTITY_PATH})`);
+  console.log(`  ${describePolicy(QUERY_POLICY)}`);
+  if (ORIGIN_HOSTS.length) console.log(`  origin hosts -> root-relative: ${ORIGIN_HOSTS.join(", ")}`);
   if (EXT_HOSTS.length) console.log(`  ext hosts: ${EXT_HOSTS.join(", ")}`);
   if (REDIRECTS.size) console.log(`  replaying ${REDIRECTS.size} redirects from ledger`);
+  if (selfRedirects) {
+    console.log(`  skipped ${selfRedirects} ledger redirect(s) that localize to themselves (would loop)`);
+  }
 });
