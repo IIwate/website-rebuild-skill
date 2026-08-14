@@ -27,6 +27,8 @@ TARGET='https://example.com/awarded-path'   # 必须是获奖/目标路径本身
 mkdir -p probe
 ```
 
+> **无 POSIX 工具链时**（如 Windows PowerShell 缺 curl/cmp/fold/tr/perl；PowerShell 里 `curl` 是 `Invoke-WebRequest` 别名且默认跟随重定向，恰好抹掉 §3 的 X 信号）：用 [`scripts/fingerprint.mjs`](../scripts/fingerprint.mjs) 一条命令等价执行本节六步——`node <skill>/scripts/fingerprint.mjs --target "<TARGET>" [--bundle <bundle-url>]`。产物同样落 `probe/`（a.html / b.html / bundle-*.js / fingerprint-report.md），计数为出现次数语义（符合下文《计数硬约束》第 1 条），下载物逐个记 sha256。它**只采证据不出判级**——§3 判定树、§4 三判据与 §6 的解读仍须人工执行。
+
 ### 步骤 1：存活性（GET，路径粒度）
 
 ```bash
