@@ -73,6 +73,12 @@ README.md                  # 本文件
 - **远期（C 类分支）**：声明式架构的"重构式逆向"方法论。实测显示大厂创意页正在向该形态漂移（Shopify Editions 三代 B→B→C），此分支迟早需要
 - 每完成一个新的复刻项目，将其新经验合并回本 skill
 
+## 许可
+
+[MIT](LICENSE)。
+
+**注意许可管的是这个 skill 本身，不管你拿它去复刻什么。** 复刻他人网站涉及的版权与合规判断由使用者自行承担——skill 内的授权前提（SKILL.md「使用前提与授权」）与本文件的"不能做"一节，才是关于**用途**的约束。
+
 ## 致谢
 
 - 结构范式参考 [JimLiu/baoyu-skills](https://github.com/JimLiu/baoyu-skills) 的 baoyu-comic skill
