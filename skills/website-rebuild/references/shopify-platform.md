@@ -62,9 +62,25 @@
 2. **按内容哈希建表，不按块序号或行号**：内联块的序号与行号会随渲染漂（证据与坐标系定义见 `reverse-engineering.md` §0.1）。哈希做主键还有一个副产品——同一块在三条路由上出现在三组不同行号，按哈希编目自动收敛成一行记录。
 3. **逐块判层**：`P` 用平台特征字面量（`Shopify.analytics` / `wpmLoader` / `trekkie` / `__st` / `monorailEndpoint` / `ShopifyAnalytics.meta`）；`A` 用 App 名与其外部域；`T-上游` vs `T-站点` 用 §0.2。**每块起一个语义 id**（`oa-lenis-gsap-orchestration`、`oa-pdp-frame-compositor`，不要 `block-37`）——序号会漂，而这些名字要直接当移植任务表的行标题用。
 4. **带 nonce 的块用锚点兜底**：少数平台块含逐请求 nonce（`eventMetadataId` / `requestId` / `reqid`），字节一变哈希就变。给这类条目补一条**只在该块出现、别处不出现的字面量**作探针；探针会**嵌套**（trekkie 引导块包含 shim 队列全文、analytics 载荷里含整个商品 JSON），所以要支持"必须出现在块首"的锚点形式。
-5. **归属门**：写脚本把普查结果与归属表 join，**任何未归属的块打印 UNCLASSIFIED、任何匹配到两条的打印 AMBIGUOUS，两者非零即退非零码**，并把它列进 M1 关账条件。这道门**本 skill 尚未提供现成脚本**（见 `scripts/README.md` TODO），按上面的判据自己写一个即可；可参照 objectandarchive 项目侧的 `layer-report.mjs` + `docs/layer-map.json`（三页 **0 UNCLASSIFIED / 0 AMBIGUOUS**）。**歧义不许用启发式自动消解**——猜一次就是几百 KB 在层间无声搬家。
+5. **归属门**：写脚本把普查结果与归属表 join，**任何未归属的块打印 UNCLASSIFIED、任何匹配到两条的打印 AMBIGUOUS，两者非零即退非零码**，并把它列进 M1 关账条件。这道门**本 skill 尚未提供现成脚本**（见 `scripts/README.md` TODO），按上面的判据自己写一个即可；可参照 objectandarchive 项目侧的 `layer-report.mjs` + `docs/layer-map.json`（三页 **0 UNCLASSIFIED / 0 AMBIGUOUS**）。**歧义不许用启发式自动消解**——猜一次就是几百 KB 在层间无声搬家。**归属门要跑在"构建层实际产出的每一份文档"上，不是"约定的那几条路由"上**——objectandarchive 的 404 页与被动入镜的 vendor 页因此在 M1 从未过门，直到 M2 的块级门把它们报成 UNCLASSIFIED 才补上。
 
-这条与 §6 坑 1（"内联遥测只能按属性或唯一起始字面量定位，不要凭印象删"）是同一件事的两端：**先有全量归属表，才谈得上删哪块**。
+6. **把归属表当门用，不要止步于分类**：分层的结论必须落成**对产物字节的断言**，否则 `T-上游`「原样带过」只是一句口号——没人能证明它真的没被动过。断言的形状（objectandarchive 的 `verify-shell.mjs` BLOCKS 门，逐块按内容哈希 join 归属表）：
+
+   对镜像里的**每个**内联块，在产物里找它的下落——
+   - 哈希相同 → **逐字保留**，通过；
+   - 哈希不同 → 把**登记变换表**在这块的镜像正文上重放一遍，结果等于产物里的某块 → 通过，并记下**这次重放用到了哪几条变换**；
+   - 两者都不成立 → 这块**消失了、或被改成了变换表之外的形态**，判 fail。
+
+   层规则就写在"用到了哪几条变换"这个集合上：**`T-上游` / `T-站点` / `A` 三层只允许该集合为空（逐字保留）或只含 URL 本地化那一条**（§2 的 D1a/D1b/D1c 同属 URL 本地化这一族，objectandarchive 把它们实现为一条 `T-LOCALIZE`），出现任何其它变换即 fail；**`P` 是唯一允许整块消失的层，且只允许消失 §2 D5b 登记过的那些块**（objectandarchive 全站唯一合法移除 = wpmLoader，D-P1b）。
+
+   它挡住的是三件 hunk 级 diff 看不清的事：
+   - **构建层在改移植目标**：无 bundle 的站上**外壳就是行为源**（签名行为住在内联 `<script>` 里，见 `reverse-engineering.md` §0.1），构建层动 `T-站点` 一个字节，就是构建层在改源程序——这也是这类站上策略 A 不是"省事的做法"而是唯一自洽做法的原因；
+   - **上游存量被"顺手修好"**：`T-上游` 的字节是上游写的，改它等于为零收益污染上游产物。objectandarchive 实测差点修掉 Dawn JSON-LD 里的一处转义绝对 URL（`"url":"https:\/\/<源站主机>"`），正解是**在 `external.txt` 里逐条判定，而不是"修"**；判据仍是 §0.2 那句"这段字节是谁写的，不是它作用在谁的 DOM 上"（该拼写为什么会漏判，见 `verification-gates.md` §1.6 第 4 类）；
+   - **整块无声消失**：这恰恰是 hunk 级 diff 最不可读的一种失败——删掉一个 18 KB 的块只是"一个巨大的 hunk"，只有块级门报得出"哪个语义 id 没了"。
+
+   **与步骤 5 的分工**：步骤 5 断言**每块都归了层**（零 UNCLASSIFIED），本步断言**每层都按自己的规则被处置了**；两道门都要，且都进关账。objectandarchive M2 实测：`T-站点` 26 / `T-上游` 6 / `A` 4 唯一块全部"逐字或只被本地化"，唯一被移除的块 = wpmLoader，0 UNCLASSIFIED；配套的 hunk 级门 5 页 **1,048 个差异 hunk 全部可由变换表重放**（变换表侧的下限纪律见 `dom-shell-strategies.md` §2 步骤 3）。
+
+这条与 §6 坑 1（"内联遥测只能按属性或唯一起始字面量定位，不要凭印象删"）是同一件事的两端：**先有全量归属表，才谈得上删哪块**；而步骤 6 是第三端——**删完之后还要能证明只删了该删的那块**。
 
 ---
 
@@ -113,15 +129,18 @@
 对每个镜像 HTML 只做**登记在案**的变换，其余逐字保留（策略 A）【lando】【racingshop】：
 
 1. **D1a 同源绝对/协议相对 → 根相对**：`https://<host>/`、`http://<host>/`、`//<host>/` → `/`。**必须同时处理 JSON 转义形式** `https:\/\/<host>\/` → `\/`（内联 JSON-LD / 配置块里全是这种写法，漏了就留下真实外域引用）。**四种形态一个都不能少**：绝对 / 协议相对 / **转义绝对** `https:\/\/host\/` / **转义协议相对** `\/\/host\/`——objectandarchive 的主题注入脚本正是最后这种写法，只处理前三种时它会在 127.0.0.1 上解析成 `http://<源站>/…`，**离线镜像向线上真站要图**【objectarchive】。另见 D1c。
-2. **D1b 外部 Shopify CDN → 本地目录**：`https://cdn.shopify.com/` 与 `//cdn.shopify.com/` → `/cdn-shopify/`（含转义形式），对应镜像的 `assets/cdn.shopify.com/` 树。
+2. **D1b 外部 Shopify CDN / 其它外部主机 → 本地目录**：`https://cdn.shopify.com/` 与 `//cdn.shopify.com/` → `/cdn-shopify/`（含转义形式），对应镜像的 `assets/cdn.shopify.com/` 树。**转义形式对外部主机同样成立，别只给源站主机开**：objectandarchive 的 D1a 一开始只处理了源站主机的转义写法，外部主机漏掉，5 页共 25 处 `"input_custom_font_url":"https:\/\/cdn.shopify.com\/s\/files\/…woff2"` 就这样留在了一个已经关账、断言全绿的镜像里（登记为 D-T8；为什么每一道门都看不见它，见 `verification-gates.md` §1.6 第 4 类）【objectarchive】。
 3. **D1c 裸主机基址常量 → 本地基址**【objectarchive】：遥测与主题代码常把基址写成**不带尾斜杠**的常量再拼路径（`"https://otlp-http-production.shopifysvc.com"`、`window.shopUrl='https://<host>'`）。只改写"带尾斜杠"形式时，objectandarchive 实测漏了 4 个遥测外联 + 2 个到线上源站的主题资产请求（那份资产一直在盘上）。**改写规则按主机匹配，不要求尾斜杠**；验收侧的配套要求见 `mirroring.md` §8。
+   > **D1c 与"转义写法"是同族不同格，两格都要单独想过**：D1c 是**没有尾斜杠**（`"https://host"` + 代码自己拼路径），D1a/D1b 的转义形式是**斜杠被转义**（`https:\/\/host\/`）。两者都会让"只匹配 `https://host/`"的提取 / 改写 / 断言规则天然失明，且失明时的表现都是绿灯。断言面见 `verification-gates.md` §1.6（第 4 类给了可执行查法）。
 4. **D5b 内联遥测块移除**：按 `data-source-attribution="shopify.event_observer.bootstrap"` 属性、以及 `<script>(function(){var wpmLoader=` 起始字面量定位删除。这两块是纯分析、无视觉/行为角色；wpmLoader 在其后端模块被 stub 后还会 `.init` on undefined 抛错，不删则污染 CLEAN 门。
 5. **D3/D5/D6 脚本 stub**：§1.2 清单。
 6. **SRI 剥离**：被改写的标签响应字节已变，`integrity="..."` 必须去掉——否则 Chrome **静默拦截**该资源，且报错只走 CDP Log 域，探针不监听 Log 就会误报 CLEAN【lando】。
 7. **D8 注入 noindex + 非官方声明**：`<head>` 后立刻插 `<meta name="robots" content="noindex,nofollow">` 与一段声明注释（"非官方学习复刻 / 与 Shopify Inc. 及店主无关 / 不得公开部署"）。版权红线，不可省。
 8. **Q1 dev-port 探测片段 verbatim 保留**：见 §5。
 
-**"零变换即 throw"防御（硬规则）**：`applyTransforms` 统计变换次数，`n === 0` 或产物与输入相同 → 直接抛错终止构建【lando】【racingshop】。意义：镜像/主题结构一变（换主题、Shopify 改 head 契约），脚本会**立刻大声失败**，而不是静默产出一批引用真实外域、没有 noindex 的坏 shells。没有这道防御的生成脚本不许合入。
+**"变换没发生就 throw"防御（硬规则）**：`applyTransforms` 统计变换次数，**逐条**校验命中数——任一条为 0 或低于其登记下限 → 直接抛错终止构建【lando】【racingshop】【objectarchive】。意义：镜像/主题结构一变（换主题、Shopify 改 head 契约），脚本会**立刻大声失败**，而不是静默产出一批引用真实外域、没有 noindex 的坏 shells。没有这道防御的生成脚本不许合入。
+
+⛔ **计数必须逐条，不能用"总数 `n === 0` 才抛"这个弱形式**：本表的 D1a/D1b 在一个页面里就可能命中数千次（objectandarchive 单次构建 5 条变换命中 15 / 5 / **2,540** / 20 / 5），URL 本地化一条就让"有变换发生"永远为真，而 **D8 noindex 注入失效不会有任何人发现**——弱形式在 Shopify 站上基本恒绿。完整判据、下限怎么量、以及"验收要从产物字节反推而不是读构建脚本的计数器"见 `dom-shell-strategies.md` §2 步骤 3；块级的配套断言见本文 §0.3 步骤 6。
 
 ---
 
@@ -148,7 +167,7 @@
 **因此零外联门的断言面 = 四项，缺一不可：**
 
 - [ ] **资源级**：全路由 × 桌面/移动，probe 记录的请求 host 只有本地；带 `--scroll` 走完懒加载。
-- [ ] **静态 grep 级**（对构建产物，不是对镜像）：`rel="preconnect"|rel="dns-prefetch"|rel="preload".*//` 无外部域；`sendBeacon\(|new Image\(|fetch\(["'`]https` 无外部字面量；残存 `https?://` 白名单只剩命名空间（schema.org / w3.org / json-schema.org）与出站锚点，逐条点名。
+- [ ] **静态 grep 级**（对构建产物，不是对镜像）：`rel="preconnect"|rel="dns-prefetch"|rel="preload".*//` 无外部域；`sendBeacon\(|new Image\(|fetch\(["'`]https` 无外部字面量；残存 `https?://` 白名单只剩命名空间（schema.org / w3.org / json-schema.org）与出站锚点，逐条点名。⚠ **只 grep `https?://` 会天然漏掉转义写法**（`https:\/\/host\/`，Liquid `| json` 与 JSON-LD 产物里全是这种）——四种拼写的完整查法与解码扫描见 `verification-gates.md` §1.6 第 4 类【objectarchive】。
 - [ ] **交互 / 生命周期态**：探针内 `window.dispatchEvent(new Event('pagehide'))`（或真导航离开）后再采一次网络；另外打开 cart drawer、在搜索框输入、进商品页触发 recommendations。
 - [ ] **拦截器模拟**：把 trekkie（及其他"在盘才安全"的脚本）临时改名/返回 404，确认不触发外联；不可消除的写进偏差表"已知潜伏"。
 
@@ -236,9 +255,10 @@ if (location.hostname === '127.0.0.1' || location.hostname === 'localhost') {
 - [ ] §1.1 运行期端点逐条有 stub 或"确认本站无此端点"的记录；空车 JSON 用完整字段形状
 - [ ] §1.2 加载期脚本逐条换 no-op stub，`type="module"` 保留；stub 文件双模式合法（`porting-discipline.md` §6.1）
 - [ ] §1.3 verbatim 保留清单逐条核对过，无过度 stub
-- [ ] 构建层变换 = 偏差表条目数（D1a/D1b/**D1c**/D5b/D3·D5·D6/SRI/D8），一一对应；**"零变换即 throw"防御在位**
+- [ ] 构建层变换 = 偏差表条目数（D1a/D1b/**D1c**/D5b/D3·D5·D6/SRI/D8），一一对应；**防御在位且是逐条下限形式**（任一条为 0 或低于下限即 throw，不是"总数非零即通过"）；每条变换都在产物 diff 里被实际观测到
 - [ ] 内联 `<script>` 已逐个分类，遥测块处置有据（删 / 留 / 登记为潜伏）
-- [ ] **内联块归属表机器可校验**（§0.3）：按内容哈希索引、每块有语义 id、归属门跑出 **零 UNCLASSIFIED / 零 AMBIGUOUS** 且退出码进 M1 关账；移植任务表 = 归属为 `T-站点` 的那些行
+- [ ] **内联块归属表机器可校验**（§0.3 步骤 1–5）：按内容哈希索引、每块有语义 id、归属门跑出 **零 UNCLASSIFIED / 零 AMBIGUOUS** 且退出码进 M1 关账，**跑遍构建层实际产出的每一份文档**（含 404 页与被动入镜的路由）；移植任务表 = 归属为 `T-站点` 的那些行
+- [ ] **归属表当门用**（§0.3 步骤 6）：块级断言跑绿——`T-上游` / `T-站点` / `A` 三层每块只有"逐字保留"或"只被 URL 本地化动过"两种结局，`P` 层消失的块 = 登记过的那些；配套 hunk 级门里每个差异都能被变换表重放
 - [ ] **零外联四项断言全绿**（§3）：资源级 / 静态 grep 级 / 交互与 pagehide 态 / 拦截器模拟；出站锚点已点名豁免
 - [ ] 交互态无控制台异常：cart drawer、predictive-search 输入、product recommendations 均实跑过（坑 2）
 - [ ] noindex + 非官方复刻声明在**每一页**产物中（不只是首页）
