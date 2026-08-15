@@ -9,6 +9,17 @@
 //
 // No servers, no browser: this is a pure post-processing pass over whatever
 // the gates last captured. Run the gates first if the artifacts are stale.
+// (Nothing here spawns a process, so the process-group reaping in
+// lib/chrome.mjs does not apply — but the gate that PRODUCED these pairs does
+// spawn one, and it is the thing that has to reap it.)
+//
+// WHERE THE PAIRS COME FROM, AND WHY THEY MAY BE JPEG: the capturing gate pulls
+// each frame through CDP as one base64 WebSocket message, and Node's built-in
+// WebSocket dies above ~2.4 M chars — roughly a 1500x900 PNG (see
+// lib/chrome.mjs). Above that the capture side must fall back to JPEG q92, and
+// this script's per-pixel heatmap then measures encoder noise as well as real
+// difference. Prefer PNG pairs for byte gates; if a pair had to be JPEG, read
+// the heatmap as "where", not as "how much".
 //
 // Usage: node side-by-side.mjs [--dir docs] [--out docs/side-by-side]
 //   Expects pairs named mirror-<pose>.png / rebuild-<pose>.png inside

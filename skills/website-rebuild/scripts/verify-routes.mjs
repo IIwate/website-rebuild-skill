@@ -20,8 +20,14 @@
 
 import fs from "node:fs/promises";
 import path from "node:path";
-import { spawn } from "node:child_process";
 import { labelPort, resolvePort } from "./lib/ports.mjs";
+// The booted server gets spawned as a PROCESS GROUP and reaped on every exit
+// path. `server.kill()` signals only the direct child, and CONFIG.server.cmd is
+// usually a launcher (`npm run dev` execs node): the launcher dies, the actual
+// server keeps the port, and the next run of this gate reports "port taken" —
+// or worse, silently measures yesterday's build. Ctrl-C during the gate had the
+// same effect, since nothing was registered on SIGINT at all.
+import { spawnReaped } from "./lib/chrome.mjs";
 
 // ---------------------------------------------------------------------------
 // CONFIG — EDIT PER PROJECT. Everything the gate asserts lives here.
@@ -107,12 +113,19 @@ function readMain(html) {
 
 let server = null;
 if (CONFIG.server) {
-  server = spawn(CONFIG.server.cmd, CONFIG.server.args, {
-    env: { ...process.env, ...(CONFIG.server.env || {}) },
-    stdio: ["ignore", "ignore", "pipe"],
+  server = spawnReaped({
+    bin: CONFIG.server.cmd,
+    args: CONFIG.server.args,
+    role: "verify-routes-server",
+    port: PORT,
+    tool: "verify-routes.mjs",
+    options: {
+      env: { ...process.env, ...(CONFIG.server.env || {}) },
+      stdio: ["ignore", "ignore", "pipe"],
+    },
   });
   let serverErr = "";
-  server.stderr.on("data", (d) => (serverErr += d.toString()));
+  server.child.stderr.on("data", (d) => (serverErr += d.toString()));
   let up = false;
   for (let i = 0; i < 80; i += 1) {
     try {
@@ -125,7 +138,7 @@ if (CONFIG.server) {
   }
   if (!up) {
     console.error("server never came up\n" + serverErr.slice(-2000));
-    server.kill();
+    server.reap();
     process.exit(1);
   }
 } else {
@@ -201,7 +214,7 @@ try {
   // (e.g. careers-kimi asserted its assetPrefix and a locale-spelling quirk;
   //  those belong to the project, not the template.)
 } finally {
-  server?.kill();
+  server?.reap();
 }
 
 const failed = results.filter((r) => !r.ok);

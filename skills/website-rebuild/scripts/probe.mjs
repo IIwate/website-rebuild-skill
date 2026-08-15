@@ -9,7 +9,23 @@
  *        [--height 1080] [--scroll 0.5] [--eval "expr"]
  *        [--evalAfter "expr"] [--evalAfterDelay 2000] [--mobile]
  *        [--walk 24] [--walk-dwell 700] [--no-external]
+ *        [--format png|jpeg] [--quality 92]
  *        [--side mirror|rebuild] [--cdp-port N]
+ *
+ * BROWSER LIFECYCLE (scripts/lib/chrome.mjs — read its header once):
+ *   The browser is spawned as a PROCESS GROUP and the whole group is reaped on
+ *   every exit path, because `chrome.kill()` leaves the 6-8 renderer children
+ *   running: measured 129 orphaned Chrome processes, oldest 2 days old. On a
+ *   toolchain whose pixel tolerance is derived from the reference side compared
+ *   with itself, that background load WIDENS the tolerance — a leak here makes
+ *   the pixel gate quietly forgive real differences.
+ *
+ * SCREENSHOTS HAVE A HARD CEILING: `Page.captureScreenshot` returns the frame as
+ *   one base64 WebSocket message, and Node's built-in WebSocket dies (close
+ *   1006) above ~2.4 M chars — roughly a 1500x900 PNG. Past that, PNG simply
+ *   cannot arrive. --format jpeg --quality 92 is the escape hatch (measured
+ *   827,968 chars / 58 ms at 1728x1080). The failure used to be a silent hang;
+ *   it is now a named error with this advice attached.
  *
  * PORTS AND IDENTITY (scripts/lib/ports.mjs — read its header once):
  *   The debug port is allocated per (workspace, script, side) instead of being
@@ -42,20 +58,22 @@
  *   -> shopifydesign-rebuild (--no-external assertion for the offline gate,
  *      --walk full-page scroll walk).
  */
-import { spawn } from 'node:child_process';
-import { writeFile, mkdtemp, rm, access } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { writeFile, access } from 'node:fs/promises';
 import {
   annotateHost,
   assertOwnBrowser,
-  assertPortFree,
   chromeSentinel,
   describePort,
   fatal,
   fetchIdentity,
   resolvePort,
 } from './lib/ports.mjs';
+import {
+  launchChrome,
+  preflightChrome,
+  shotCeilingAdvice,
+  shotLikelyTooBig,
+} from './lib/chrome.mjs';
 
 // Chrome discovery: first existing candidate wins; override with CHROME_PATH.
 const CHROME_CANDIDATES = [
@@ -86,12 +104,23 @@ const flag = (name, dflt) => {
 };
 const has = (name) => args.includes('--' + name);
 if (!url) {
-  console.error('usage: probe.mjs <url> [--shot out.png] [--wait ms] [--scroll frac] [--walk steps] [--walk-dwell ms] [--no-external] [--eval expr] [--evalAfter expr] [--mobile] [--side mirror|rebuild] [--cdp-port N]');
+  console.error('usage: probe.mjs <url> [--shot out.png] [--format png|jpeg] [--quality 92] [--wait ms] [--scroll frac] [--walk steps] [--walk-dwell ms] [--no-external] [--eval expr] [--evalAfter expr] [--mobile] [--side mirror|rebuild] [--cdp-port N]');
   process.exit(2);
 }
 const WAIT = Number(flag('wait', 6000));
 const W = Number(flag('width', has('mobile') ? 390 : 1728));
 const H = Number(flag('height', has('mobile') ? 844 : 1080));
+const SHOT = flag('shot', null);
+// Format defaults to PNG (byte-faithful), but follows the output extension when
+// one is given, so `--shot x.jpg` does not silently write PNG bytes into a .jpg.
+const SHOT_FORMAT = String(
+  flag('format', SHOT && /\.jpe?g$/i.test(SHOT) ? 'jpeg' : 'png'),
+).toLowerCase();
+const SHOT_QUALITY = Number(flag('quality', 92));
+if (!['png', 'jpeg', 'webp'].includes(SHOT_FORMAT)) {
+  console.error(`FATAL: --format must be png, jpeg or webp (got ${SHOT_FORMAT})`);
+  process.exit(2);
+}
 
 // Which side this probe is looking at. It only selects the debug port, but that
 // is what lets a mirror probe and a rebuild probe run at the same time — the
@@ -125,38 +154,46 @@ if (EXPECT_SIDE) {
   console.log(`[probe] server identity confirmed: side ${String(id.side).toUpperCase()} token ${id.token}`);
 }
 
-await assertPortFree(port, {
+// Reap this role's orphans from a previous run BEFORE claiming the port (one of
+// them may be what is holding it), then refuse to move if it is still taken.
+await preflightChrome({
+  role: 'probe',
+  port,
   tool: 'probe.mjs',
   note: PORT_EXPLICIT ? 'this port came from --cdp-port/CDP_PORT' : null,
 });
 
 const CHROME = await findChrome();
-const profile = await mkdtemp(join(tmpdir(), 'probe-chrome-'));
 // One-shot landing page: the attach step below refuses anything else, so this
 // probe cannot end up driving a browser some other script started.
 const sentinel = chromeSentinel();
-const chrome = spawn(CHROME, [
-  '--headless=new',
-  `--remote-debugging-port=${port}`,
-  `--user-data-dir=${profile}`,
-  '--no-first-run',
-  '--disable-gpu-sandbox',
-  '--hide-scrollbars',
-  '--mute-audio',
-  // Anti-throttling (oryzo/samsy/noomo all hit this independently): background
-  // rAF throttling masquerades as a dead site and corrupts every measurement.
-  '--disable-background-timer-throttling',
-  '--disable-renderer-backgrounding',
-  '--disable-backgrounding-occluded-windows',
-  `--window-size=${W},${H}`,
-  sentinel.url,
-]);
-const cleanup = async (code) => {
-  chrome.kill();
-  await rm(profile, { recursive: true, force: true }).catch(() => {});
+// launchChrome owns --user-data-dir (a temp profile it deletes) and the reaping:
+// detached process group + teardown on exit/SIGINT/SIGTERM/SIGHUP/uncaught.
+const chrome = launchChrome({
+  bin: CHROME,
+  role: 'probe',
+  port,
+  tool: 'probe.mjs',
+  args: [
+    '--headless=new',
+    `--remote-debugging-port=${port}`,
+    '--no-first-run',
+    '--disable-gpu-sandbox',
+    '--hide-scrollbars',
+    '--mute-audio',
+    // Anti-throttling (oryzo/samsy/noomo all hit this independently): background
+    // rAF throttling masquerades as a dead site and corrupts every measurement.
+    '--disable-background-timer-throttling',
+    '--disable-renderer-backgrounding',
+    '--disable-backgrounding-occluded-windows',
+    `--window-size=${W},${H}`,
+    sentinel.url,
+  ],
+});
+const cleanup = (code) => {
+  chrome.reap();
   process.exit(code);
 };
-process.on('exit', () => { try { chrome.kill('SIGKILL'); } catch {} });
 
 // Attach ONLY to our own sentinel page. The old code took the first target of
 // type "page", which on a busy endpoint is whatever page happens to be first —
@@ -166,10 +203,35 @@ const target = await assertOwnBrowser({ port, sentinel, tool: 'probe.mjs', pid: 
 const ws = new WebSocket(target.webSocketDebuggerUrl);
 let msgId = 0;
 const pending = new Map();
-const send = (method, params = {}) =>
+// A dead socket must fail LOUDLY. Without this handler an oversized screenshot
+// (see the header) closes the connection with 1006 and every in-flight call
+// simply never settles — the probe hangs until something outside kills it, and
+// prints nothing about why.
+let socketClose = null;
+ws.onclose = (ev) => {
+  socketClose = ev?.code ?? 1006;
+  const err = new Error(
+    `CDP socket closed (${socketClose}) with ${pending.size} call(s) in flight — ` +
+      `if this happened on a screenshot, the frame exceeded Node's WebSocket payload ceiling`,
+  );
+  for (const p of pending.values()) p.reject(err);
+  pending.clear();
+};
+const send = (method, params = {}, timeoutMs = 60000) =>
   new Promise((resolve, reject) => {
+    if (socketClose !== null) {
+      reject(new Error(`CDP socket already closed (${socketClose}); cannot send ${method}`));
+      return;
+    }
     const id = ++msgId;
-    pending.set(id, { resolve, reject });
+    const timer = setTimeout(() => {
+      pending.delete(id);
+      reject(new Error(`CDP timeout after ${timeoutMs}ms: ${method}`));
+    }, timeoutMs);
+    pending.set(id, {
+      resolve: (v) => { clearTimeout(timer); resolve(v); },
+      reject: (e) => { clearTimeout(timer); reject(e); },
+    });
     ws.send(JSON.stringify({ id, method, params }));
   });
 
@@ -300,11 +362,31 @@ if (evalAfter) {
   console.log('EVAL-AFTER:', JSON.stringify(r.result?.value ?? r.result?.description, null, 1));
 }
 
-const shot = flag('shot', null);
-if (shot) {
-  const { data } = await send('Page.captureScreenshot', { format: 'png' });
-  await writeFile(shot, Buffer.from(data, 'base64'));
-  console.log('screenshot ->', shot);
+if (SHOT) {
+  // The measured ceiling is a property of the transport, not of the page, so it
+  // is knowable before the call — say so up front, then say it again with the
+  // real numbers if the call actually dies.
+  if (shotLikelyTooBig({ w: W, h: H, format: SHOT_FORMAT })) {
+    for (const l of shotCeilingAdvice({ w: W, h: H, format: SHOT_FORMAT })) console.error(`[probe] ${l}`);
+  }
+  let data;
+  try {
+    ({ data } = await send('Page.captureScreenshot', {
+      format: SHOT_FORMAT,
+      ...(SHOT_FORMAT === 'png' ? {} : { quality: SHOT_QUALITY }),
+    }, 120000));
+  } catch (e) {
+    console.error(`[probe] FATAL: screenshot failed: ${e.message}`);
+    for (const l of shotCeilingAdvice({
+      w: W, h: H,
+      format: SHOT_FORMAT,
+      quality: SHOT_FORMAT === 'png' ? null : SHOT_QUALITY,
+      closeCode: socketClose,
+    })) console.error(`[probe] ${l}`);
+    cleanup(4);
+  }
+  await writeFile(SHOT, Buffer.from(data, 'base64'));
+  console.log(`screenshot -> ${SHOT} (${W}x${H} ${SHOT_FORMAT}${SHOT_FORMAT === 'png' ? '' : ' q' + SHOT_QUALITY}, ${data.length.toLocaleString()} base64 chars)`);
 }
 
 console.log(`\n=== console (${consoleMsgs.length}) ===`);
@@ -326,4 +408,4 @@ const errCount =
   (NO_EXTERNAL ? extCount : 0) +
   consoleMsgs.filter((c) => c.startsWith('[error]')).length;
 console.log(`\nRESULT: ${errCount === 0 ? 'CLEAN' : errCount + ' problems'}`);
-await cleanup(errCount === 0 ? 0 : 1);
+cleanup(errCount === 0 ? 0 : 1);

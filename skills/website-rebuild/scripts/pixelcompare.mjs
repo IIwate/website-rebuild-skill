@@ -3,8 +3,9 @@
 // (rebuild vs mirror): screenshot both at the same viewport in the same
 // headless Chrome, quantify the difference on a coarse 64x40 grid-cell
 // luma/color metric (suited to live scenes — noise, videos, particles — where
-// an exact diff is meaningless), write both PNGs, a labeled side-by-side
-// composite JPG, and merge the numbers into <out>/metric.json.
+// an exact diff is meaningless), write both frames (PNG by default, JPEG on
+// demand), a labeled side-by-side composite JPG, and merge the numbers into
+// <out>/metric.json.
 //
 //   node pixelcompare.mjs --a http://localhost:5173/ --b http://localhost:5175/
 //     [--name home]                    view name (keys metric.json + filenames)
@@ -14,7 +15,22 @@
 //     [--seed "js expr"]               injected before load on BOTH sides
 //                                      (e.g. preseed localStorage to skip a tutorial)
 //     [--label-a REBUILD] [--label-b MIRROR]
+//     [--format png|jpeg] [--quality 92]   frame encoding (see the ceiling below)
 //     [--max-mean 12]                  optional gate: exit 1 if meanAbsDiff exceeds
+//
+// VIEWPORT SIZE IS LIMITED BY THE TRANSPORT, NOT BY CHROME. CDP hands the whole
+// frame back as ONE base64 WebSocket message and Node's built-in WebSocket dies
+// (close 1006) above ~2.4 M chars. Measured on one machine, one Chrome:
+//   1280x800 png 2,395,616 chars OK (280ms) | 390x844 png 734,240 OK
+//   1728x1080 jpeg q100 1,995,384 OK (106ms) | 1728x1080 jpeg q92 827,968 OK (58ms)
+//   1728x1080 png ~3,600,000 -> DEAD: socket closes and every later CDP call
+//   times out with no error of its own.
+// So at roughly >= 1500x900 PNG cannot arrive at all, and the old failure mode
+// was a SILENT HANG. Now the socket's close is turned into a named error with
+// the fix attached, and --format jpeg --quality 92 is the escape hatch: 58 ms a
+// frame, and verified noise-free in the field (two shots of the same static
+// state came back byte-identical). Default stays PNG because a byte-exact gate
+// needs it — drop to jpeg only when the viewport says you must.
 //
 // Drive different app states by running this once per state with a --ready /
 // --seed combination (the samsyninja original walked its menu states inline;
@@ -30,21 +46,36 @@
 //   photographed twice produces a flawless report in which every number is
 //   real and the comparison is empty.
 //
+// BROWSER LIFECYCLE (scripts/lib/ports.mjs's sibling, scripts/lib/chrome.mjs):
+//   Chrome runs as a detached PROCESS GROUP and the group is reaped on every
+//   exit path. `chrome.kill('SIGKILL')` kills only the browser process and
+//   orphans the 6-8 renderer/GPU/network children it forked (measured: 129 live
+//   Chrome processes, ~16 leaked profiles, oldest 2 days 1 hour, load average
+//   8.7 with "nothing running"). For THIS script that is a correctness bug, not
+//   a tidiness one: a pixel gate's tolerance is not a hand-picked epsilon, it is
+//   the band you get by comparing the reference side WITH ITSELF over N runs.
+//   Background load makes those N runs disagree more -> the band widens -> the
+//   gate silently forgives real cross-side residuals. A leaked process LOOSENS
+//   the gate.
+//
 // Zero npm dependencies: raw CDP over Node's built-in WebSocket (Node 22+).
 // Adapted from samsyninja-rebuild/scripts/pixelcompare.mjs (64x40 grid +
 // metric.json). For per-pixel byte gates + diff heatmaps see side-by-side.mjs.
 
-import { spawn } from 'node:child_process';
-import { mkdtempSync, rmSync, writeFileSync, readFileSync, mkdirSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { writeFileSync, readFileSync, mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 import {
   assertDistinctSides,
   assertOwnBrowser,
-  assertPortFree,
   chromeSentinel,
   resolvePort,
 } from './lib/ports.mjs';
+import {
+  launchChrome,
+  preflightChrome,
+  shotCeilingAdvice,
+  shotLikelyTooBig,
+} from './lib/chrome.mjs';
 
 const args = process.argv.slice(2);
 const flag = (name, dflt) => {
@@ -57,13 +88,27 @@ const flag = (name, dflt) => {
 const URL_A = flag('a', null);
 const URL_B = flag('b', null);
 if (!URL_A || !URL_B) {
-  console.error('usage: pixelcompare.mjs --a <urlA> --b <urlB> [--name home] [--out docs/pixelcompare] [--width 1280] [--height 800] [--settle 6000] [--ready expr] [--seed expr] [--label-a A] [--label-b B] [--max-mean N]');
+  console.error('usage: pixelcompare.mjs --a <urlA> --b <urlB> [--name home] [--out docs/pixelcompare] [--width 1280] [--height 800] [--settle 6000] [--ready expr] [--seed expr] [--label-a A] [--label-b B] [--format png|jpeg] [--quality 92] [--max-mean N]');
   process.exit(2);
 }
 const NAME = flag('name', 'home');
 const OUT = flag('out', join(process.cwd(), 'docs', 'pixelcompare'));
 const W = Number(flag('width', 1280));
 const H = Number(flag('height', 800));
+// PNG by default: the saved frames are evidence and a byte-exact gate needs
+// lossless bytes. jpeg is the documented escape hatch above ~1500x900, where
+// PNG cannot cross the CDP WebSocket at all (see the header).
+const FORMAT = String(flag('format', 'png')).toLowerCase();
+const QUALITY = Number(flag('quality', 92));
+if (!['png', 'jpeg', 'webp'].includes(FORMAT)) {
+  console.error(`FATAL: --format must be png, jpeg or webp (got ${FORMAT})`);
+  process.exit(2);
+}
+if (FORMAT !== 'png' && (!Number.isInteger(QUALITY) || QUALITY < 1 || QUALITY > 100)) {
+  console.error(`FATAL: --quality must be an integer 1..100 (got ${flag('quality', 92)})`);
+  process.exit(2);
+}
+const EXT = FORMAT === 'jpeg' ? 'jpg' : FORMAT;
 const SETTLE = Number(flag('settle', 6000));
 const READY = flag('ready', null);
 const SEED = flag('seed', null);
@@ -82,10 +127,6 @@ const CHROME =
   process.env.CHROME_BIN ||
   process.env.CHROME_PATH ||
   '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome';
-
-const children = [];
-process.on('exit', () => children.forEach((c) => { try { c.kill('SIGKILL'); } catch {} }));
-process.on('SIGINT', () => process.exit(2));
 
 const waitFor = (fn, ms, label) => new Promise((resolve, reject) => {
   const t0 = Date.now();
@@ -118,18 +159,28 @@ for (const [label, id] of [[LABEL_A, idA], [LABEL_B, idB]]) {
 
 // --- chrome ---
 console.log(`[pixel] cdp port ${CDP_LABEL}`);
-await assertPortFree(CDP_PORT, { tool: 'pixelcompare.mjs' });
-const profile = mkdtempSync(join(tmpdir(), 'pixelcompare-'));
+// Sweep this role's orphans from a previous run first (they are the most likely
+// occupant of this port, and their load is what would widen the band), then
+// refuse to move if the port is still taken.
+await preflightChrome({ role: 'pixelcompare', port: CDP_PORT, tool: 'pixelcompare.mjs' });
 const sentinel = chromeSentinel();
-children.push(spawn(CHROME, [
-  '--headless=new', `--remote-debugging-port=${CDP_PORT}`, `--user-data-dir=${profile}`,
-  '--no-first-run', '--disable-background-timer-throttling', '--disable-renderer-backgrounding',
-  '--mute-audio', `--window-size=${W},${H}`, '--autoplay-policy=no-user-gesture-required', sentinel.url,
-], { stdio: 'ignore' }));
+// Detached process group + reaping on every exit path lives in lib/chrome.mjs;
+// --user-data-dir is a temp profile it creates and deletes.
+const chrome = launchChrome({
+  bin: CHROME,
+  role: 'pixelcompare',
+  port: CDP_PORT,
+  tool: 'pixelcompare.mjs',
+  args: [
+    '--headless=new', `--remote-debugging-port=${CDP_PORT}`,
+    '--no-first-run', '--disable-background-timer-throttling', '--disable-renderer-backgrounding',
+    '--mute-audio', `--window-size=${W},${H}`, '--autoplay-policy=no-user-gesture-required', sentinel.url,
+  ],
+});
 // Our own page or nothing: attaching to a browser this script did not start
 // would shoot whatever that browser is showing and file it under these labels.
 const target = await assertOwnBrowser({
-  port: CDP_PORT, sentinel, tool: 'pixelcompare.mjs', pid: children[children.length - 1].pid,
+  port: CDP_PORT, sentinel, tool: 'pixelcompare.mjs', pid: chrome.pid,
 });
 
 const ws = new WebSocket(target.webSocketDebuggerUrl);
@@ -144,9 +195,34 @@ ws.onmessage = (event) => {
     msg.error ? p.reject(new Error(msg.error.message)) : p.resolve(msg.result);
   }
 };
-const cdp = (method, params = {}) => new Promise((resolve, reject) => {
+// THE loud-failure hook. An oversized screenshot does not return an error, it
+// kills the connection (close 1006); with no onclose handler and no timeout the
+// in-flight call never settles and the script hangs forever, printing nothing.
+// A silent timeout is the worst failure shape there is, so both are handled.
+let socketClose = null;
+ws.onclose = (ev) => {
+  socketClose = ev?.code ?? 1006;
+  const err = new Error(
+    `CDP socket closed (${socketClose}) with ${pending.size} call(s) in flight — ` +
+      `on a screenshot this means the frame exceeded Node's WebSocket payload ceiling`,
+  );
+  for (const p of pending.values()) p.reject(err);
+  pending.clear();
+};
+const cdp = (method, params = {}, timeoutMs = 120000) => new Promise((resolve, reject) => {
+  if (socketClose !== null) {
+    reject(new Error(`CDP socket already closed (${socketClose}); cannot send ${method}`));
+    return;
+  }
   const id = ++msgId;
-  pending.set(id, { resolve, reject });
+  const timer = setTimeout(() => {
+    pending.delete(id);
+    reject(new Error(`CDP timeout after ${timeoutMs}ms: ${method}`));
+  }, timeoutMs);
+  pending.set(id, {
+    resolve: (v) => { clearTimeout(timer); resolve(v); },
+    reject: (e) => { clearTimeout(timer); reject(e); },
+  });
   ws.send(JSON.stringify({ id, method, params }));
 });
 const evalJs = async (expression) => {
@@ -160,11 +236,40 @@ await cdp('Page.enable');
 await cdp('Emulation.setDeviceMetricsOverride', { width: W, height: H, deviceScaleFactor: 1, mobile: false });
 if (SEED) await cdp('Page.addScriptToEvaluateOnNewDocument', { source: SEED });
 
+/** Die with an actionable message instead of hanging or dumping a stack. */
+function shotFatal(label, err) {
+  console.error(`[pixel] FATAL: screenshot for ${label} failed: ${err.message}`);
+  for (const l of shotCeilingAdvice({
+    w: W, h: H,
+    format: FORMAT,
+    quality: FORMAT === 'png' ? null : QUALITY,
+    closeCode: socketClose,
+  })) console.error(`[pixel] ${l}`);
+  chrome.reap();
+  process.exit(4);
+}
+
 async function capture(url, label) {
   await cdp('Page.navigate', { url });
   if (READY) await waitFor(() => evalJs(READY), 120000, label + ' ready');
   await new Promise((resolve) => setTimeout(resolve, SETTLE)); // settle: transitions + fade-ins
-  return (await cdp('Page.captureScreenshot', { format: 'png' })).data;
+  let data;
+  try {
+    ({ data } = await cdp('Page.captureScreenshot', {
+      format: FORMAT,
+      ...(FORMAT === 'png' ? {} : { quality: QUALITY }),
+    }));
+  } catch (e) {
+    shotFatal(label, e);
+  }
+  console.log(`[pixel]   ${label}: ${W}x${H} ${FORMAT}${FORMAT === 'png' ? '' : ' q' + QUALITY}, ${data.length.toLocaleString()} base64 chars`);
+  return data;
+}
+
+// The ceiling is a property of the transport and is knowable before the shot,
+// so warn while the advice can still be acted on cheaply.
+if (shotLikelyTooBig({ w: W, h: H, format: FORMAT })) {
+  for (const l of shotCeilingAdvice({ w: W, h: H, format: FORMAT })) console.error(`[pixel] ${l}`);
 }
 
 console.log(`[pixel] capturing A (${LABEL_A})…`);
@@ -173,15 +278,36 @@ console.log(`[pixel] capturing B (${LABEL_B})…`);
 const shotB = await capture(URL_B, LABEL_B);
 
 mkdirSync(OUT, { recursive: true });
-writeFileSync(join(OUT, `${LABEL_A.toLowerCase()}-${NAME}.png`), Buffer.from(shotA, 'base64'));
-writeFileSync(join(OUT, `${LABEL_B.toLowerCase()}-${NAME}.png`), Buffer.from(shotB, 'base64'));
+writeFileSync(join(OUT, `${LABEL_A.toLowerCase()}-${NAME}.${EXT}`), Buffer.from(shotA, 'base64'));
+writeFileSync(join(OUT, `${LABEL_B.toLowerCase()}-${NAME}.${EXT}`), Buffer.from(shotB, 'base64'));
+
+// The two steps below send BOTH frames back INTO the browser inlined in a
+// Runtime.evaluate expression, so that message is ~2x one frame. The outbound
+// direction has more headroom than the inbound one (4.37 M chars measured OK
+// here), but it is the same ceiling and it is the reason a run can survive both
+// screenshots and then die on the metric. When it does, say which step and why
+// instead of printing a bare 120 s timeout.
+const INLINE_B64 = shotA.length + shotB.length;
+const MIME = `data:image/${FORMAT};base64,`;
+const inlineFatal = (step, err) => {
+  console.error(`[pixel] FATAL: the ${step} step failed: ${err.message}`);
+  console.error(`[pixel]   it inlines BOTH frames into one CDP message (${INLINE_B64.toLocaleString()} base64 chars) and reads the result back.`);
+  for (const l of shotCeilingAdvice({
+    w: W, h: H, format: FORMAT, quality: FORMAT === 'png' ? null : QUALITY,
+    sizeB64: INLINE_B64, closeCode: socketClose,
+  })) console.error(`[pixel] ${l}`);
+  chrome.reap();
+  process.exit(4);
+};
 
 // --- grid-cell diff + composite, computed inside the same chrome ---
-const metric = await evalJs(`(async () => {
+let metric;
+try {
+  metric = await evalJs(`(async () => {
   const load = (b64) => new Promise((resolve) => {
     const img = new Image();
     img.onload = () => resolve(img);
-    img.src = 'data:image/png;base64,' + b64;
+    img.src = ${JSON.stringify(MIME)} + b64;
   });
   const a = await load(${JSON.stringify(shotA)});
   const b = await load(${JSON.stringify(shotB)});
@@ -203,13 +329,18 @@ const metric = await evalJs(`(async () => {
   const mean = sum / (GW * GH);
   return { meanAbsDiff: +mean.toFixed(2), worstCellDiff: +worst.toFixed(1), worstCell, similarityPct: +(100 - mean / 2.55).toFixed(1) };
 })()`);
+} catch (e) {
+  inlineFatal('metric', e);
+}
 console.log(`[pixel] ${NAME}:`, JSON.stringify(metric));
 
-const composite = await evalJs(`(async () => {
+let composite;
+try {
+  composite = await evalJs(`(async () => {
   const load = (b64) => new Promise((resolve) => {
     const img = new Image();
     img.onload = () => resolve(img);
-    img.src = 'data:image/png;base64,' + b64;
+    img.src = ${JSON.stringify(MIME)} + b64;
   });
   const a = await load(${JSON.stringify(shotA)});
   const b = await load(${JSON.stringify(shotB)});
@@ -224,6 +355,9 @@ const composite = await evalJs(`(async () => {
   ctx.drawImage(b, 0, a.height + 40);
   return canvas.toDataURL('image/jpeg', 0.85).split(',')[1];
 })()`);
+} catch (e) {
+  inlineFatal('composite', e);
+}
 writeFileSync(join(OUT, `side-by-side-${NAME}.jpg`), Buffer.from(composite, 'base64'));
 
 // merge into metric.json so repeated runs (one per view/state) accumulate
@@ -234,12 +368,12 @@ writeFileSync(join(OUT, 'metric.json'), JSON.stringify(metrics, null, 2));
 console.log('[pixel] wrote', OUT);
 
 ws.close();
-// Kill the browser BEFORE deleting its profile, and never let the cleanup
-// decide the exit code: a live Chrome keeps writing into the profile dir, so
-// rmSync throws ENOTEMPTY and a passing comparison exits non-zero — a red that
-// says nothing about the pixels (observed under concurrent runs).
-for (const c of children) { try { c.kill('SIGKILL'); } catch {} }
-try { rmSync(profile, { recursive: true, force: true }); } catch {}
+// Reap the whole process group and only then delete the profile — a live Chrome
+// keeps writing into that directory, so removing it first throws ENOTEMPTY and a
+// passing comparison exits non-zero on a failure that says nothing about the
+// pixels (observed under concurrent runs). Both halves live in lib/chrome.mjs,
+// which also swallows cleanup errors so they can never decide the exit code.
+chrome.reap();
 
 if (MAX_MEAN !== null && metric.meanAbsDiff > Number(MAX_MEAN)) {
   console.error(`[pixel] GATE FAIL: meanAbsDiff ${metric.meanAbsDiff} > ${MAX_MEAN}`);

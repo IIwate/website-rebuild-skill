@@ -3,7 +3,7 @@ name: website-rebuild
 description: 1:1 rebuild of award-winning creative websites (WebGL / scroll-animation / portfolio sites). Evidence-driven pipeline - mirror-first forensics, line-number-traceable reverse engineering of minified bundles, verbatim porting, quantitative verification gates. Use when user asks to "复刻网站", "重建网站", "1:1 rebuild", "clone this site", or provides a URL of a creative/award site to reproduce.
 compatibility: Requires Node 22+ (bundled scripts use built-in WebSocket to talk to CDP), npx, and a local Chrome/Chromium for headless comparison. POSIX shell optional - the Step 0 probe protocol has a zero-dependency Node equivalent (scripts/fingerprint.mjs) for shells without curl/cmp/tr/perl (e.g. Windows PowerShell). Agent-agnostic - works in any Agent Skills-compatible runtime.
 metadata:
-  version: "0.1.9"
+  version: "0.1.10"
 ---
 
 # Website Rebuild（获奖创意站 1:1 复刻）
@@ -125,11 +125,12 @@ Step 1 侦察结果决定加载哪些场景指南（按需，不要全量加载�
 | `scripts/probe.mjs` | CDP 无头探针（console/异常/网络 CLEAN 判定，退出码进 CI；`--no-external` 断言零外联、`--walk` 全滚动走查） | M0.5 起每 commit |
 | `scripts/verify-routes.mjs` | 路由/重定向/状态码契约门 | M2+ |
 | `scripts/verify-ssr.mjs` | SSR/DOM 逐字节门 | M2+（有 SSR 产物时最先建） |
-| `scripts/pixelcompare.mjs` | 量化像素对拍（粗网格相似度 + metric 输出） | M(n-1) |
+| `scripts/pixelcompare.mjs` | 量化像素对拍（粗网格相似度 + metric 输出）。**视口 ≳ 1500×900 时 PNG 过不了 CDP 载荷硬顶**，改 `--format jpeg --quality 92`（撞顶时响亮失败并给降级清单，不再无声超时） | M(n-1) |
 | `scripts/side-by-side.mjs` | 双侧截图并排合成图（对拍产物留证） | M(n-1) |
 | `scripts/probe-shim.js` | 确定性驱动 shim（接管整个熵面：rAF/timer/`performance.now`/`Date.now`/定种 `Math.random`，手动泵到任意 t，双侧同位注入） | M(n-1) |
 | `scripts/dump-timelines.mjs` | GLB 动画曲线 dump 成 JSON 数值账本 | M1（数据驱动动画时） |
 | `scripts/lib/png.mjs` | 零依赖 PNG 编解码 | 对拍脚本依赖 |
+| `scripts/lib/chrome.mjs` | 无头浏览器生命周期（**进程组**收割 + 全退出路径 + 启动前孤儿自检；漏子进程会抬高参照侧自比带宽，把像素门调松）与 CDP 载荷硬顶常量。`node scripts/lib/chrome.mjs --all/--reap` 可查/回收残留 | 所有 CDP 脚本依赖 |
 
 ## 复刻工程目录结构
 

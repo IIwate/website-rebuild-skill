@@ -16,6 +16,15 @@
 // the evidence base for the whole mirror, and a session that recorded another
 // script's browser would produce a HAVE/GAP ledger for another program.
 //
+// BROWSER LIFECYCLE (scripts/lib/chrome.mjs — read its header once): Chrome is
+// spawned as a detached PROCESS GROUP and the group is reaped on every exit
+// path. `chrome.kill()` alone leaves the 6-8 renderer/GPU/network children
+// running (measured: 129 orphans, oldest 2 days), and this pass is the one that
+// runs longest and gets Ctrl-C'd most. Leaked renderers are not just untidy:
+// downstream, the pixel gate derives its tolerance from the reference side
+// compared with itself, so background load WIDENS that band and makes the gate
+// forgive real differences.
+//
 // Usage:
 //   node netcapture.mjs --origin https://example.com [--mirror legacy-mirror]
 //     [--routes /,/about,/contact]      routes to visit (default "/")
@@ -51,9 +60,8 @@
 
 import fs from "node:fs/promises";
 import path from "node:path";
-import { spawn } from "node:child_process";
-import { tmpdir } from "node:os";
-import { assertOwnBrowser, assertPortFree, chromeSentinel, resolvePort } from "./lib/ports.mjs";
+import { assertOwnBrowser, chromeSentinel, resolvePort } from "./lib/ports.mjs";
+import { launchChrome, preflightChrome } from "./lib/chrome.mjs";
 // Shared, query-aware url -> local path. This pass keys its records by url+search
 // but used to resolve disk by pathname alone, so on a query-parameterised image
 // CDN every responsive variant after the first reported HAVE against a file that
@@ -189,16 +197,23 @@ function client(ws) {
 // ---------------------------------------------------------------------------
 
 console.log(`[netcapture] cdp port ${CDP_LABEL}`);
-await assertPortFree(CDP_PORT, { tool: "netcapture.mjs" });
+// Orphans from a previous run get reported and reaped BEFORE the port check —
+// one of them is the most likely occupant of this port.
+await preflightChrome({ role: "netcapture", port: CDP_PORT, tool: "netcapture.mjs" });
 
 const chromePath = await findChrome();
-const profile = path.join(tmpdir(), `netcapture-${CDP_PORT}`);
-await fs.rm(profile, { recursive: true, force: true });
 const sentinel = chromeSentinel();
 
-const chrome = spawn(
-  chromePath,
-  [
+// launchChrome owns --user-data-dir (fresh temp profile, deleted on teardown)
+// and the reaping: detached process group, torn down on exit / SIGINT / SIGTERM
+// / SIGHUP / uncaught exception. Nothing this script starts can outlive it.
+const chrome = launchChrome({
+  bin: chromePath,
+  role: "netcapture",
+  port: CDP_PORT,
+  tool: "netcapture.mjs",
+  stdio: ["ignore", "ignore", "pipe"],
+  args: [
     `--remote-debugging-port=${CDP_PORT}`,
     "--headless=new",
     // Software GL is OPT-IN (--swiftshader), not the default. The flag makes
@@ -218,16 +233,10 @@ const chrome = spawn(
     "--disable-renderer-backgrounding",
     "--disable-backgrounding-occluded-windows",
     "--mute-audio",
-    `--user-data-dir=${profile}`,
     // One-shot landing page whose URL only this browser can be showing; the
     // ownership check below refuses to drive an endpoint that lacks it.
     sentinel.url,
   ],
-  { stdio: ["ignore", "ignore", "pipe"] },
-);
-// headless Chrome must not outlive the script (careers-kimi lesson: SIGKILL it)
-process.on("exit", () => {
-  try { chrome.kill("SIGKILL"); } catch {}
 });
 
 // Ownership before protocol: connect() would happily attach to whatever CDP
@@ -307,7 +316,10 @@ for (const [name, vp] of Object.entries(VIEWPORTS)) {
 }
 
 await cdp.send("Target.closeTarget", { targetId });
-chrome.kill();
+// Reap the whole process group (not just the browser process) and delete the
+// temp profile — the disk diff below can take a while and there is no reason to
+// hold 8 renderers open through it.
+chrome.reap();
 
 // --- Diff against what is on disk ------------------------------------------
 
