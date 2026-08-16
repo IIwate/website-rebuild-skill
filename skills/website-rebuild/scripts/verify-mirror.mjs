@@ -41,6 +41,14 @@
  *      crawler's blind spot. This is mirroring.md's "pass 4" as an executable
  *      gate. Deliberate non-files (base-URL literals) and accepted-degradation
  *      hosts get an allow-list: --allow-missing external.txt.
+ *      TWO WAYS THIS GATE HAS GONE FALSELY GREEN, both about its INPUT rather
+ *      than its assertion — the difference "= ∅" cannot tell you about:
+ *        - the reference set was short a whole CLASS of references (escaped
+ *          URL spellings; see lib/extract-refs.mjs). Fixed there, which is why
+ *          the extractor is shared and not copied.
+ *        - the excuse list was matched by PREFIX, so one "this base literal is
+ *          not a file" line excused an entire subtree of real missing files.
+ *          Excuses are now exact unless a trailing "*" declares otherwise.
  *   4  RESAMPLE (optional, OFF by default) — re-request a few URLs from the
  *      live origin and compare sha256 against the ledger. Off by default so a
  *      routine gate run never touches the source site; when on it is
@@ -54,8 +62,11 @@
  *   [--origin https://example.com]  default: the manifest's own `origin`
  *   [--hosts a,b]                   extra hosts for the closure pass (default:
  *                                   every host that appears in the ledger)
- *   [--allow-missing FILE]          newline list; a line matching the start of a
- *                                   missing URL excuses it ("#" comments ok)
+ *   [--allow-missing FILE]          newline list of registered excuses ("#"
+ *                                   comments ok). A host-only line excuses that
+ *                                   whole host; a full URL excuses EXACTLY
+ *                                   itself; a trailing "*" declares a prefix
+ *                                   and is printed on every run
  *   [--skip mapping,ledger,closure,resample]
  *   [--resample N] [--resample-delay MS] [--resample-seed N] [--resample-html]
  *   [--max-report 25]
@@ -359,7 +370,31 @@ if (!SKIP.has("ledger")) {
 if (!SKIP.has("closure")) {
   console.log(`\n--- gate CLOSURE (reference set − disk set = ∅) ---`);
 
-  const allow = [];
+  // AN EXCUSE'S MATCHING GRANULARITY IS ITS OWN FAILURE MODE【objectarchive N9】
+  // ---------------------------------------------------------------------
+  // This list used to be matched by PREFIX, every line. Registering "this
+  // base-URL literal is not a file" then silently registered "nothing missing
+  // under this directory needs reporting". Measured: one
+  // `NOTFILE …/8914/files` line — the base a compositor concatenates onto —
+  // sat exactly above the shop's own uploaded assets, and excused a whole
+  // subtree (fonts + 122 frame PNGs) from the closure gate. A gate's excuse
+  // list is easier to make too wide than its assertion is.
+  //
+  // So an excuse now means exactly what it is written as:
+  //   host only  (`telemetry.example.net`, `https://telemetry.example.net/`)
+  //              -> the whole host is excused. That is what "accepted
+  //                 degradation / stubbed vendor" decides, at host scope.
+  //   full URL   (`https://cdn.example.com/a/8914/files`)
+  //              -> EXACT. It excuses itself and nothing below it.
+  //   trailing * (`https://cdn.example.com/legacy/pack/*`)
+  //              -> prefix, DECLARED. Listed loudly on every run, because each
+  //                 one is a subtree nobody is checking any more.
+  const exact = new Set(); // scheme-stripped, fragment-stripped URLs
+  const hostWide = new Set();
+  const prefixes = []; // { bare, raw } — opt-in via trailing "*"
+  // Compare without scheme: the same asset is written http:// and https:// in
+  // different files, and an excuse is about the asset, not the scheme.
+  const bare = (s) => String(s).replace(/^https?:\/\//i, "").replace(/^\/\//, "").split("#")[0];
   if (ALLOW_FILE) {
     try {
       for (const line of (await readFile(ALLOW_FILE, "utf8")).split("\n")) {
@@ -377,19 +412,40 @@ if (!SKIP.has("closure")) {
         // A MIRROR decision is deliberately NOT an excuse: that decision says
         // "this host's files are on disk", so a missing one is a real hole.
         // Only the not-a-file / degraded / stubbed / content decisions excuse.
+        // Decisions outside the vocabulary (a project may add its own —
+        // OUTSCOPE, NOTFETCHED…) fall through and are read as excuses, with
+        // the same exact-unless-declared granularity.
         const cells = t.split(/[|\s]+/).filter(Boolean);
         const decision = /^(MIRROR|STUB|DEGRADE|CONTENT|LATENT|NOTFILE)$/i.exec(cells[0] || "");
         if (decision && /^MIRROR$/i.test(decision[0])) continue;
-        const tok = cells.find((c) => /^https?:\/\//i.test(c) || /^[a-z0-9.-]+\.[a-z]{2,}(\/|$)/i.test(c));
-        if (tok) allow.push(tok);
+        const tok = cells.find(
+          (c) => /^https?:\/\//i.test(c) || /^[a-z0-9.-]+\.[a-z]{2,}(\/|$|\*)/i.test(c),
+        );
+        if (!tok) continue;
+        const b = bare(tok);
+        if (b.endsWith("*")) prefixes.push({ bare: b.slice(0, -1), raw: tok });
+        else if (!b.replace(/\/+$/, "").includes("/")) hostWide.add(b.replace(/\/+$/, "").toLowerCase());
+        else exact.add(b);
       }
-      console.log(`  info ${allow.length} allow-list prefix(es) from ${ALLOW_FILE}`);
+      console.log(
+        `  info excuses from ${ALLOW_FILE}: ${exact.size} exact URL(s), ${hostWide.size} whole-host, ` +
+          `${prefixes.length} declared prefix(es)`,
+      );
+      // Each declared prefix is a piece of the mirror this gate stops auditing.
+      // Say so every run: an unread excuse is how the subtree hole got in.
+      for (const p of prefixes) {
+        console.log(`       prefix excuse (subtree NOT audited): ${p.raw}`);
+      }
     } catch (e) {
       console.log(`  info could not read --allow-missing ${ALLOW_FILE}: ${e.message}`);
     }
   }
-  const allowed = (url) =>
-    allow.some((a) => url.startsWith(a) || url.startsWith("https://" + a) || url.startsWith("http://" + a));
+  const allowed = (url) => {
+    const b = bare(canonicalUrl(url));
+    if (exact.has(b)) return true;
+    if (hostWide.has(b.split("/")[0].toLowerCase())) return true;
+    return prefixes.some((p) => b.startsWith(p.bare));
+  };
 
   // Hosts worth resolving: every host the ledger already contains, plus --hosts.
   const hosts = new Set([ORIGIN_HOST, ...flag("hosts", "").split(",").map((s) => s.trim()).filter(Boolean)]);
@@ -447,7 +503,9 @@ if (!SKIP.has("closure")) {
     }
     console.log(
       `         Each must be fetched (mirror-site.mjs --seeds) or get a line in the mirror's\n` +
-        `         external.txt and be excused here with --allow-missing.`,
+        `         external.txt and be excused here with --allow-missing. One line excuses one\n` +
+        `         URL: a base-literal excuse does NOT cover the files under it. Write the\n` +
+        `         prefix as "<base>/*" only when you mean "stop auditing this subtree".`,
     );
   } else {
     ok("closure", "reference set − disk set = ∅");
