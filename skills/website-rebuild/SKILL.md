@@ -3,7 +3,7 @@ name: website-rebuild
 description: 1:1 rebuild of award-winning creative websites (WebGL / scroll-animation / portfolio sites). Evidence-driven pipeline - mirror-first forensics, line-number-traceable reverse engineering of minified bundles, verbatim porting, quantitative verification gates. Use when user asks to "复刻网站", "重建网站", "1:1 rebuild", "clone this site", or provides a URL of a creative/award site to reproduce.
 compatibility: Requires Node 22+ (bundled scripts use built-in WebSocket to talk to CDP), npx, and a local Chrome/Chromium for headless comparison. POSIX shell optional - the Step 0 probe protocol has a zero-dependency Node equivalent (scripts/fingerprint.mjs) for shells without curl/cmp/tr/perl (e.g. Windows PowerShell). Agent-agnostic - works in any Agent Skills-compatible runtime.
 metadata:
-  version: "0.1.12"
+  version: "0.1.13"
 ---
 
 # Website Rebuild（获奖创意站 1:1 复刻）
@@ -19,7 +19,13 @@ metadata:
 执行时遵守下列边界：
 - **尊重目标站规则**：遵守其 `robots.txt`、服务条款与版权；抓取保持低频、单会话，不对目标站施加异常负载。
 - **不触碰受保护边界**：不采集需要登录态、付费墙或授权才能访问的内容；本 skill 只处理匿名可公开访问的资源。若目标站明确禁止此类复制，停止并告知用户。
-- **产出默认私有**：默认 noindex、不公开部署。任何公开前必须完成逐资产版权决断，并显著标注"非官方复刻"与原作者归属（见 [references/legal-and-deploy.md](references/legal-and-deploy.md)）。
+- **产出默认私有**：默认 noindex、不公开部署。任何公开前必须完成逐资产版权取证，并显著标注"非官方复刻"与原作者归属（见 [references/legal-and-deploy.md](references/legal-and-deploy.md)）。
+
+⛔ **法务判断归用户，skill 只取证与呈现**（三条，全程有效）：
+
+1. **决定权在用户**：skill 收集事实（逐资产归属、许可状态、第三方权利人、源站是否仍在营业、产物内第三方标识符）、列出选项与各自的风险边界、给出建议与理由；凡涉及"能不能公开 / 部署 / 再分发 / 对外展示"，**必须用下文「User Input Tools」显式交回用户**，不许 agent 自行下法律结论后继续往下走。
+2. **未获用户明确决定前按安全默认执行**：私有仓库 + `noindex` + 不公开部署 + 不再分发。写给用户时说明这是**默认动作**（"在你决定之前我不会把它发出去"），**不是** agent 已作出的法务结论——两者责任归属完全不同。agent 只能往保守侧执行默认，往公开侧走必须有用户的明确决定。
+3. ⛔ **法务考量不得削减镜像完整性或门的覆盖面**：镜像是证据基座，**完整性是技术不变量**（四遍法、闭包门、GAP=0 全建立在它之上）。不抓只能有**技术性理由**（不是文件 / 服务端不提供 / 需授权或登录态 / 源站明令禁止），一律登记；**不得**以"反正不公开""不该多存一份"这类法务理由留洞。实证：某项目以"产出永不公开"为由对一类资产"登记、不补抓"，**缺了约 60% 的资产而五道门始终全绿**，藏了四个里程碑【objectarchive】。法务决定作用于**产出怎么被使用**，不是证据基座是否完整。
 
 ## 适用范围（v0.1）⛔ 必读
 
@@ -37,7 +43,7 @@ metadata:
 
 ## User Input Tools
 
-需要向用户提问时（确认范围、版权决断、外部依赖决策）：优先使用当前运行时的内置提问工具（如 `AskUserQuestion`）；没有则输出编号问题清单让用户回复编号。支持多问合并时一次问完。
+需要向用户提问时（确认范围、**法务决定**、外部依赖决策）：优先使用当前运行时的内置提问工具（如 `AskUserQuestion`）；没有则输出编号问题清单让用户回复编号。支持多问合并时一次问完。法务类提问按 `legal-and-deploy.md` §0.1 的五段式写：事实 / 查不清的 / 选项 / 每个选项的风险边界 / 建议与当前默认动作。
 
 ## 宪法（六条纪律，全程有效）
 
@@ -62,7 +68,7 @@ metadata:
 [ ] M1      逆向建坐标系 ⛔（_pretty 钉版本展开；engine-notes 先于任何代码；技术栈钉死；REBUILD_PLAN 建立）
 [ ] M2+     严格溯源移植（依赖序里程碑推进；先竖切一条端到端链路；每里程碑冷启动实测 + CLEAN 门）
 [ ] M(n-1)  对拍验收（按 verification-gates.md 决策树选门型；根因修复，不调参糊平）
-[ ] M(n)    收口 ⛔（冷头评审 / 模块清单对账；版权决断——公开部署前必须完成）
+[ ] M(n)    收口 ⛔（冷头评审 / 模块清单对账；版权取证 + 呈交用户决定——公开部署前必须完成）
 ```
 
 ⛔ = 阻塞门：验收标准未达成不得进入下一阶段。
@@ -81,7 +87,7 @@ metadata:
 
 **M(n-1) — 对拍验收**。加载 [references/verification-gates.md](references/verification-gates.md) 与 [references/determinism.md](references/determinism.md)。门型选择：有 SSR/静态 HTML 产物先建字节门 → DOM 静态场景冻结熵源走 byte-equal → 活场景（WebGL/视频/随机相位）降级量化指标 + 噪声归类 → 数据驱动动画补数值探针门 → CLEAN 门全程兜底。判定时序 bug 前先校准探针（[references/environment-traps.md](references/environment-traps.md)）。
 
-**M(n) — 收口**。冷头评审：对 bundle 顶层类/模块清单逐一核对落点（功能测试测不出整块遗漏，只有清单式核对能）。加载 [references/legal-and-deploy.md](references/legal-and-deploy.md) 完成版权决断——默认**私有部署 + noindex**，公开前必须逐资产评估并显著标注非官方复刻。
+**M(n) — 收口**。冷头评审：对 bundle 顶层类/模块清单逐一核对落点（功能测试测不出整块遗漏，只有清单式核对能）。加载 [references/legal-and-deploy.md](references/legal-and-deploy.md) 完成版权**取证**并把决定**呈交用户**——在用户决定之前按安全默认执行（**私有 + noindex + 不部署**），公开前必须逐资产取证、显著标注非官方复刻。
 
 ### 分支路由表
 
@@ -107,7 +113,7 @@ Step 1 侦察结果决定加载哪些场景指南（按需，不要全量加载�
 | M1 | 展开 bundle、逆向笔记、钉栈 | engine-notes 完成；版本钉死表完成 | `_pretty/`、`docs/engine-notes.md`、`REBUILD_PLAN.md` |
 | M2+ | 溯源移植、里程碑成对提交 | 每里程碑冷启动实测 + CLEAN 门绿 | 带行号注释的源码、三张登记表滚动更新 |
 | M(n-1) | 对拍验收 | 所选门型全绿或差异全部登记 | 验证脚本 + 对拍产物入库（`docs/compare/`） |
-| M(n) | 冷头评审 + 版权决断 | 清单对账零缺口；部署决断完成 | 审计记录、DEPLOY.md |
+| M(n) | 冷头评审 + 版权取证 + 呈交用户 | 清单对账零缺口；用户已作出部署决定（未决则维持安全默认） | 审计记录、DEPLOY.md |
 
 ## Script Directory
 
@@ -165,12 +171,12 @@ Step 1 侦察结果决定加载哪些场景指南（按需，不要全量加载�
 - [shopify-platform.md](references/shopify-platform.md) — Shopify 平台层剥离（B 类）
 - [asset-management.md](references/asset-management.md) — 资产不复制策略与字体决策
 - [environment-traps.md](references/environment-traps.md) — 环境陷阱手册
-- [legal-and-deploy.md](references/legal-and-deploy.md) — 版权评估与部署决断
+- [legal-and-deploy.md](references/legal-and-deploy.md) — 版权取证与部署决断（取证归 skill，决定归用户）
 - [assets/templates/rebuild-plan.md](assets/templates/rebuild-plan.md)、[assets/templates/engine-notes.md](assets/templates/engine-notes.md) — 文档模板
 
 ## Notes
 
-- **版权红线**：本 skill 用于学习目的的复刻。产出默认私有 + noindex；公开部署前必须完成逐资产版权决断并显著标注非官方复刻与原作者归属。最大风险是法务不是技术。
+- **版权红线**：本 skill 用于学习目的的复刻。产出默认私有 + noindex（安全默认，不是法务结论）；公开部署前必须完成逐资产版权取证、把决定交回用户、并显著标注非官方复刻与原作者归属。最大风险是法务不是技术——但**法务判断由用户作出，且永不用于削减镜像完整性或门的覆盖面**。
 - **工期预期**：方法论成熟形态下，单页创意站 1-3 天（数十个 commit）；多场景 WebGL 作品集站按周计。向用户给预估时参考 Step 1 的难度评级。
 - **对拍失败先怀疑环境**：后台节流、HMR 幽灵模块、探针时钟、headless 字体缺失都会伪装成代码 bug。判定源码问题前先过 environment-traps.md 的校准清单。
 - 遇到本 skill 未覆盖的场景（B 类缺口），明确告诉用户"这一段没有既成指南，按通用纪律推进"，并把新经验记入项目文档——它们是 skill 下一版的输入。

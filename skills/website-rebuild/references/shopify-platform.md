@@ -135,7 +135,7 @@
 4. **D5b 内联遥测块移除**：按 `data-source-attribution="shopify.event_observer.bootstrap"` 属性、以及 `<script>(function(){var wpmLoader=` 起始字面量定位删除。这两块是纯分析、无视觉/行为角色；wpmLoader 在其后端模块被 stub 后还会 `.init` on undefined 抛错，不删则污染 CLEAN 门。
 5. **D3/D5/D6 脚本 stub**：§1.2 清单。
 6. **SRI 剥离**：被改写的标签响应字节已变，`integrity="..."` 必须去掉——否则 Chrome **静默拦截**该资源，且报错只走 CDP Log 域，探针不监听 Log 就会误报 CLEAN【lando】。
-7. **D8 注入 noindex + 非官方声明**：`<head>` 后立刻插 `<meta name="robots" content="noindex,nofollow">` 与一段声明注释（"非官方学习复刻 / 与 Shopify Inc. 及店主无关 / 不得公开部署"）。版权红线，不可省。
+7. **D8 注入 noindex + 非官方声明**：`<head>` 后立刻插 `<meta name="robots" content="noindex,nofollow">` 与一段声明注释（"非官方学习复刻 / 与 Shopify Inc. 及店主无关 / 未经决定不公开部署"）。这是**安全默认动作**（用户就公开与否作出决定之前一律如此，见 `legal-and-deploy.md` §0.1），不可省。
 8. **Q1 dev-port 探测片段 verbatim 保留**：见 §5。
 
 **"变换没发生就 throw"防御（硬规则）**：`applyTransforms` 统计变换次数，**逐条**校验命中数——任一条为 0 或低于其登记下限 → 直接抛错终止构建【lando】【racingshop】【objectarchive】。意义：镜像/主题结构一变（换主题、Shopify 改 head 契约），脚本会**立刻大声失败**，而不是静默产出一批引用真实外域、没有 noindex 的坏 shells。没有这道防御的生成脚本不许合入。
@@ -196,7 +196,7 @@
 - **有版本切面的 API 取证**：从上游标准件里挑一个随上游版本演进的构造取年代（objectandarchive：`global.js` 的 `SectionId` 助手 ⇒ Dawn ≥ 15.x）。它同时是 §0.2 判据 1 做对照时要取的上游版本。
 - **开发者注释的人称**（§0.2 判据 4）——最强的一手证据，且比从文件名推断可靠得多。
 
-**fork 拓扑的两个后果**：① 主题层**不是单一归属**，必须按 §0.2 切成 `T-上游` / `T-站点` 再排移植任务；② 版权评估要把上游主题与店主自研部分**分开**（`legal-and-deploy.md`）。
+**fork 拓扑的两个后果**：① 主题层**不是单一归属**，必须按 §0.2 切成 `T-上游` / `T-站点` 再排移植任务；② 版权**取证**要把上游主题与店主自研部分**分开**取证（许可以产物内证据为准，结论交用户，见 `legal-and-deploy.md`）。
 
 ### 4.1 现场判定序列（按顺序执行，四步定型）
 

@@ -79,7 +79,7 @@ grep -n 'WebGLRenderer\|dispatchWorkgroups' bundle.lines   # 命中后必须归�
 打星纪律：
 
 - 每一星级写一句"为什么"，引用镜像/bundle 证据，不凭平台名/框架名印象（webflow.com 被预判不适用，实测有手写 GSAP/three.js bundle 判 A【probe】）。
-- **素材版权单独评估且经常是最高星**：oryzo 与 kimi 都评 ★★★★★，"最大风险是法务不是技术"【oryzo】【kimi】；lando 同样"素材版权 ★★★★★ 远大于技术"，因此**开工前就定"私有仓库 + 不公开部署"边界**并写进 DEPLOY.md（法务先行）【lando】。
+- **素材版权单独评估且经常是最高星**：oryzo 与 kimi 都评 ★★★★★，"最大风险是法务不是技术"【oryzo】【kimi】；lando 同样"素材版权 ★★★★★ 远大于技术"，因此**开工就按安全默认执行"私有仓库 + 不公开部署"**并写进 DEPLOY.md【lando】。⚠ 这一行写的是**风险量级与待决问题**，不是"已决定不公开"——**法务判断由用户作出**，agent 只取证、列选项、给建议，并在用户决定前执行安全默认（`references/legal-and-deploy.md` §0.1）。**它也不改变镜像范围**：镜像照四遍法抓全，法务考量不得削减完整性（§0.2）。
 
 横向对标锚点（六项目谱系，用于工期预估）：
 
@@ -103,7 +103,7 @@ grep -n 'WebGLRenderer\|dispatchWorkgroups' bundle.lines   # 命中后必须归�
 | 滚动/动画编排 | ★★★ | 例：GSAP 命令式 + 无全局时间轴 | oryzo 同型 |
 | 私有格式 | ★ | 例：无自研二进制 | — |
 | 平台层 | ★★★ | 例：Webflow 运行时行为契约 | lando 同型 |
-| **素材版权** | ★★★★★ | 例：商用字体 + 人物肖像不可再分发 → 私有 + 不公开部署 | oryzo/kimi/lando 同判 |
+| **素材版权** | ★★★★★ | 例：商用字体 + 人物肖像查得不可再分发 → 待用户决定，其间按安全默认（私有 + 不公开部署） | oryzo/kimi/lando 当时同样落私有 |
 
 攻坚顺序：星多的分项先**竖切一条端到端链路**验证可行性（oryzo 先打通 hero 场景完整链路再铺开【oryzo】）。
 
@@ -123,7 +123,7 @@ grep -n 'WebGLRenderer\|dispatchWorkgroups' bundle.lines   # 命中后必须归�
 6. **有无私有二进制格式？** 有无开源参照可借来比对验证？→ `references/binary-formats.md`【oryzo】
 7. **验收门型初选？** 有 SSR/静态 HTML 产物先建字节门 → DOM 静态场景走冻结+byte-equal → 活场景（视频/glitch/随机相位）降级为量化网格+噪声归类 → 数据驱动动画补数值门 → CLEAN 门全程兜底，见 `references/verification-gates.md`。
 8. **源站可插桩吗？** 滚动驱动 + 源站混淆 bundle 不可插桩 → 必须走 probe-shim 双侧确定性驱动路线（`scripts/probe-shim.js`），见 `references/determinism.md`【noomo】。
-9. **版权与部署边界？** 逐资产列归属/许可，先出"是否公开部署"决断（多为私有 + noindex）【oryzo】【samsy】【kimi】【noomo】【lando】。
+9. **版权与部署边界？** 逐资产列归属/许可（**取证，不下结论**），把"是否公开部署"作为**待用户决定项**登记；其间按安全默认（私有 + noindex）【oryzo】【samsy】【kimi】【noomo】【lando】。
 10. **镜像盲区预期清单建了吗？** worker fetch / 懒加载 / 移动端变体三类必漏资产的补录通道，见 `references/mirroring.md`【oryzo】【samsy】。
 
 ## 6. 常见坑
@@ -135,14 +135,15 @@ grep -n 'WebGLRenderer\|dispatchWorkgroups' bundle.lines   # 命中后必须归�
 - **凭框架惯例猜结构**：段树/布局边界要从产物（flight payload、`__NUXT_DATA__`）读出，不猜【kimi】。
 - **"目测近似先跑通"的技术债**：oryzo 曾用目测近似实现先跑通，随后必须整体替换为溯源版（M2.3 三轮 commit 重做）——侦察阶段把事实来源定清楚，能避免这次返工【oryzo】。
 - **凭平台名/框架名预判难度**：webflow.com 被预判不适用，实测判 A【probe】；Nuxt 站也可以完全适用（noomo 三判据）【probe】。评级只认取证。
-- **把版权当收尾问题**：素材版权是最高风险项，不在开工前决断会影响技术方案本身（字体入不入库、资产是否复制、是否公开部署）【oryzo】【kimi】【lando】。
+- **把版权当收尾问题**：素材版权是最高风险项，取证最耗时（逐位具名作者查证尤甚），拖到收官会让整个收尾卡住，也让"产出怎么被使用"的选项在最后一刻才摆到用户面前【oryzo】【kimi】【lando】。
+- **反向的坑：让法务判断跑到技术方案上游**。取证早做是对的，**据此改技术方案是错的**——法务考量作用于**产出怎么被使用**（是否公开/部署/再分发/入 git），**不作用于镜像抓多全、门断言多少格**。实证：某项目以"产出永不公开"为由少抓一类资产，**缺了约 60% 而五道门全绿**（`mirroring.md` §5.1）【objectarchive】。
 
 ## 7. 侦察关账条件
 
 - [ ] 假设表逐条有结论（证否/坐实/标注"未确认"），无裸猜
 - [ ] 架构主体结论 + "不要发明"清单已入逆向笔记【samsy】【noomo】
 - [ ] 技术栈取证表逐项有 bundle 内证据，版本可钉死【6/6】
-- [ ] 分项难度评级表落盘，含对标与工期预估、素材版权决断【lando】
+- [ ] 分项难度评级表落盘，含对标与工期预估、素材版权取证进度与待用户决定项【lando】
 - [ ] §5 十个问题全部有落盘回答，对应分场景指南已确定加载清单
 - [ ] 三层事实来源模型（实现规范/验收基线/本地镜像）已写进 REBUILD_PLAN【rogier】
 
