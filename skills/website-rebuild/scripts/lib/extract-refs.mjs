@@ -286,14 +286,22 @@ const MAYBE_ENCODED = /\\+[/"']|\\+u00[23]|&(?:#[0-9a-fA-F]|amp|quot|apos|sol|co
  *
  * Returns `(text, baseUrl) => Set<absolute url>`.
  */
-export function createRefExtractor({ origin, originHost, assetHosts }) {
+export function createRefExtractor({ origin, originHost, assetHosts, onOffHost }) {
   const hosts = assetHosts instanceof Set ? assetHosts : new Set(assetHosts || []);
+  // Every reference to a host NOT on the list is reported through onOffHost so
+  // the caller can census it. It used to be dropped in silence, and silence is
+  // indistinguishable from "there was nothing there": measured on a portfolio
+  // site whose artwork lives on a custom media domain, 143 references to that
+  // one host vanished without a word and the mirror looked finished at 57
+  // files. netcapture.mjs has had an off-host census and an under-observation
+  // warning for exactly this reason; the crawler needs the same eyes.
+  const offHost = typeof onOffHost === "function" ? onOffHost : () => {};
   const ORIGIN = String(origin || "").replace(/\/+$/, "");
 
   const addIfAsset = (rawUrl, urls) => {
     try {
       const u = new URL(rawUrl);
-      if (!hosts.has(u.hostname)) return;
+      if (!hosts.has(u.hostname)) return void offHost(u.hostname, u.href);
       // Same-origin URLs without an extension are pages, not assets.
       if (u.hostname === originHost && !/\.[a-z0-9]{2,5}($|\?)/i.test(u.pathname)) return;
       u.hash = "";
@@ -323,6 +331,26 @@ export function createRefExtractor({ origin, originHost, assetHosts }) {
       /(?:src|href|poster|content|data-src|data-poster|data-bg)=["'](\/(?!\/)[^"']+?\.[a-z0-9]{2,5}(?:\?[^"']*)?)["']/gi,
     )) {
       addIfAsset(ORIGIN + decodeEntities(m[1]), urls);
+    }
+    // 3b. root-relative paths as PLAIN STRING LITERALS, not in an attribute.
+    // Shape 3 requires src=/href=/poster=…, which is right for markup and blind
+    // to code: `new Workbox("/sw.js")`, `fetch("/data/index.json")`,
+    // `img.src = "/img/sprite.svg"` match nothing there.
+    //
+    // ⭐ The costly instance is the SERVICE WORKER, because the two mirror
+    // passes share the blind spot: the crawler cannot see the registration
+    // (a bare string in a chunk), and the CDP capture does not observe the
+    // fetch either — the browser retrieves /sw.js outside the page's context,
+    // so it never appears as a page request. Measured on a Nuxt SSG target:
+    // origin serves /sw.js 200, the mirror had no such file, both passes
+    // reported themselves complete, and the only thing that noticed was a CLEAN
+    // probe reporting "404 when fetching the script" two steps downstream.
+    //
+    // Deliberately still requires a file EXTENSION: without it every route
+    // string ("/about", "/works/x") becomes a phantom asset. Route strings are
+    // the page queue's business, not the asset extractor's.
+    for (const m of text.matchAll(/["'](\/(?!\/)[A-Za-z0-9_\-./@]+\.[a-z0-9]{2,5})(\?[^"']*)?["']/gi)) {
+      addIfAsset(ORIGIN + decodeEntities(m[1] + (m[2] || "")), urls);
     }
     // 4. srcset / imagesrcset candidate lists — one entry per candidate, not
     // one per attribute (see header).

@@ -120,7 +120,27 @@ const ASSET_HOSTS = new Set([
   ORIGIN_HOST, // same-origin assets (css/js/media referenced by absolute or root-relative URL)
 ]);
 
-const manifest = {};
+const offHostRefs = new Map(); // host -> {n, sample} for hosts NOT on ASSET_HOSTS
+
+// ⭐ The ledger is CUMULATIVE, not per-run. It used to start empty, so a
+// gap-filling run (--seeds) rewrote mirror-manifest.json with only the URLs it
+// happened to touch: the files from earlier runs stayed on disk while their
+// rows vanished, and verify-mirror reported them as orphans — "files nobody can
+// name a URL for". Measured: a 238-row mirror came back from a 224-URL seeds
+// run with 255 files on disk and 31 orphans.
+//
+// That also broke this script's own promise. --seeds exists so gap-filling
+// "goes through the one downloader and lands in the same ledger"; a ledger that
+// forgets what it is being added to is not the same ledger.
+//
+// Rows are preloaded but NOT marked fetched: a full re-crawl still re-fetches
+// and OVERWRITES each row, so a stale row can never survive a run that visits
+// its URL. Only rows this run never visits are carried over.
+const manifest = await readFile(join(OUT, 'mirror-manifest.json'), 'utf8')
+  .then((t) => JSON.parse(t).files || {})
+  .catch(() => ({}));
+const carriedOver = Object.keys(manifest).length;
+if (carriedOver) console.log(`[ledger] carrying over ${carriedOver} row(s) from the existing manifest`);
 const fetched = new Set();
 // Redirects are SOURCE-SITE BEHAVIOR, not crawler bookkeeping: they get their
 // own ledger and are never collapsed into the source path's file.
@@ -175,6 +195,14 @@ const extractAssetUrls = createRefExtractor({
   origin: ORIGIN,
   originHost: ORIGIN_HOST,
   assetHosts: ASSET_HOSTS,
+  // Census of every reference pointing at a host the allow-list does not
+  // follow. Printed at the end: a mirror that looks finished while one
+  // unfollowed host holds all the artwork is the failure this catches.
+  onOffHost: (host, href) => {
+    let e = offHostRefs.get(host);
+    if (!e) offHostRefs.set(host, (e = { n: 0, sample: href }));
+    e.n += 1;
+  },
 });
 
 // --scope <prefix>: restrict the PAGE queue to a path prefix. Step 0 grades a
@@ -327,4 +355,37 @@ await writeFile(
 );
 const ok = Object.values(manifest).filter((f) => f.path).length;
 const fail = Object.values(manifest).filter((f) => !f.path).length;
+// Off-host census BEFORE the summary line, so it cannot be read as a footnote
+// to a successful run. A reference the allow-list does not follow is not an
+// error — plenty are analytics or outbound links — but it is a DECISION, and a
+// decision nobody was told about is the shape this crawler used to fail in.
+if (offHostRefs.size) {
+  const rows = [...offHostRefs].sort((a, b) => b[1].n - a[1].n);
+  const total = rows.reduce((t, [, e]) => t + e.n, 0);
+  console.log(`\nreferences to hosts NOT followed (${total} across ${rows.length} host(s)) — each is a decision:`);
+  for (const [host, e] of rows.slice(0, 12)) console.log(`  x${String(e.n).padStart(4)}  ${host}   e.g. ${e.sample.slice(0, 110)}`);
+  // Only suggest hosts that LOOK like asset hosts — the sample URL ends in a
+  // file extension. Namespace identifiers (www.w3.org) and outbound social
+  // links are in the census for completeness, but telling someone to mirror
+  // instagram.com would be worse advice than saying nothing.
+  const assetish = rows.filter(([, e]) => {
+    try {
+      const u = new URL(e.sample);
+      return /\.[a-z0-9]{2,5}($|\?)/i.test(u.pathname + (u.search || ""));
+    } catch { return false; }
+  });
+  // No unfollowed host looks like an asset host -> nothing to warn about. The
+  // warning exists for "an unfollowed host is holding the media"; firing it on
+  // a namespace identifier (www.w3.org appears 84x in any SVG-heavy site) would
+  // train the reader to ignore it, which is worse than not printing it.
+  const top = assetish[0];
+  if (top && top[1].n >= 20 && !/googletagmanager|google-analytics|doubleclick|facebook|clarity|hotjar/i.test(top[0])) {
+    console.log(
+      `\n!! ${top[0]} alone accounts for ${top[1].n} references and does not look like telemetry.\n` +
+        `!! If the site's media lives there, this mirror is INCOMPLETE no matter how green the\n` +
+        `!! counts above look. Re-run with:  --hosts ${assetish.slice(0, 3).map(([h]) => h).join(",")}`,
+    );
+  }
+}
+
 console.log(`\nDone: ${ok} files saved, ${fail} failed, ${redirects.length} redirects. Ledgers written.`);
