@@ -125,6 +125,8 @@ display 抖动强制重绘，清掉合成层缓存的历史次像素光栅——
 | `deviceMemory` / `hardwareConcurrency` / `maxTouchPoints` | `hardwareConcurrency<=2 → low`；`maxTouchPoints>1 && innerWidth<1024 → 移动分支` | 画质档；桌面/移动分支决定整块场景存在与否 |
 | `matchMedia` | `(hover:hover) and (pointer:fine)`、`prefers-reduced-motion` | 交互分支、动画是否播放 |
 
+⚠ **第三行那个 `innerWidth` 还有一条与"能力"无关的陷阱：它在 document-start 恒为 980**（`<meta viewport>` 还没解析），真实宽度异步落地。**同步读一次 `innerWidth` 就定分支的代码会永久停在桌面态**，而 `screen.*` 全程正确、事后再读也正确——识别信号、取证手段（document-start 探针）与三种补救的实测对比见 `environment-traps.md` §8【objectarchive】。**这两件事要分开做**：宽度对了不等于能力分支对了（`setDeviceMetricsOverride({mobile:true})` 不动 `hover`）。
+
 **做法**：
 
 1. **对拍前把探测点全部枚举出来**，别等门红了再找——它伪装成"复刻侧画质不对"，实际是两侧程序不同。

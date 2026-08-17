@@ -54,8 +54,14 @@ import {
   describePolicy,
 } from './lib/urlpath.mjs';
 // The reference extractor is shared with verify-mirror.mjs's closure gate, so
-// the gate cannot inherit a blind spot from the crawler it audits.
-import { createRefExtractor } from './lib/extract-refs.mjs';
+// the gate cannot inherit a blind spot from the crawler it audits. `isTextRefSource`
+// is the other half of the same module: WHICH files get rescanned at all. It
+// used to be an extension whitelist written out twice (here and in the gate),
+// both stopping at html|css|js|mjs|json|svg — so `.atom` / `.xml` / `.rss` /
+// `.txt` feeds full of asset URLs were opened by neither side, and the closure
+// gate could not report it because the blind spot was shared (objectarchive
+// N13: 16 feeds, reference set 3,109 -> 3,521).
+import { createRefExtractor, isTextRefSource } from './lib/extract-refs.mjs';
 
 // ---------------------------------------------------------------------------
 // CONFIG — per-project constants; site specifics come from the CLI instead.
@@ -114,7 +120,6 @@ const ASSET_HOSTS = new Set([
   ORIGIN_HOST, // same-origin assets (css/js/media referenced by absolute or root-relative URL)
 ]);
 
-const TEXT_EXT = /\.(css|js|mjs|json|svg|html?)($|\?)/i;
 const manifest = {};
 const fetched = new Set();
 // Redirects are SOURCE-SITE BEHAVIOR, not crawler bookkeeping: they get their
@@ -176,7 +181,11 @@ function extractPageLinks(html) {
   const pages = new Set();
   for (const m of html.matchAll(/href="(\/[^"#?]*)"/g)) {
     const p = m[1];
-    if (/\.(css|js|png|jpg|webp|svg|ico|xml|txt|woff2?)$/i.test(p)) continue;
+    // Not pages. Feeds and data documents (.atom/.rss/.json) are still FETCHED
+    // — shape 3 of the extractor sees `href="/collections/all.atom"` and queues
+    // them as assets, and they are rescanned for references like any other text
+    // file; they just do not belong in the PAGE queue.
+    if (/\.(css|js|mjs|png|jpg|webp|svg|ico|xml|atom|rss|json|txt|woff2?)$/i.test(p)) continue;
     if (SKIP_PAGE_PREFIXES.some((pre) => p.startsWith(pre))) continue;
     pages.add(p.replace(/\/$/, '') || '/');
   }
@@ -265,7 +274,10 @@ for (let round = 1; round <= ROUNDS && assetQueue.size; round++) {
         }
         await save(url, buf, type);
         console.log(`[asset] ${url.slice(0, 110)} (${buf.length}b)`);
-        if (TEXT_EXT.test(url) || /text|javascript|json|css/.test(type)) {
+        // Declared type first, then extension, then a sniff of the bytes we
+        // already hold — so an extensionless route or a feed the extension
+        // table never heard of still gets rescanned (lib/extract-refs.mjs).
+        if (isTextRefSource({ url, contentType: type, head: buf })) {
           for (const u of extractAssetUrls(buf.toString('utf8'), url))
             if (!fetched.has(u)) assetQueue.add(u);
         }

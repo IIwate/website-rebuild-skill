@@ -8,6 +8,15 @@
 // "reference set − disk set = ∅" while both sides share one blind spot. A gate
 // that inherits the bug it is auditing is worse than no gate.
 //
+// ⚠ THE LINE ABOVE IS A CLAIM, AND IT IS CHECKABLE — CHECK IT【objectarchive N12】
+//     grep -l "lib/extract-refs.mjs" scripts/*.mjs
+// must list exactly the callers named here. On the project that wrote this
+// module, that same header sentence was true of the gate and FALSE of the
+// crawler, which kept a private copy of the shapes for four milestones. A file
+// header states intent; only an import statement states code, and a header that
+// claims sharing while one caller has its own copy is worse than no claim —
+// it makes the next fix land on one side and read as landed on both.
+//
 // Shapes covered, and why each one is here:
 //   1. absolute            https://host/path
 //   2. protocol-relative   //host/path        (quoted or parenthesised)
@@ -83,6 +92,151 @@
 // one: the gate stays green, holding a real file up as evidence for a claim
 // about a different one. Escape flavour and escape depth are unbounded; the
 // shape list is not.
+
+// WHICH FILES GET SCANNED AT ALL — a gate's INPUT, not its assertion
+// 【objectarchive N13 / D-T12】
+// ---------------------------------------------------------------------------
+// The shapes above answer "what does a reference look like?". This half answers
+// the other question, and it is the one that went wrong: A REFERENCE THE
+// EXTRACTOR COULD SEE IS STILL INVISIBLE IF NOBODY HANDS IT THE FILE.
+//
+// It used to be an EXTENSION WHITELIST copied into two scripts — the crawler's
+// `TEXT_EXT` and the closure gate's `TEXT` — and both copies stopped at
+// `html|css|js|mjs|json|svg`. Every other mirrored text format was a document
+// neither side ever opened, and because BOTH sides shared the blind spot, the
+// closure gate could not see it: "reference set − disk set = ∅" is computed
+// over files the gate itself chose to read. Measured on objectandarchive.com
+// (M0b): 16 `/collections/*.atom` feeds sat on disk, each an XML document full
+// of product links and CDN image URLs in escaped `<content>` HTML, and neither
+// the crawl nor the gate had ever read one. Reference set 3,109 -> 3,521.
+//
+// Same family as the prefix-matched excuse (verify-mirror.mjs's closure gate)
+// and the escaped-URL blind spot above: NOT A WRONG ASSERTION, AN ASSERTION
+// OVER A SHORT INPUT. When auditing any gate, ask how its input is delimited
+// BEFORE asking whether its predicate is right.
+//
+// So the predicate lives here, next to the shapes, shared by both callers — and
+// it is not an extension whitelist. Extensions are the origin's own naming
+// choice and carry no promise (one origin serves woff2 bytes at a `.woff` URL);
+// plenty of real routes have no extension at all. Three inputs, in order of how
+// much they promise:
+//   1. the DECLARED content-type (the origin's own statement — the oracle);
+//   2. the extension (a hint, and the only thing available for an orphan file);
+//   3. the bytes themselves (sniffed, for everything the first two cannot rule).
+// Over-inclusion is the safe direction: scanning a binary as text costs one
+// wasted regex pass, while skipping a text file costs a class of references
+// that nothing downstream can recover.
+
+/** Extensions whose bytes are text worth rescanning for references. */
+export const TEXT_REF_EXT =
+  /\.(html?|xhtml|css|js|mjs|cjs|jsx|ts|tsx|json|jsonld|map|webmanifest|svg|xml|atom|rss|rdf|xsl|xslt|txt|md|csv|tsv|vtt|srt|gltf|mtl)($|\?)/i;
+
+/** Extensions whose bytes are definitely not text — never worth opening. */
+export const BINARY_REF_EXT =
+  /\.(png|jpe?g|gif|webp|avif|heic|bmp|ico|tiff?|psd|woff2?|ttf|otf|eot|mp4|m4v|mov|webm|mkv|avi|mp3|m4a|m4s|wav|ogg|oga|opus|flac|aac|zip|gz|br|zst|7z|rar|tar|pdf|wasm|glb|bin|dds|ktx2?|basis|hdr|exr|riv|db|sqlite)($|\?)/i;
+
+/**
+ * Declared types that mean "text worth rescanning". Tested BEFORE the binary
+ * table on purpose: `image/svg+xml` matches both, and it is text.
+ */
+export const TEXT_REF_CONTENT_TYPE = /^text\/|javascript|ecmascript|json|xml|svg|css|manifest|atom|rss/i;
+
+/** Declared types that mean "binary". */
+export const BINARY_REF_CONTENT_TYPE =
+  /^(image|font|audio|video|model)\/|application\/(wasm|zip|gzip|pdf|vnd\.ms-fontobject|x-font)/i;
+
+/**
+ * Types that carry NO information and must not be read as a declaration.
+ * `application/octet-stream` is what a server says when it does not know, and
+ * it is the default for every extension the origin's MIME table never heard of
+ * — treating it as "binary" would rebuild the blind spot this predicate exists
+ * to close (measured: a `.dat` runtime config served as octet-stream, holding
+ * the only reference to one asset).
+ */
+export const UNINFORMATIVE_CONTENT_TYPE =
+  /^(application\/octet-stream|binary\/octet-stream|application\/x-unknown|content\/unknown|\*\/\*)/i;
+
+// NUL-free binary containers — the ones the control-character ratio below would
+// not settle on its own. [byte signature, offset].
+const BINARY_MAGIC = [
+  [[0xff, 0xd8, 0xff], 0], // jpeg
+  [[0x1f, 0x8b], 0], // gzip
+  [[0x42, 0x4d], 0], // bmp
+  [[0x25, 0x50, 0x44, 0x46], 0], // %PDF
+  [[0x50, 0x4b, 0x03, 0x04], 0], // zip / PK
+  [[0x52, 0x61, 0x72, 0x21], 0], // Rar!
+  [[0x77, 0x4f, 0x46, 0x46], 0], // wOFF
+  [[0x77, 0x4f, 0x46, 0x32], 0], // wOF2
+  [[0x4f, 0x54, 0x54, 0x4f], 0], // OTTO
+  [[0x47, 0x49, 0x46, 0x38], 0], // GIF8
+  [[0x52, 0x49, 0x46, 0x46], 0], // RIFF (webp/wav/avi)
+  [[0x4f, 0x67, 0x67, 0x53], 0], // OggS
+  [[0x49, 0x44, 0x33], 0], // ID3
+  [[0x1a, 0x45, 0xdf, 0xa3], 0], // matroska / webm
+  [[0x66, 0x74, 0x79, 0x70], 4], // ISO-BMFF: mp4 / mov / avif / heic
+];
+
+const startsWith = (b, sig, off) => {
+  if (b.length < off + sig.length) return false;
+  for (let i = 0; i < sig.length; i++) if (b[off + i] !== sig[i]) return false;
+  return true;
+};
+
+/**
+ * Last resort: do these bytes look like text? Used only when neither the
+ * declared type nor the extension can rule — extensionless routes, orphan
+ * files, `application/octet-stream`.
+ *
+ * Deliberately crude and one-directional: a NUL byte or a known binary
+ * signature settles it, otherwise a low ratio of C0 control characters means
+ * text. UTF-16 (NUL-padded) is therefore read as binary — mirrored responses
+ * are UTF-8 in practice, and the cost of that call is one unscanned file, which
+ * the closure gate will still report as a MISSING reference if it matters.
+ */
+export function sniffTextBytes(head) {
+  if (!head || !head.length) return false;
+  const b = Buffer.isBuffer(head) ? head : Buffer.from(head);
+  for (const [sig, off] of BINARY_MAGIC) if (startsWith(b, sig, off)) return false;
+  const n = Math.min(b.length, 4096);
+  let controls = 0;
+  for (let i = 0; i < n; i++) {
+    const c = b[i];
+    if (c === 0) return false;
+    if ((c < 0x09 || (c > 0x0d && c < 0x20) || c === 0x7f) && c !== 0x1b) controls++;
+  }
+  return controls / n < 0.02;
+}
+
+/**
+ * `true` / `false` / `null` — the third meaning "only the bytes can say".
+ * Split out so a caller that would have to read from disk can decide whether
+ * the read is worth it.
+ */
+export function textRefVerdict({ url = "", contentType = "" } = {}) {
+  const t = String(contentType || "");
+  if (t && !UNINFORMATIVE_CONTENT_TYPE.test(t)) {
+    if (TEXT_REF_CONTENT_TYPE.test(t)) return true;
+    if (BINARY_REF_CONTENT_TYPE.test(t)) return false;
+  }
+  const u = String(url || "");
+  if (TEXT_REF_EXT.test(u)) return true;
+  if (BINARY_REF_EXT.test(u)) return false;
+  return null;
+}
+
+/**
+ * THE predicate: should this file be rescanned for references?
+ *
+ *   url          the URL it was fetched from, or its local path (extension hint)
+ *   contentType  what the origin DECLARED (from the response or the ledger)
+ *   head         first bytes, if the caller already has them (or can cheaply
+ *                read them); without it an inconclusive file reads as "no"
+ */
+export function isTextRefSource({ url = "", contentType = "", head = null } = {}) {
+  const v = textRefVerdict({ url, contentType });
+  if (v !== null) return v;
+  return head ? sniffTextBytes(head) : false;
+}
 
 /**
  * HTML entities that appear inside URL attributes — including the ones that
