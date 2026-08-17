@@ -79,6 +79,25 @@ import {
 import { serveCandidates, loadPolicy, policyFromArgs, describePolicy } from "./lib/urlpath.mjs";
 
 const args = process.argv.slice(2);
+// Every --flag this script understands. An UNKNOWN flag is a loud failure, not
+// a shrug: a flag that is silently ignored looks exactly like one that worked.
+// Field case — `--fallback-root` was passed to a build of this script that did
+// not have it yet; it started single-rooted without a word and every asset
+// 404'd (121 problems on the first probe). A degradation nobody was told about
+// is worse than a crash.
+const KNOWN_FLAGS = new Set([
+  "host", "port", "root", "fallback-root", "side", "origin-host", "ext-hosts",
+  "stub-ext-hosts", "query-ignore", "query-only", "redirects", "cdp-port",
+]);
+{
+  const unknown = args.filter((a) => a.startsWith("--") && !KNOWN_FLAGS.has(a.slice(2)));
+  if (unknown.length) {
+    console.error(`FATAL: unknown flag(s): ${unknown.join(" ")}`);
+    console.error(`       known: ${[...KNOWN_FLAGS].map((f) => "--" + f).join(" ")}`);
+    console.error(`       A silently ignored flag is a silent downgrade — refusing to start.`);
+    process.exit(2);
+  }
+}
 const flag = (name, dflt) => {
   const i = args.indexOf("--" + name);
   return i >= 0 && args[i + 1] !== undefined ? args[i + 1] : dflt;
@@ -86,6 +105,15 @@ const flag = (name, dflt) => {
 
 const HOST = flag("host", process.env.HOST || "127.0.0.1");
 const ROOT = path.resolve(flag("root", process.env.SERVE_ROOT || "legacy-mirror"));
+// --fallback-root <dir>: resolve against ROOT first, then this. asset-management.md's
+// headline strategy is "the mirror is the ONLY asset store, never copy": on a
+// strategy-A rebuild site/ holds just the transformed shells plus the generated
+// port output, and every image/font/css/vendor byte is read from the read-only
+// mirror. Without this the rebuild side needs a second copy of the mirror — a
+// second place for the bytes to drift. Order matters: anything the build layer
+// rewrote must win over the untransformed original.
+const FALLBACK_ROOT = flag("fallback-root", "") ? path.resolve(flag("fallback-root", "")) : null;
+const ROOTS = [ROOT, ...(FALLBACK_ROOT ? [FALLBACK_ROOT] : [])];
 
 // Which side of the comparison this instance is. It selects the port, it is
 // stamped on every response, and it is the thing that makes a two-sided run
@@ -203,7 +231,12 @@ const MIME = {
 // External hosts whose absolute URLs get rewritten to /ext/<host>/. Auto-
 // detected from <root>/assets/<host>/ (mirror-site.mjs layout) + --ext-hosts.
 const EXT_HOSTS = [...new Set([
-  ...(await fsp.readdir(path.join(ROOT, "assets"), { withFileTypes: true }).catch(() => []))
+  // Discovered across BOTH roots: on the rebuild side the mirrored external
+  // hosts live under the FALLBACK root, and missing them here leaves absolute
+  // URLs to those hosts in the served bytes — the page then reaches out for real.
+  ...(await Promise.all(
+    ROOTS.map((r) => fsp.readdir(path.join(r, "assets"), { withFileTypes: true }).catch(() => [])),
+  )).flat()
     .filter((d) => d.isDirectory() && d.name.includes("."))
     .map((d) => d.name),
   // Stubbed hosts must be rewritten too, or the page calls them for real.
@@ -359,23 +392,26 @@ async function resolveOne(pathname) {
   const clean = path.normalize(decodeURIComponent(pathname)).replace(/^(\.\.[/\\])+/, "");
   if (clean.includes("..")) return null;
 
-  if (clean.startsWith("/ext/")) {
-    // mirror layout keeps external assets under assets/<host>/
-    return (
-      (await statFile(path.join(ROOT, "assets", clean.slice("/ext/".length)))) ||
-      (await statFile(path.join(ROOT, clean)))
-    );
-  }
+  for (const root of ROOTS) {
+    if (clean.startsWith("/ext/")) {
+      // mirror layout keeps external assets under assets/<host>/
+      const hit =
+        (await statFile(path.join(root, "assets", clean.slice("/ext/".length)))) ||
+        (await statFile(path.join(root, clean)));
+      if (hit) return hit;
+      continue;
+    }
 
-  const direct = path.join(ROOT, clean);
-  // Extension-less paths are routes -> <route>/index.html.
-  const candidates = path.extname(clean)
-    ? [direct]
-    : [path.join(direct, "index.html"), direct + ".html", direct];
-  for (const c of candidates) {
-    if (!c.startsWith(ROOT)) continue;
-    const hit = await statFile(c);
-    if (hit) return hit;
+    const direct = path.join(root, clean);
+    // Extension-less paths are routes -> <route>/index.html.
+    const candidates = path.extname(clean)
+      ? [direct]
+      : [path.join(direct, "index.html"), direct + ".html", direct];
+    for (const c of candidates) {
+      if (!c.startsWith(root)) continue;
+      const hit = await statFile(c);
+      if (hit) return hit;
+    }
   }
   return null;
 }

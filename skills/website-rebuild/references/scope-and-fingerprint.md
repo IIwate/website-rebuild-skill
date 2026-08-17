@@ -136,6 +136,12 @@ shopify.design 的 Step 0 用 `tr ';{}' '\n' | grep -c` 数 token，一次产出
    └─ 隐性下线：generator/license 年份晚于获奖期 + 获奖期技术栈残留为零
 2. D 信号（坐实任一 → D）：
    ├─ wp-content 高密度 + WordPress generator meta（内容与行为主体在服务端 PHP+DB）
+   │    ⛔ **在目标路径上量，不在宿主域上量**。企业站的周年微站、活动页、发布会页
+   │    常以**静态子目录**挂在 WordPress/Drupal 域下：宿主的 `/wp-admin/`、
+   │    `/wp-sitemap.xml`、robots 里的 wp 痕迹**不构成目标的 D 信号**。
+   │    实证【aimservices】：宿主 robots 三行全是 WordPress，而目标 `/50th/` 的
+   │    `wp-content` 命中 **0**、无 generator meta、资产全在 `/50th/assets/` 下——
+   │    地面真值是 A。判据本身没错（它量的是路径），错的是照着 robots 先看的读法。
    ├─ 双抓为内容级差异（A/B 实验分桶、个性化注水 → 确定性验收彻底断裂）
    └─ 签名行为依赖 cart/checkout/GraphQL 数据面（行为主体是服务端函数）
 3. C 判定（**二维**，任何单信号命中都不判级）【shopifydesign】：先各取一维证据，再交叉查 §4 二维表
@@ -147,12 +153,20 @@ shopify.design 的 Step 0 用 `tr ';{}' '\n' | grep -c` 数 token，一次产出
         ├─ 命令式：three / GSAP / 裸 WebGL，渲染与交互逻辑本身在客户端 chunk 里
         └─ 声明式：@react-three/fiber、Theatre.js（场景即组件树、动画即数据）
    → 落"下发 route module × 命令式"格 → 继续按 4/5 判 A 或 B；其余三格 → C
-4. A 类签名（全部命中 → A）：
-   ├─ 静态构建器产物（webpack/Vite/Astro/Browserify 皆可，年代无关——2019 老栈照样 A）
-   ├─ ≥1MB 单体或少数几个 bundle（而非上百个组件粒度 chunk）
-   ├─ 内联 three 认强签名：WebGLRenderer/REVISION 命中（弱字符串 "three" 不算）
-   ├─ 双抓 byte-identical（或仅 token 级差异）
-   └─ 无内容级 API 依赖（bundle 内 /api/ 为零或仅遥测）
+4. A 类签名：
+   ├─ 【必要】静态构建器产物（webpack/Vite/Astro/Browserify 皆可，年代无关——2019 老栈照样 A）
+   ├─ 【必要】少数几个 bundle（而非上百个组件粒度 chunk）；单体 ≥1MB 是常见形态，不是门槛
+   ├─ 【必要】双抓 byte-identical（或仅 token 级差异）
+   ├─ 【必要】无内容级 API 依赖（bundle 内 /api/ 为零或仅遥测）
+   └─ 【⚠ 条件式，不是必要条件】**若站上有 3D**，three 必须认强签名
+        （WebGLRenderer/REVISION 命中，弱字符串 "three" 不算）。
+        ⛔ **无 3D 不影响判 A**：GSAP 时间轴 / Canvas 2D / 纯 CSS-JS 编排的滚动站
+        本来就是 A 类主场（SKILL.md「适用范围」原文），它们的 three 计数必然是 0。
+        实证【aimservices】：一个 GSAP+ScrollTrigger+Swiper 的静态微站，其余四条全中、
+        three=0，按"全部命中"的旧写法落不进 A，而第 5 条 B 的附加条件清单里
+        **一条都对不上**——最典型的纯 GSAP 滚动站在判定树里无家可归。
+        A 类的实质判据是 §4 二维表那两格（行为源下不下发 × 命令式还是声明式），
+        不是有没有 three。
 5. 其余 → B：管线主线成立，但存在以下任一附加条件（即"缺哪份指南"）：
    多 chunk 大规模切片（stripe 74 分包）/ Shopify 平台层剥离（✅ 指南已就绪：
    `references/shopify-platform.md`；allbirds、mana-yerba-mate、

@@ -252,11 +252,26 @@ const inflight = new Map();
 const requests = new Map(); // absolute url -> {path, status, type, bytes}
 const consoleErrors = [];
 const offHost = new Map(); // host -> count, for hosts not on the allow-list
+// Unparseable request URLs. NOT swallowed silently: the page building a bad URL
+// is a real finding about the source program and a candidate quirk-table entry.
+const malformed = new Map();
 
 cdp.on((msg) => {
   const p = msg.params || {};
   if (msg.method === "Network.requestWillBeSent" && p.request?.url?.startsWith("http")) {
-    const u = new URL(p.request.url);
+    // startsWith("http") is NOT a parseability test. The browser faithfully
+    // reports a request the PAGE built badly, and one such URL used to take the
+    // whole capture down with an uncaught TypeError — losing every route, not
+    // just the bad request. A capture tool must survive its subject.
+    // Field case: a tag manager built https://senses%20trackingscript.<host>/…
+    // — a percent-encoded SPACE inside the hostname, 8x per session.
+    let u;
+    try {
+      u = new URL(p.request.url);
+    } catch {
+      malformed.set(p.request.url, (malformed.get(p.request.url) || 0) + 1);
+      return;
+    }
     if (!RECORD_HOSTS.has(u.hostname)) {
       offHost.set(u.hostname, (offHost.get(u.hostname) || 0) + 1);
       return;
@@ -380,6 +395,11 @@ if (offHostTotal && (offHostTotal >= rows.length || offHostTotal >= 10) && !HOST
   );
 }
 if (consoleErrors.length) console.log(`\npage exceptions: ${consoleErrors.length}`);
+
+if (malformed.size) {
+  console.log(`\nmalformed request URL(s) the page issued — ${malformed.size} distinct:`);
+  for (const [u, n] of malformed) console.log(`  x${n}  ${JSON.stringify(u).slice(0, 300)}`);
+}
 
 if (DO_FETCH && missing.length) {
   // NOTE --fetch writes bytes but NOT ledger rows, so what it lands is off the

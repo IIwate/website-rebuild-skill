@@ -303,11 +303,44 @@ async function main() {
     );
     if (/text\/html/i.test(r.contentType))
       say(`- ⚠ 信号提示：.js 请求返回 HTML——疑似 catch-all 假 200（§5.7），对下载物做哈希碰撞校验`);
+    // 形态预检：只印适用的那一支。两支都印时读者要自己判断哪半句成立，
+    // 而图例挂在计数后面就会被当成结论读——本条与下面的 sourcemap 同族。
     say(`- 形态预检：lines=${lines.length} longest_line=${longest}`);
     say(
-      `  （单行数万字符 → minified，走 beautify；标识符全保留自带换行 → 未混淆，跳过 beautify 直接建行号坐标系）`,
+      longest > 5000
+        ? `  → 单行 ${longest} 字符：minified，走 beautify 建行号坐标系`
+        : `  → 最长行仅 ${longest} 字符、共 ${lines.length} 行：自带换行，**未压缩**，跳过 beautify 直接以原文行号建坐标系`,
     );
-    say(`- sourceMappingURL = ${count(text, /sourceMappingURL/g)}（有公开 sourcemap 且 sourcesContent 完整 → 直取源码替代 beautify）`);
+
+    // sourcemap：标记不是证据。三件事分开说——有没有标记 / 标记指向哪 / 那个 URL
+    // 到底取不取得到。实测过一个 vendor bundle 报 sourceMappingURL=1，而那行是被
+    // 拼进来的某个库 dist 残留的注释，指向的 .map 与 bundle 同名的 .map 双双 404。
+    const smMatches = [...text.matchAll(/[#@]\s*sourceMappingURL=(\S+)/g)].map((m) => m[1]);
+    if (!smMatches.length) {
+      say(`- sourceMappingURL：无`);
+    } else {
+      say(`- sourceMappingURL ×${smMatches.length}：${smMatches.slice(0, 3).join("  ")}`);
+      for (const rel of smMatches.slice(0, 3)) {
+        let mapUrl = null;
+        try {
+          mapUrl = new URL(rel, url).href;
+        } catch {}
+        if (!mapUrl || rel.startsWith("data:")) { say(`  - ${rel} → 内联或不可解析，人工确认`); continue; }
+        await sleep(1100); // politeness: the protocol is one session, low rate
+        const mr = await getManual(mapUrl).catch(() => null);
+        const okMap = !!mr && mr.status === 200;
+        const hasContent = okMap && /"sourcesContent"\s*:\s*\[/.test(mr.body.toString("utf8").slice(0, 400000));
+        say(
+          `  - ${mapUrl} → HTTP ${mr ? mr.status : "ERR"}` +
+            (okMap
+              ? `，sourcesContent ${hasContent ? "完整 → 可直取源码替代 beautify" : "缺失 → 只有映射，仍需 beautify"}`
+              : `，取不到 → 这个标记是残留，不是可用的 sourcemap`),
+        );
+        if (!/[/\\]/.test(rel)) {
+          say(`    ⚠ 相对文件名且本 bundle 是拼接产物时，该标记可能属于被拼进来的某个库，不属于它`);
+        }
+      }
+    }
     say(`- three 强签名（弱字符串 "three" 不算）：`);
     say(`  - WebGLRenderer        = ${count(text, /WebGLRenderer/g)}`);
     say(`  - THREE.WebGLRenderer  = ${count(text, /THREE\.WebGLRenderer/g)}（vendor 自带报错串份额 = 污染量）`);

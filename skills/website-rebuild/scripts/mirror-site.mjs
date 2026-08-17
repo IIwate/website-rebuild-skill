@@ -94,7 +94,7 @@ const flag = (name, dflt) => {
 };
 const ORIGIN_RAW = flag('origin', null);
 if (!ORIGIN_RAW) {
-  console.error('usage: mirror-site.mjs --origin https://example.com [--out legacy-mirror] [--hosts a,b] [--pages /x,/y] [--probe-404 /slug] [--seeds urls.txt] [--rounds 4] [--workers 8] [--query-ignore v,cb | --query-only width,height]');
+  console.error('usage: mirror-site.mjs --origin https://example.com [--out legacy-mirror] [--hosts a,b] [--pages /x,/y] [--probe-404 /slug] [--seeds urls.txt] [--rounds 4] [--workers 8] [--scope /path/] [--query-ignore v,cb | --query-only width,height]');
   process.exit(2);
 }
 const ORIGIN = ORIGIN_RAW.replace(/\/+$/, '');
@@ -177,10 +177,23 @@ const extractAssetUrls = createRefExtractor({
   assetHosts: ASSET_HOSTS,
 });
 
+// --scope <prefix>: restrict the PAGE queue to a path prefix. Step 0 grades a
+// TARGET PATH ("existence at path granularity"), and plenty of targets are a
+// microsite living under a bigger host — an anniversary site at /50th/ on a
+// corporate WordPress domain, a campaign page under a CMS. Without this the
+// crawler follows the host's own nav out of the project's scope and puts load
+// on an origin that never agreed to it.
+// ⛔ PAGES ONLY, NEVER ASSETS. A scoped microsite still references fonts and
+// images that live elsewhere on the host; cutting those by prefix would be
+// using a scope argument to punch a hole in mirror completeness.
+const SCOPE = flag('scope', null);
+const inScope = (p) => !SCOPE || p === SCOPE.replace(/\/$/, '') || p.startsWith(SCOPE);
+
 function extractPageLinks(html) {
   const pages = new Set();
   for (const m of html.matchAll(/href="(\/[^"#?]*)"/g)) {
     const p = m[1];
+    if (!inScope(p)) continue;
     // Not pages. Feeds and data documents (.atom/.rss/.json) are still FETCHED
     // — shape 3 of the extractor sees `href="/collections/all.atom"` and queues
     // them as assets, and they are rescanned for references like any other text
@@ -192,7 +205,9 @@ function extractPageLinks(html) {
   return pages;
 }
 
-const pageQueue = ['/', ...flag('pages', '').split(',').filter(Boolean)];
+// The '/' seed is unconditional without --scope; under it, seed the scope root
+// instead, or the host's homepage nav drags the whole site back in.
+const pageQueue = [SCOPE || '/', ...flag('pages', '').split(',').filter(Boolean)];
 if (PROBE_404) pageQueue.push(PROBE_404);
 const pagesDone = new Set();
 let assetQueue = new Set();

@@ -266,6 +266,24 @@ const out = parts.join("\n");
 // Strips the generated import/export scaffolding and parses the slices alone:
 // this is what catches a range that ends one line before its closing brace.
 if (BALANCE) {
+  // ⚠ AND the whole file, scaffolding included. Stripping the scaffolding is
+  // right for finding a bad slice boundary, but it makes this check
+  // structurally blind to errors the SCAFFOLDING itself causes. Field case: the
+  // generated `export {...}` block is fine in a module and a hard
+  // `SyntaxError: Unexpected token 'export'` when the shell loads the output as
+  // a CLASSIC <script src> — the whole page then runs nothing, and the failure
+  // surfaced two steps downstream in a CLEAN probe instead of here.
+  if (exported.size > 0) {
+    console.log(
+      `  note: ${exported.size} symbol(s) are exported, so ${rel(OUT)} is an ES MODULE.\n` +
+        `        If the shell loads it as a classic <script src> (no type="module"),\n` +
+        `        the browser throws SyntaxError and NOTHING on the page runs. Either\n` +
+        `        the consumer imports it, or the slice table should export nothing\n` +
+        `        (symbols: []) — retagging the shell as type="module" would "fix" it\n` +
+        `        by changing the loading semantics of the source program, which is\n` +
+        `        not a fix.`,
+    );
+  }
   try {
     new Function(sliceParts.join("\n"));
   } catch (e) {

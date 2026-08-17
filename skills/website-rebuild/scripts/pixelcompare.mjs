@@ -88,7 +88,7 @@ const flag = (name, dflt) => {
 const URL_A = flag('a', null);
 const URL_B = flag('b', null);
 if (!URL_A || !URL_B) {
-  console.error('usage: pixelcompare.mjs --a <urlA> --b <urlB> [--name home] [--out docs/pixelcompare] [--width 1280] [--height 800] [--settle 6000] [--ready expr] [--seed expr] [--label-a A] [--label-b B] [--format png|jpeg] [--quality 92] [--max-mean N]');
+  console.error('usage: pixelcompare.mjs --a <urlA> --b <urlB> [--name home] [--out docs/pixelcompare] [--width 1280] [--height 800] [--settle 6000] [--ready expr] [--seed expr] [--label-a A] [--label-b B] [--format png|jpeg] [--quality 92] [--max-mean N] [--self]');
   process.exit(2);
 }
 const NAME = flag('name', 'home');
@@ -144,11 +144,35 @@ await waitFor(async () => (await fetch(URL_B)).ok, 10000, 'server B ' + URL_B);
 console.log('[pixel] servers up');
 
 // --- and they must be TWO servers (the false-green gate) ---
-const { idA, idB } = await assertDistinctSides(URL_A, URL_B, {
-  tool: 'pixelcompare.mjs',
-  labelA: LABEL_A,
-  labelB: LABEL_B,
-});
+//
+// ⭐ UNLESS --self. verification-gates.md §1.3.2 requires a SELF-COMPARISON BAND
+// before any residual can be classified: the same side, captured across
+// independent sessions, 4 runs per side, and "2 runs do not make a band". That
+// measurement is by definition one side against itself, so the false-green gate
+// below would refuse the very run the doctrine mandates — and an agent that
+// hits the FATAL either skips the band (leaving every residual UNCLASSIFIED) or
+// invents a workaround.
+//
+// --self is that channel, and it is NOT a way to relax the gate: the result is
+// tagged as a band sample, never as a verdict, and the tag travels into the
+// output JSON so a band file cannot later be read as a cross-side pass.
+const SELF = args.includes('--self');
+let idA = null, idB = null;
+if (SELF) {
+  console.log(
+    `[pixel] --self: BAND SAMPLE, NOT A VERDICT.\n` +
+      `        Both sides are the same root; this run measures that side's own\n` +
+      `        session-to-session noise (§1.3.2). Collect >= 4 per side, per\n` +
+      `        checkpoint, interleaved with the other side — a band built from\n` +
+      `        one side only lets the reference side's luck set the tolerance.`,
+  );
+} else {
+  ({ idA, idB } = await assertDistinctSides(URL_A, URL_B, {
+    tool: 'pixelcompare.mjs',
+    labelA: LABEL_A,
+    labelB: LABEL_B,
+  }));
+}
 // Labels drive the output filenames and the composite captions, so a label that
 // contradicts the server's own declared side would mislabel the evidence.
 for (const [label, id] of [[LABEL_A, idA], [LABEL_B, idB]]) {
@@ -364,7 +388,9 @@ writeFileSync(join(OUT, `side-by-side-${NAME}.jpg`), Buffer.from(composite, 'bas
 let metrics = {};
 try { metrics = JSON.parse(readFileSync(join(OUT, 'metric.json'), 'utf8')); } catch {}
 metrics[NAME] = metric;
-writeFileSync(join(OUT, 'metric.json'), JSON.stringify(metrics, null, 2));
+// The tag travels with the numbers: a band file must never be readable later as
+// a cross-side pass. Anything consuming these files should refuse to mix kinds.
+writeFileSync(join(OUT, 'metric.json'), JSON.stringify({ kind: SELF ? 'self-band' : 'cross-side', ...metrics }, null, 2));
 console.log('[pixel] wrote', OUT);
 
 ws.close();
@@ -375,7 +401,13 @@ ws.close();
 // which also swallows cleanup errors so they can never decide the exit code.
 chrome.reap();
 
-if (MAX_MEAN !== null && metric.meanAbsDiff > Number(MAX_MEAN)) {
+// ⛔ --max-mean is a GATE, and a band sample is not a gate result. Applying a
+// threshold to a self-comparison would let the reference side's own noise
+// "pass" or "fail" something, which is a category error: the band is an INPUT
+// to classification, never a verdict.
+if (SELF && MAX_MEAN !== null) {
+  console.error(`[pixel] --max-mean is ignored under --self: a band sample is an input to classification, not a gate result.`);
+} else if (MAX_MEAN !== null && metric.meanAbsDiff > Number(MAX_MEAN)) {
   console.error(`[pixel] GATE FAIL: meanAbsDiff ${metric.meanAbsDiff} > ${MAX_MEAN}`);
   process.exit(1);
 }
