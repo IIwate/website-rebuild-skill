@@ -102,7 +102,7 @@ shopify.design 实测 26 个引用 vs 25 个文件 → 缺 1，补抓后归零�
 | `netcapture.tsv` | 抓包 HAVE/GAP 对账表 | GAP=0 是 M0 关账条件之一【kimi】 |
 | `external.txt` | 外部 URL 逐条甄别（kimi 47 条） | 喂给 §6 外部依赖决策表【kimi】 |
 
-⛔ **`external.txt` 里的"不抓"豁免只能是技术性事实**，逐条标类：`NOTFILE`（不是文件：结构化数据标识符、命名空间 URI、出站锚点）／`NOTFETCHED`（服务端不提供 404/410、需授权或登录态、付费墙——后两类属本 skill 适用范围之外）／`DISALLOWED`（源站 `robots.txt`/ToS/API 条款明令禁止，属 SKILL.md 的既定边界）。**不得**写"出于版权考虑我们选择不抓""反正不公开所以不抓"——法务理由不进这本账（`legal-and-deploy.md` §0.2；实证见 §5.1）。
+⛔ **`external.txt` 里的"不抓"豁免只能是技术性事实**，逐条标类：`NOTFILE`（不是文件：结构化数据标识符、命名空间 URI、出站锚点）／`NOTFETCHED`（服务端不提供 404/410、需授权或登录态、付费墙——后两类属本 skill 适用范围之外）／`DISALLOWED`（源站 `robots.txt`/ToS/API 条款明令禁止，属 SKILL.md 的既定边界；⛔ **标这一类先过 `legal-and-deploy.md` §0.3 逐路径判定**——只覆盖命中的那几条路径，且只能来自**针对抓取**的禁令，交易类禁令与"拿不准"都不算）。**不得**写"出于版权考虑我们选择不抓""反正不公开所以不抓"——法务理由不进这本账（`legal-and-deploy.md` §0.2；实证见 §5.1）。
 
 特殊载荷单独镜像：RSC flight payload 带 `RSC: 1` 头取回的另一份 body 存 `_rsc/`，其中含逐请求随机 nonce，**diff 前必须 mask**【kimi】。bundle 内联的 base64 资产（LUT、SMAA 纹理）提取到 `_extracted/`（分析产物区，与原件字节纯净区分开）【noomo】。
 

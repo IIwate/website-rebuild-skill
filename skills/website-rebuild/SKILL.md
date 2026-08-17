@@ -3,7 +3,7 @@ name: website-rebuild
 description: 1:1 rebuild of award-winning creative websites (WebGL / scroll-animation / portfolio sites). Evidence-driven pipeline - mirror-first forensics, line-number-traceable reverse engineering of minified bundles, verbatim porting, quantitative verification gates. Use when user asks to "复刻网站", "重建网站", "1:1 rebuild", "clone this site", or provides a URL of a creative/award site to reproduce.
 compatibility: Requires Node 22+ (bundled scripts use built-in WebSocket to talk to CDP), npx, and a local Chrome/Chromium for headless comparison. POSIX shell optional - the Step 0 probe protocol has a zero-dependency Node equivalent (scripts/fingerprint.mjs) for shells without curl/cmp/tr/perl (e.g. Windows PowerShell). Agent-agnostic - works in any Agent Skills-compatible runtime.
 metadata:
-  version: "0.1.14"
+  version: "0.1.15"
 ---
 
 # Website Rebuild（获奖创意站 1:1 复刻）
@@ -17,8 +17,8 @@ metadata:
 本 skill 面向**学习与研究目的**的保真复刻，用于研究获奖创意站的实现手法。适用对象是你**自有的、已获授权的，或公开可访问且允许学习临摹**的网站。它不是用于未授权地采集受保护内容、规避访问控制、或商业性盗用他人作品的工具。
 
 执行时遵守下列边界：
-- **尊重目标站规则**：遵守其 `robots.txt`、服务条款与版权；抓取保持低频、单会话，不对目标站施加异常负载。
-- **不触碰受保护边界**：不采集需要登录态、付费墙或授权才能访问的内容；本 skill 只处理匿名可公开访问的资源。若目标站明确禁止此类复制，停止并告知用户。
+- **尊重目标站规则**：遵守其 `robots.txt`、服务条款与版权；抓取保持低频、单会话，不对目标站施加异常负载。⛔ **`robots.txt` 是逐路径的许可声明，不是全站开关**——逐 URL 判定（选组 → 最长匹配 → 无匹配即允许），**不得因为存在任何 `Disallow` 行就判"整站禁止"**（几乎每个商业站都有 `/cart`、`/checkout`、`/admin` 的 `Disallow`）；禁令要按行为类别归类，**只有针对"抓取"的禁令才影响镜像范围**，针对交易的禁令只意味着"别去点结账"。⭐ **"读不懂 / 拿不准"不等于"禁止"**：走呈交，不走停工，更不自行缩小抓取范围。读法见 [references/legal-and-deploy.md](references/legal-and-deploy.md) §0.3。
+- **不触碰受保护边界**：不采集需要登录态、付费墙或授权才能访问的内容；本 skill 只处理匿名可公开访问的资源。若目标站明确禁止此类复制，停止并告知用户——**何为"明确禁止"见 `legal-and-deploy.md` §0.3.6 写死的四条门槛，其余一切不确定性走呈交不走停工**。
 - **产出默认私有**：默认 noindex、不公开部署。任何公开前必须完成逐资产版权取证，并显著标注"非官方复刻"与原作者归属（见 [references/legal-and-deploy.md](references/legal-and-deploy.md)）。
 
 ⛔ **法务判断归用户，skill 只取证与呈现**（三条，全程有效）：
