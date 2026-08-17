@@ -3,7 +3,7 @@ name: website-rebuild
 description: 1:1 rebuild of award-winning creative websites (WebGL / scroll-animation / portfolio sites). Evidence-driven pipeline - mirror-first forensics, line-number-traceable reverse engineering of minified bundles, verbatim porting, quantitative verification gates. Use when user asks to "复刻网站", "重建网站", "1:1 rebuild", "clone this site", or provides a URL of a creative/award site to reproduce.
 compatibility: Requires Node 22+ (bundled scripts use built-in WebSocket to talk to CDP), npx, and a local Chrome/Chromium for headless comparison. POSIX shell optional - the Step 0 probe protocol has a zero-dependency Node equivalent (scripts/fingerprint.mjs) for shells without curl/cmp/tr/perl (e.g. Windows PowerShell). Agent-agnostic - works in any Agent Skills-compatible runtime.
 metadata:
-  version: "0.1.18"
+  version: "0.1.19"
 ---
 
 # Website Rebuild（获奖创意站 1:1 复刻）
@@ -129,6 +129,7 @@ Step 1 侦察结果决定加载哪些场景指南（按需，不要全量加载�
 | `scripts/serve.mjs` | 零依赖静态服务器（MIME/Range/服务层改写/重定向回放），兼任源站参照服。`--fallback-root` 让复刻侧只放产出、资产全部从只读镜像读（`asset-management.md` 的不复制策略）；**未知旗标响亮失败**——被静默忽略的旗标是一次没人知道的降级 | M0.5 起全程 |
 | `scripts/build-site.mjs` | **策略 A 构建层**：按 `shell-config.mjs` 的登记变换表从镜像生成 `site/`，逐条命中下限 + `--check` 可复现性 + 目的断言（下限说明变换还活着，目的断言说明它达成了目的） | M2+（策略 A） |
 | `scripts/verify-shell.mjs` | **外壳字节门**：逐文档 patience diff，每个差异块必须能被变换表**重放**解释。⛔ 不 import `build-site.mjs`——门不许生产它所审计之物（`verification-gates.md` §2.1.2） | M2+（策略 A） |
+| `scripts/verify-payload.mjs` | **SSG payload 门**：把内联序列化数据块（Nuxt2 `window.__NUXT__` / Nuxt3 `__NUXT_DATA__`）**求值展开**再按结构对拍。字节门在这里不够用——payload 是一段"输出数据的程序"（参数去重、`\u002F` 转义），两份可以字节不同而语义相同，也可以字节相近而语义不同；且服务层要**改写它内部**的 URL。实测：它抓到两侧本地化实现不一致（一侧留 `href="http://host"`、另一侧写出 `href=""`），而外壳字节门全绿 | M0.5 起（有 SSG payload 时） |
 | `scripts/verify-offline.mjs` | **零外联门的静态一半**：枚举产出字节里每个外部绝对 URL 并逐条裁决（§1.6 的四类断言面里，资源级探针看不见的那三类） | M0.5 起每 commit |
 | `scripts/beautify-bundle.mjs` | js-beautify@1.15.1 钉死展开 bundle 到 `_pretty/` 并生成再生成说明 | M1 |
 | `scripts/extract-source.mjs` | 字节切片器：按钉死行号区间切 `_pretty/` 拼成生成文件（sha256 守卫 + 切片表 + 别名/桩表，`--check` 进门），逐字移植首选形式（§2.2；配置样例 `scripts/slices.config.example.mjs`） | M2+（逐字移植期） |

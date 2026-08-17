@@ -107,15 +107,24 @@ for (const page of PAGES) {
       const r = transformPage(aText, cfg, { head });
       if (r.text === bText) { used = [...r.hits.keys()]; break; }
     }
-    // The noindex injection is a PURE INSERTION: `<head>` is a unique line so
-    // the diff anchors on it and the hunk's MIRROR SIDE IS EMPTY. A replay over
-    // an empty string can never reproduce it, so it is matched against the
-    // exact bytes the transform inserts.
-    // ⚠ WITH its trailing newline: the mirror's `<head>` line already ends in
-    // one, so `<head>\n` + block leaves a blank line after the meta. Stripping
-    // it here (the first attempt at this check) made the gate red on a build
-    // that was correct.
-    if (!used && aText === "" && cfg.notice && bText === noindexBlock(cfg)) used = ["T-NOINDEX"];
+    // The noindex injection is a PURE INSERTION, and where the patience diff
+    // puts its boundary depends on which nearby lines happen to be unique. It
+    // has been observed three ways on real targets: mirror side empty; mirror
+    // side = the `<head …>` tag; mirror side = the line AFTER the tag. Special-
+    // casing each spelling is how this check kept going red on correct builds.
+    //
+    // General form instead: if the site side STARTS WITH the exact bytes the
+    // transform inserts, strip that prefix and require the REST to replay from
+    // the table like any other hunk. One rule, every anchoring.
+    if (!used && cfg.notice) {
+      const block = noindexBlock(cfg);
+      for (const b of [block, block.replace(/\n$/, "")]) {
+        if (!bText.startsWith(b)) continue;
+        const rest = bText.slice(b.length).replace(/^\n/, "");
+        const r = transformPage(aText, cfg, { head: false });
+        if (r.text === rest || aText === rest) { used = ["T-NOINDEX", ...r.hits.keys()]; break; }
+      }
+    }
     if (used) for (const u of used) useCount.set(u, (useCount.get(u) || 0) + 1);
     else unexplained.push({ page: page.rel, a: aText.slice(0, 200), b: bText.slice(0, 200) });
   }

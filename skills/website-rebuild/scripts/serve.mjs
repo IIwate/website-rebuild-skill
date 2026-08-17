@@ -329,13 +329,50 @@ try {
 // for a 229 KB theme asset that was on disk the whole time. Because the URL is
 // built at runtime, it appears nowhere in the mirror, and the natural (wrong)
 // conclusion is that it is unfixable.
+// Shape 6 helper: `https:\u002F\u002Fhost\u002Fpath` (and the http/
+// protocol-relative variants). The replacement keeps the SAME escaping so the
+// surrounding JSON/JS string stays byte-valid — a plain "/" here would still
+// parse, but it would silently change the bytes of a payload that downstream
+// byte gates compare.
+function unicodeSlash(text, host, to) {
+  // U is the six LITERAL characters \u002F as they appear in the payload.
+  // U_RE is how you match them in a RegExp: a bare "\u002F" in a pattern is a
+  // unicode escape the engine resolves to "/" BEFORE matching, so the first
+  // version of this silently matched real slashes and rewrote nothing. The
+  // failure was invisible except by counting the survivors.
+  const U = "\\u002F";
+  const U_RE = "\\\\u002F";
+  const esc = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const toEsc = to.replace(/\//g, U);
+  return text
+    .replace(new RegExp(`https?:${U_RE}${U_RE}${esc(host)}${U_RE}`, "gi"), `${toEsc}${U}`)
+    // No-path form inside the payload: same rule as the unescaped one — it
+    // means the home page, so it becomes "/" written the payload's way.
+    .replace(new RegExp(`https?:${U_RE}${U_RE}${esc(host)}(?!${U_RE})`, "gi"), toEsc || U)
+    .replace(new RegExp(`${U_RE}${U_RE}${esc(host)}${U_RE}`, "gi"), `${toEsc}${U}`);
+}
+
 function rewrite(text, ext) {
   // Rewritten bytes can no longer match SRI hashes; drop integrity attrs (HTML only).
   if (ext === ".html") text = text.replace(/ integrity="[^"]*"/g, "");
   for (const h of ORIGIN_HOSTS) {
     text = text.replaceAll(`https://${h}/`, "/").replaceAll(`http://${h}/`, "/");
+    // The NO-PATH form: `https://host` with nothing after it means the home
+    // page, so it localises to "/" — not to "" (an empty href points at the
+    // CURRENT page, a silently broken link) and not left alone (it would point
+    // at the live origin). Found by the payload gate, which saw this side and
+    // the build layer disagree on the same input.
+    text = text.replace(new RegExp(`https?://${h.replace(/\./g, "\\.")}(?![/\\w.-])`, "g"), "/");
     text = text.replaceAll(`https:\\/\\/${h}\\/`, "\\/").replaceAll(`http:\\/\\/${h}\\/`, "\\/");
     text = text.replaceAll(`\\/\\/${h}\\/`, "\\/");
+    // Shape 6: UNICODE-ESCAPED slashes. Serialised payloads escape "/" as
+    // \u002F so the blob can never contain a literal "</script>" — Nuxt's
+    // devalue does it, and so do several other SSG payload serialisers.
+    // Measured on a Nuxt SSG target: 11 URLs to the media host survived every
+    // other shape in this function and sat inside window.__NUXT__; the runtime
+    // zero-outbound probe caught exactly ONE of them (the only one that page
+    // happened to request), so ten were latent outbound.
+    text = unicodeSlash(text, h, "");
     if (ext === ".html" || ext === ".css") text = text.replaceAll(`//${h}/`, "/");
     text = text.replace(bareHostRe(h), "");
   }
@@ -345,6 +382,7 @@ function rewrite(text, ext) {
       .replaceAll(`https:\\/\\/${h}\\/`, `\\/ext\\/${h}\\/`)
       .replaceAll(`http:\\/\\/${h}\\/`, `\\/ext\\/${h}\\/`)
       .replaceAll(`\\/\\/${h}\\/`, `\\/ext\\/${h}\\/`);
+    text = unicodeSlash(text, h, `/ext/${h}`);
     // Unescaped protocol-relative form only in markup/styles: inside JS it is
     // often concatenated with a "https:" prefix and rewriting would corrupt it.
     if (ext === ".html" || ext === ".css") text = text.replaceAll(`//${h}/`, `/ext/${h}/`);
