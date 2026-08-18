@@ -281,12 +281,20 @@ function shotFatal(label, err) {
 async function capture(url, label) {
   await cdp('Page.navigate', { url });
   if (READY) await waitFor(() => evalJs(READY), 120000, label + ' ready');
-  await new Promise((resolve) => setTimeout(resolve, SETTLE)); // settle: transitions + fade-ins
-  // --pump: advance the frozen clock by an IDENTICAL dt sequence on both sides,
-  // which is the whole point of the shim — same frame, not same wall time.
-  // Pumped AFTER the settle so real async (asset fetches) has landed and the
-  // only thing left to advance is the page's own animation.
   if (PUMP) {
+    // ⭐ INTERLEAVED WITH REAL TIME, not one burst after the settle.
+    //
+    // A frozen page still boots against REAL async: XHR for assets, decode,
+    // font loading. Those land on the wall clock while everything the page can
+    // observe about time only moves when pumped. Pump once at the end and the
+    // engine never gets a frame in which its assets have arrived — measured on a
+    // WebGL target, canvases sat at the default 300x150 through a 240-frame
+    // burst, and the comparison then reported a perfect 0 over two blank frames.
+    // Pumping in chunks with real gaps, the same engine sized its canvas to
+    // 1730x1082 within ~2.5 s of virtual time.
+    //
+    // So: the pump budget is spread across the settle window. Both sides get the
+    // IDENTICAL dt sequence, which is what makes the frames comparable.
     const [dt, frames] = PUMP.split(',').map((n) => Number(n.trim()));
     const ok = await evalJs(`typeof window.__pump === "function"`);
     if (ok !== true && ok !== 'true') {
@@ -295,7 +303,15 @@ async function capture(url, label) {
       chrome.reap();
       process.exit(6);
     }
-    await evalJs(`(window.__pump(${dt || 16.7}, ${frames || 60}), true)`);
+    const total = frames || 60;
+    const chunk = Math.max(1, Math.ceil(total / 40));
+    const gap = Math.max(20, Math.floor(SETTLE / Math.ceil(total / chunk)));
+    for (let done = 0; done < total; done += chunk) {
+      await evalJs(`(window.__pump(${dt || 16.7}, ${Math.min(chunk, total - done)}), true)`);
+      await new Promise((r) => setTimeout(r, gap));
+    }
+  } else {
+    await new Promise((resolve) => setTimeout(resolve, SETTLE)); // settle: transitions + fade-ins
   }
   let data;
   try {
