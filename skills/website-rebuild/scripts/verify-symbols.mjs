@@ -82,8 +82,25 @@ async function declarations(root) {
 }
 
 const map = await readFile(MAP, "utf8").then(JSON.parse).catch(() => ({}));
-const renames = map.declarations || {};
+
+// ⛔ A plain object inherits from Object.prototype, so `renames["toString"]`
+// answers with a native function for a codebase that never mentioned it. This
+// gate reported exactly that on its first real run — `toString` missing from
+// src, "mapped to function toString() { [native code] }" — and it would fire on
+// any project declaring toString / valueOf / constructor / hasOwnProperty.
+const renames = Object.assign(Object.create(null), map.declarations || {});
 const allowOrphans = new Set(map.allow_orphans || []);
+
+// ⚠ The map is allowed to be absent, but not to be a DIFFERENT shape. A rename
+// file written to another schema reads as "zero renames" and the gate then
+// passes by knowing nothing — which is the failure this whole file exists to
+// prevent one level up.
+if (Object.keys(map).length && !("declarations" in map) && !("allow_orphans" in map)) {
+  console.log(`FATAL: ${path.relative(process.cwd(), MAP)} has neither "declarations" nor "allow_orphans".`);
+  console.log(`       A map in an unexpected shape reads as zero renames, and this gate`);
+  console.log(`       would then pass while knowing nothing. Keys seen: ${Object.keys(map).join(", ")}`);
+  process.exit(5);
+}
 
 const portDecls = await declarations(PORT);
 const srcDecls = await declarations(SRC);
@@ -102,7 +119,7 @@ if (portDecls.size === 0) {
 const missing = [];
 const collisions = new Map();
 for (const [name, at] of portDecls) {
-  const want = renames[name] ?? name;
+  const want = Object.hasOwn(renames, name) ? renames[name] : name;
   if (!srcDecls.has(want)) missing.push({ name, want, at });
   else {
     const key = want;
@@ -112,7 +129,7 @@ for (const [name, at] of portDecls) {
 const manyToOne = [...collisions].filter(([, from]) => from.length > 1);
 
 // 3. no src declaration without a port origin
-const claimed = new Set([...portDecls.keys()].map((n) => renames[n] ?? n));
+const claimed = new Set([...portDecls.keys()].map((n) => (Object.hasOwn(renames, n) ? renames[n] : n)));
 const orphans = [...srcDecls.keys()].filter((n) => !claimed.has(n) && !allowOrphans.has(n));
 
 let fail = 0;
