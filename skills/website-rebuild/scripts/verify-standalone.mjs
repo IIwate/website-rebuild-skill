@@ -60,11 +60,20 @@ async function files(dir) {
 
 // Escapes worth reporting. Each one is a concrete way the directory stops being
 // portable, so each gets its own label rather than one generic "bad path".
+// ⛔ `../` is not by itself an escape, and treating it as one made this gate's
+// first real run 102 false positives deep: `src/engine/*.js` importing
+// `../vendor-aliases.js` resolves to `src/vendor-aliases.js`, which is inside.
+// The question is where the path LANDS, so resolve it and compare.
+const escapesSrc = (file, spec) => {
+  const target = path.resolve(path.dirname(file), spec.replace(/^['"`\s(=]+/, ""));
+  return !target.startsWith(SRC + path.sep) && target !== SRC;
+};
+
 const ESCAPES = [
-  { id: "parent-relative", re: /(?:^|[\s'"`(=])\.\.\/[^\s'"`)]*/g, why: "resolves outside src/ once copied" },
+  { id: "parent-relative", re: /(?:^|[\s'"`(=])\.\.\/[^\s'"`)]*/g, why: "resolves outside src/ once copied", resolve: true, codeOnly: true },
   { id: "repo-absolute", re: new RegExp(ROOT.replace(/[.*+?^${}()|[\]\\]/g, "\\$&") + "[^\\s'\"`)]*", "g"), why: "absolute path into this repo" },
-  { id: "mirror-ref", re: /\bmirror\/(?!manifest)[^\s'"`)]*/g, why: "reads the read-only mirror, which does not travel" },
-  { id: "port-ref", re: /\bport\/_?gen[^\s'"`)]*/g, why: "reads the verbatim port, which does not travel" },
+  { id: "mirror-ref", re: /\bmirror\/(?!manifest)[^\s'"`)]*/g, why: "reads the read-only mirror, which does not travel", codeOnly: true },
+  { id: "port-ref", re: /\bport\/_?gen[^\s'"`)]*/g, why: "reads the verbatim port, which does not travel", codeOnly: true },
 ];
 
 console.log(`=== verify-standalone ===`);
@@ -89,7 +98,13 @@ for (const f of all.filter((f) => TEXT.test(f))) {
     lines.forEach((l, i) => {
       // A gate's own prose describing what it forbids is not a violation.
       if (/^\s*(?:\/\/|\*|#|<!--)/.test(l)) return;
+      // Prose is not a dependency. A README pointing at ../REBUILD_PLAN.md
+      // describes where things live in the development repo; it cannot make the
+      // copied directory fail to run. Only code can actually reach for a path.
+      // ⚠ It CAN go stale in the copy, though — say "a mirror", not "../mirror".
+      if (esc.codeOnly && !/\.(m?[jt]sx?|vue|astro|svelte|css|scss|html|json)$/i.test(f)) return;
       for (const m of l.matchAll(esc.re)) {
+        if (esc.resolve && !escapesSrc(f, m[0])) continue;
         hits.push({ file: path.relative(ROOT, f), line: i + 1, id: esc.id, text: m[0].slice(0, 70), why: esc.why });
       }
     });
@@ -122,7 +137,7 @@ if (hits.length) {
     for (const h of list.slice(0, 8)) console.log(`         ${h.file}:${h.line}  ${h.text}`);
     if (list.length > 8) console.log(`         … ${list.length - 8} more`);
   }
-  console.log(`\n       Assets belong in src/assets/ (readable-source.md §2). Copying is required`);
+  console.log(`\n       Assets belong inside src/ (readable-source.md §2). Copying is required`);
   console.log(`       here — the no-copy policy applies to port/, and reverses at this stage.`);
 } else console.log(`  ok   no references escape src/ (${all.length} files scanned)`);
 
