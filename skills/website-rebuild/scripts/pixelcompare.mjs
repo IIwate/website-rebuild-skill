@@ -88,7 +88,7 @@ const flag = (name, dflt) => {
 const URL_A = flag('a', null);
 const URL_B = flag('b', null);
 if (!URL_A || !URL_B) {
-  console.error('usage: pixelcompare.mjs --a <urlA> --b <urlB> [--name home] [--out docs/pixelcompare] [--width 1280] [--height 800] [--settle 6000] [--ready expr] [--seed expr] [--label-a A] [--label-b B] [--format png|jpeg] [--quality 92] [--max-mean N] [--self]');
+  console.error('usage: pixelcompare.mjs --a <urlA> --b <urlB> [--name home] [--out docs/pixelcompare] [--width 1280] [--height 800] [--settle 6000] [--ready expr] [--seed expr] [--label-a A] [--label-b B] [--format png|jpeg] [--quality 92] [--max-mean N] [--self] [--pump dt,frames]');
   process.exit(2);
 }
 const NAME = flag('name', 'home');
@@ -111,6 +111,11 @@ if (FORMAT !== 'png' && (!Number.isInteger(QUALITY) || QUALITY < 1 || QUALITY > 
 const EXT = FORMAT === 'jpeg' ? 'jpg' : FORMAT;
 const SETTLE = Number(flag('settle', 6000));
 const READY = flag('ready', null);
+// --pump "dt,frames": drive the determinism shim from here instead of smuggling
+// a call into --ready. probe-shim.js's header says "from a CDP probe call
+// window.__pump(dt, frames)" and this script had no way to do it, so the frozen
+// comparison everyone reaches for was one expression-shaped workaround away.
+const PUMP = flag('pump', null);
 const SEED = flag('seed', null);
 const LABEL_A = flag('label-a', 'REBUILD');
 const LABEL_B = flag('label-b', 'MIRROR');
@@ -277,6 +282,21 @@ async function capture(url, label) {
   await cdp('Page.navigate', { url });
   if (READY) await waitFor(() => evalJs(READY), 120000, label + ' ready');
   await new Promise((resolve) => setTimeout(resolve, SETTLE)); // settle: transitions + fade-ins
+  // --pump: advance the frozen clock by an IDENTICAL dt sequence on both sides,
+  // which is the whole point of the shim — same frame, not same wall time.
+  // Pumped AFTER the settle so real async (asset fetches) has landed and the
+  // only thing left to advance is the page's own animation.
+  if (PUMP) {
+    const [dt, frames] = PUMP.split(',').map((n) => Number(n.trim()));
+    const ok = await evalJs(`typeof window.__pump === "function"`);
+    if (ok !== true && ok !== 'true') {
+      console.error(`[pixel] FATAL: --pump given but window.__pump is not defined on ${label}.\n` +
+        `        The determinism shim is injected by serve.mjs for requests carrying ?__probe — the URL needs it.`);
+      chrome.reap();
+      process.exit(6);
+    }
+    await evalJs(`(window.__pump(${dt || 16.7}, ${frames || 60}), true)`);
+  }
   let data;
   try {
     ({ data } = await cdp('Page.captureScreenshot', {
@@ -323,6 +343,49 @@ const inlineFatal = (step, err) => {
   chrome.reap();
   process.exit(4);
 };
+
+// --- NON-BLANK PRECONDITION (verification-gates.md §4.8) ---------------------
+// ⛔ Runs BEFORE the diff, and it is not optional. A comparison of two empty
+// frames reports meanAbsDiff 0, worstCellDiff 0, similarity 100 — the exact
+// shape of a perfect result. Measured on a WebGL target whose determinism
+// freeze parked the engine before first paint: three routes reported 0 across
+// the board, and the frames were 201 distinct colours at 99.5% black against
+// 28,282 colours unfrozen. The SELF-band was 0 too, so the check meant to prove
+// the freeze worked was equally satisfied by the blankness.
+//
+// Nothing else in this toolchain asks whether a frame HAS ANYTHING IN IT.
+const census = await evalJs(`(async () => {
+  const load = (b64) => new Promise((r) => { const i = new Image(); i.onload = () => r(i); i.src = ${JSON.stringify(MIME)} + b64; });
+  const stat = async (b64) => {
+    const img = await load(b64);
+    const c = document.createElement('canvas');
+    c.width = Math.min(img.width, 480); c.height = Math.min(img.height, 300);
+    const x = c.getContext('2d', { willReadFrequently: true });
+    x.drawImage(img, 0, 0, c.width, c.height);
+    const d = x.getImageData(0, 0, c.width, c.height).data;
+    const h = new Map(); let top = 0;
+    for (let i = 0; i < d.length; i += 4) {
+      const k = (d[i] << 16) | (d[i + 1] << 8) | d[i + 2];
+      const n = (h.get(k) || 0) + 1; h.set(k, n); if (n > top) top = n;
+    }
+    return { colours: h.size, dominantPct: +(100 * top / (c.width * c.height)).toFixed(1) };
+  };
+  return JSON.stringify({ a: await stat(${JSON.stringify(shotA)}), b: await stat(${JSON.stringify(shotB)}) });
+})()`);
+{
+  const { a, b } = JSON.parse(census);
+  console.log(`[pixel] frame census — ${LABEL_A}: ${a.colours} colours, dominant ${a.dominantPct}%  |  ${LABEL_B}: ${b.colours} colours, dominant ${b.dominantPct}%`);
+  const blank = (x) => x.colours < 64 || x.dominantPct > 97;
+  if (blank(a) || blank(b)) {
+    console.error(
+      `[pixel] FATAL: a captured frame is effectively BLANK, so any agreement below would be agreement about nothing.\n` +
+        `        Likely causes: the page never reached first paint, a determinism freeze parked it before init,\n` +
+        `        or --settle / --ready returned too early. Compare against an unfrozen capture before trusting a 0.`,
+    );
+    chrome.reap();
+    process.exit(5);
+  }
+}
 
 // --- grid-cell diff + composite, computed inside the same chrome ---
 let metric;

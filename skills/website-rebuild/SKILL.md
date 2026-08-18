@@ -3,7 +3,7 @@ name: website-rebuild
 description: 1:1 rebuild of award-winning creative websites (WebGL / scroll-animation / portfolio sites). Evidence-driven pipeline - mirror-first forensics, line-number-traceable reverse engineering of minified bundles, verbatim porting, quantitative verification gates. Use when user asks to "复刻网站", "重建网站", "1:1 rebuild", "clone this site", or provides a URL of a creative/award site to reproduce.
 compatibility: Requires Node 22+ (bundled scripts use built-in WebSocket to talk to CDP), npx, and a local Chrome/Chromium for headless comparison. POSIX shell optional - the Step 0 probe protocol has a zero-dependency Node equivalent (scripts/fingerprint.mjs) for shells without curl/cmp/tr/perl (e.g. Windows PowerShell). Agent-agnostic - works in any Agent Skills-compatible runtime.
 metadata:
-  version: "0.1.20"
+  version: "0.1.21"
 ---
 
 # Website Rebuild（获奖创意站 1:1 复刻）
@@ -136,8 +136,9 @@ Step 1 侦察结果决定加载哪些场景指南（按需，不要全量加载�
 | `scripts/probe.mjs` | CDP 无头探针（console/异常/网络 CLEAN 判定，退出码进 CI；`--no-external` 断言零外联、`--walk` 全滚动走查） | M0.5 起每 commit |
 | `scripts/verify-routes.mjs` | 路由/重定向/状态码契约门 | M2+ |
 | `scripts/verify-ssr.mjs` | SSR/DOM 逐字节门 | M2+（有 SSR 产物时最先建） |
-| `scripts/pixelcompare.mjs` | 量化像素对拍（粗网格相似度 + metric 输出）。**视口 ≳ 1500×900 时 PNG 过不了 CDP 载荷硬顶**，改 `--format jpeg --quality 92`。`--self` 是**自比带宽的合法通道**（§1.3.2 要求的那次测量按定义是一侧与自己比，会被跨侧假绿守卫拦下）——产物标 `kind:"self-band"`，且 `--max-mean` 对它失效：带宽是分类的**输入**，不是判决 | M(n-1) |
+| `scripts/pixelcompare.mjs` | 量化像素对拍（粗网格相似度 + metric 输出）。**视口 ≳ 1500×900 时 PNG 过不了 CDP 载荷硬顶**，改 `--format jpeg --quality 92`。**产出前先过非空帧前置条件**——两张空帧对拍会报 `meanAbsDiff 0 / 相似度 100`，与完美结果同形（实测：冻结把引擎停在首帧之前，三条路由全报 0，而那是 201 色 99.5% 纯黑）；`--pump dt,frames` 是 probe-shim 的一等驱动入口（此前只能塞进 `--ready` 表达式）。`--self` 是**自比带宽的合法通道**（§1.3.2 要求的那次测量按定义是一侧与自己比，会被跨侧假绿守卫拦下）——产物标 `kind:"self-band"`，且 `--max-mean` 对它失效：带宽是分类的**输入**，不是判决 | M(n-1) |
 | `scripts/side-by-side.mjs` | 双侧截图并排合成图（对拍产物留证） | M(n-1) |
+| `scripts/frame-census.mjs` | **这一帧上有东西吗**：数截图的颜色数与主色占比。⛔ 像素门已内置同一判据作前置条件，本脚本用于事后复核任意截图——`§4.8`「全部的门拍在同一个状态里」的那个状态可能是**空的**，而此前没有任何一道门会问这句 | M(n-1) |
 | `scripts/probe-shim.js` | 确定性驱动 shim（接管整个熵面：rAF/timer/`performance.now`/`Date.now`/定种 `Math.random`，手动泵到任意 t，双侧同位注入） | M(n-1) |
 | `scripts/dump-timelines.mjs` | GLB 动画曲线 dump 成 JSON 数值账本 | M1（数据驱动动画时） |
 | `scripts/lib/png.mjs` | 零依赖 PNG 编解码 | 对拍脚本依赖 |
