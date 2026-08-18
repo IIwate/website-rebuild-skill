@@ -3,7 +3,7 @@ name: website-rebuild
 description: 1:1 rebuild of award-winning creative websites (WebGL / scroll-animation / portfolio sites). Evidence-driven pipeline - mirror-first forensics, line-number-traceable reverse engineering of minified bundles, verbatim porting, quantitative verification gates. Use when user asks to "复刻网站", "重建网站", "1:1 rebuild", "clone this site", or provides a URL of a creative/award site to reproduce.
 compatibility: Requires Node 22+ (bundled scripts use built-in WebSocket to talk to CDP), npx, and a local Chrome/Chromium for headless comparison. POSIX shell optional - the Step 0 probe protocol has a zero-dependency Node equivalent (scripts/fingerprint.mjs) for shells without curl/cmp/tr/perl (e.g. Windows PowerShell). Agent-agnostic - works in any Agent Skills-compatible runtime.
 metadata:
-  version: "0.1.24"
+  version: "0.1.25"
 ---
 
 # Website Rebuild（获奖创意站 1:1 复刻）
@@ -92,7 +92,7 @@ metadata:
 
 **M(n) — 收口**。冷头评审：对 bundle 顶层类/模块清单逐一核对落点（功能测试测不出整块遗漏，只有清单式核对能）。加载 [references/legal-and-deploy.md](references/legal-and-deploy.md) 完成版权**取证**并把决定**呈交用户**——在用户决定之前按安全默认执行（**私有 + noindex + 不部署**），公开前必须逐资产取证、显著标注非官方复刻。
 
-**M(n+1) — 源码化**。加载 [references/readable-source.md](references/readable-source.md)。到 M(n) 为止产物**已证明正确但人读不了**（实测：14,271 行挤在一个文件里，`e` 出现 2962 次，注释占 0.2%）。本阶段把 `port/` 重写成 `src/`：按声明拆模块 → 作用域安全地去混淆重命名 → 补分档注释 → 复制资产做到自包含。⛔ **前置条件不可协商：必须先有全绿的门。** 没有裁判的重构是盲改；有了 `meanAbsDiff 0.00` 的裁判，每一步都能被证死——**这是重构能有的最好条件，也是它必须排在最后的原因**。现有门全部原样复用（目标换成 `src/` 构建产物，**容差不许放宽**），另加符号映射门与自包含门。⛔ 结构性重写（合并重复、提取公共函数、改算法）**默认禁止**——它会让门从"证明等价"退化为"没测出不等价"。⭐ **纪律 4 在本阶段依然有效**：你现在读得懂了，"这明显是个 bug"的冲动会比任何阶段都强，而它依然可能是行为本身。
+**M(n+1) — 源码化**。加载 [references/readable-source.md](references/readable-source.md)。到 M(n) 为止产物**已证明正确但人读不了**（实测：14,271 行挤在一个文件里，`e` 出现 2962 次，注释占 0.2%）。本阶段把 `port/` 重写成 `src/`：拆模块 → 作用域安全地去混淆重命名 → 补分档注释 → 复制资产做到自包含。⛔ **拆分粒度不是自由选择**——扁平脚本的声明顺序即求值顺序，粒度由三条硬约束决定（互相引用 / 求值顺序 / import 绑定不可赋值），**先出划分方案让人过目，再切**；而且**可能存在一个由耦合决定的粒度下界**，到达时登记为限制，不许放宽门（`readable-source.md` §3.1）。⛔ **前置条件不可协商：必须先有全绿的门。** 没有裁判的重构是盲改；有了 `meanAbsDiff 0.00` 的裁判，每一步都能被证死——**这是重构能有的最好条件，也是它必须排在最后的原因**。现有门全部原样复用（目标换成 `src/` 构建产物，**容差不许放宽**），另加符号映射门与自包含门。⛔ 结构性重写（合并重复、提取公共函数、改算法）**默认禁止**——它会让门从"证明等价"退化为"没测出不等价"。⭐ **纪律 4 在本阶段依然有效**：你现在读得懂了，"这明显是个 bug"的冲动会比任何阶段都强，而它依然可能是行为本身。
 
 ### 分支路由表
 
