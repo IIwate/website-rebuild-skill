@@ -10,7 +10,7 @@
  * records the url -> path mapping policy these bytes were written under.
  *
  * Usage:
- *   node mirror-site.mjs --origin https://example.com [--out legacy-mirror]
+ *   node mirror-site.mjs --origin https://example.com [--out mirror]
  *     [--hosts cdn.example.com,media.example.net]  extra asset hosts to follow
  *     [--pages /pricing,/contact]                  extra seed pages
  *     [--probe-404 /no-such-page-mirror-probe]     fetch origin 404 template -> 404.html
@@ -94,12 +94,12 @@ const flag = (name, dflt) => {
 };
 const ORIGIN_RAW = flag('origin', null);
 if (!ORIGIN_RAW) {
-  console.error('usage: mirror-site.mjs --origin https://example.com [--out legacy-mirror] [--hosts a,b] [--pages /x,/y] [--probe-404 /slug] [--seeds urls.txt] [--rounds 4] [--workers 8] [--scope /path/] [--query-ignore v,cb | --query-only width,height]');
+  console.error('usage: mirror-site.mjs --origin https://example.com [--out mirror] [--hosts a,b] [--pages /x,/y] [--probe-404 /slug] [--seeds urls.txt] [--rounds 4] [--workers 8] [--scope /path/] [--query-ignore v,cb | --query-only width,height]');
   process.exit(2);
 }
 const ORIGIN = ORIGIN_RAW.replace(/\/+$/, '');
 const ORIGIN_HOST = new URL(ORIGIN).hostname;
-const OUT = join(process.cwd(), flag('out', 'legacy-mirror'));
+const OUT = join(process.cwd(), flag('out', 'mirror'));
 const ROUNDS = Number(flag('rounds', 4));
 const WORKERS = Number(flag('workers', 8));
 const PROBE_404 = flag('probe-404', null);

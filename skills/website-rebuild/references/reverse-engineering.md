@@ -44,7 +44,7 @@ grep `ColorManagement` / `outputColorSpace` / `toneMapping` / `useLegacyLights`�
 有 bundle 时，先判形态，再决定是否需要 beautify：
 
 ```bash
-head -c 600 legacy-mirror/<path-to-bundle>.js          # 看开头形态
+head -c 600 mirror/<path-to-bundle>.js          # 看开头形态
 awk '{ if (length($0) > m) m = length($0) } END { print m }' <bundle>.js   # 最长行
 grep -c 'sourceMappingURL' <bundle>.js                 # 有无 sourcemap 指针
 ```
@@ -126,9 +126,9 @@ grep -c 'sourceMappingURL' <bundle>.js                 # 有无 sourcemap 指针
 ### 1.1 展开命令（版本钉死 1.15.1）
 
 ```bash
-mkdir -p legacy-mirror/_pretty
-npx --yes js-beautify@1.15.1 legacy-mirror/<path>/<bundle>.js \
-  -o legacy-mirror/_pretty/<bundle>.pretty.js
+mkdir -p mirror/_pretty
+npx --yes js-beautify@1.15.1 mirror/<path>/<bundle>.js \
+  -o mirror/_pretty/<bundle>.pretty.js
 ```
 
 - 多 chunk 站（Next 等）把**全部 chunk 逐个展开**（kimi 展开 21 个 chunk 共 57,068 行）【kimi】。
@@ -263,7 +263,7 @@ grep 命中只是假设，**每条必须回上下文确认**；**计数同理**�
 
 - **GLB 烘焙曲线**：手写解析器 dump 全部动画曲线（noomo `docs/timeline-baseline/` 2.4MB：dev.glb 38 条参数轨道 ×481 帧、cam.glb 相机 601 帧）；后续验收即"相机位置在 t=0/5/10/19 与基准插值小数点后三位全等"【noomo】；
 - **CSS 变量时间序列**：探针在镜像上录基准（kimi `probe-deck-vars.mjs` → `docs/deck-baseline/source-*.json`）【kimi】；
-- **bundle 内联 base64 资产**提取到 `legacy-mirror/_extracted/`（noomo：colorsMap 1024×2 光谱 LUT、SMAA 纹理——缺 colorsMap 玻璃会变灰白）【noomo】。
+- **bundle 内联 base64 资产**提取到 `mirror/_extracted/`（noomo：colorsMap 1024×2 光谱 LUT、SMAA 纹理——缺 colorsMap 玻璃会变灰白）【noomo】。
 
 **基准覆盖面判据**：录之前先确认"观感由哪些量驱动"，把全部驱动量采进基准——kimi 只采 `<main>` 上 18 个变量，位置 3.2 之后变量饱和、场景 3-7 实由容器 opacity 驱动，基准"完全失明"；补采 opacity 后覆盖立刻到 8.2【kimi】。
 
@@ -282,7 +282,7 @@ grep 命中只是假设，**每条必须回上下文确认**；**计数同理**�
 
 ## 8. 阶段产出物与通过判据
 
-- [ ] `legacy-mirror/_pretty/`：全部 bundle/chunk 已展开（或按 §0 预检登记"无需 beautify，坐标系 = 原文件行号"；**无 bundle 站按 §0.1 登记"坐标系 = 内容哈希 `B:<sha12>`"**）
+- [ ] `mirror/_pretty/`：全部 bundle/chunk 已展开（或按 §0 预检登记"无需 beautify，坐标系 = 原文件行号"；**无 bundle 站按 §0.1 登记"坐标系 = 内容哈希 `B:<sha12>`"**）
 - [ ] `_pretty/README.md`：含 js-beautify@1.15.1 版本声明 + 逐文件再生成命令 + 版本漂移警告（**无 bundle 站的等价物**：快照 sha256 钉死表 + 漂移守卫命令 + "重抓即全部行号引用作废"警告）
 - [ ] **坐标系稳定性有实测结论**（§1.4）：多自变量抓取比对已跑（含跨缓存条目），结论按**区段**写进 engine-notes，守卫命令可复跑
 - [ ] 无 bundle 站：**内联块普查表 + 逐块层归属**完成，每块有语义 id，归属门零 UNCLASSIFIED（Shopify 站见 `shopify-platform.md` §0.3）

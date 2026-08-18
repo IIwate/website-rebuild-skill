@@ -27,7 +27,7 @@ const flag = (n, d) => {
   return i >= 0 && args[i + 1] !== undefined ? args[i + 1] : d;
 };
 const CONFIG = flag("config", "scripts/shell-config.mjs");
-const MIRROR = path.resolve(flag("mirror", "legacy-mirror"));
+const MIRROR = path.resolve(flag("mirror", "mirror"));
 const OUT = path.resolve(flag("out", "site"));
 const CHECK = args.includes("--check");
 

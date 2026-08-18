@@ -222,7 +222,7 @@ shopify.design 上，出厂 shim 冻的三样（rAF + `setTimeout` + visibility�
 | **服务层按 query 注入**（`?__probe`，noomo 原始做法） | ① 两侧是**各自独立的服务器**（镜像侧 `serve.mjs` + 复刻侧框架 SSR/dev）；② 需要"不带开关时**产物字节一字不变**"这条可验证性质（字节门/SSR 门要终身全绿） | 两侧各写一处注入点，"同位"靠人对齐并复验；**URL 上多一个 query 参数**——服务端的 url→路径映射必须对它无感 |
 | **CDP `Page.addScriptToEvaluateOnNewDocument`** | ① **两侧共用同一个服务器 / 同一份驱动脚本**；② 服务层的 url→路径映射是**查询感知**的（`x.jpg?width=600` 与 `?width=320` 是两份不同字节）；③ 需要**严格同位**（同一份字节、在任何页面脚本之前） | 只在门跑的时候存在，**磁盘与响应字节都没动**，字节门天然不受污染；代价是仪器绑在 CDP 驱动上，人工打开页面复现不出门里的状态 |
 
-> **实证【objectarchive】**：该项目两侧都由**同一个** `serve.mjs` 伺服（复刻侧只是多一个 `--side rebuild --fallback-root legacy-mirror`），此时服务层注入有两个问题：① 该站的图片 CDN 是**查询参数化的变换接口**，url→路径映射因此做成**查询感知**的，挂一个 `?__probe` 会改变"到底服务哪一个镜像文件"——**探针开关变成了内容开关**；② 两侧的注入点不再是同一处代码，"同位"只剩口头保证。改用 CDP 在任何页面脚本之前注入同一份字节（与本 skill `scripts/probe-shim.js` 同一条流），两侧同一条命令、同一份补丁，且**不跑门时被测字节一字未动**。
+> **实证【objectarchive】**：该项目两侧都由**同一个** `serve.mjs` 伺服（复刻侧只是多一个 `--side rebuild --fallback-root mirror`），此时服务层注入有两个问题：① 该站的图片 CDN 是**查询参数化的变换接口**，url→路径映射因此做成**查询感知**的，挂一个 `?__probe` 会改变"到底服务哪一个镜像文件"——**探针开关变成了内容开关**；② 两侧的注入点不再是同一处代码，"同位"只剩口头保证。改用 CDP 在任何页面脚本之前注入同一份字节（与本 skill `scripts/probe-shim.js` 同一条流），两侧同一条命令、同一份补丁，且**不跑门时被测字节一字未动**。
 
 - **一句话判据**：先问"两侧是不是同一个服务器 / URL 映射认不认 query"。**是同一个服务器、或映射查询感知 → CDP 注入**；**两侧各自独立、且要求产物字节门不受污染 → 服务层 query 注入**。
 - **教训**："gsap 在模块求值期捕获 rAF，Nuxt 插件太晚，必须 head 首脚本"【noomo】——shim 必须先于一切消费者求值。这条对两条路线同样成立：服务层注入要落在 `<head>` **首部**，CDP 注入要用 `addScriptToEvaluateOnNewDocument`（不是 `Runtime.evaluate`，那已经晚了）。
@@ -270,7 +270,7 @@ shopify.design 上，出厂 shim 冻的三样（rAF + `setTimeout` + visibility�
 - **query 开关跳过阻塞流程**：复刻侧 `?skip-preloader`；源站侧没有开关就模拟真实点击过 preloader（rogier 的对拍脚本对 original 模拟点击 Enter）【rogier】。
 - **真实 DOM 点击驱动状态**：samsy 按 `#topmenu` 索引点击驱动三视图——菜单文字被 glitch 轮换、文本匹配不可用；真实点击同时绕过 router 探针问题【samsy】。
 - **视口/窗口锁定**：量化对拍必须同视口（oryzo 1456×830、kimi 1440×900/390×844/768×1024、samsy 1280×800）；文字块随窗口高度命中相邻组，"复检需锁窗口"【noomo】。
-- **双侧同参数启动**：复刻与镜像两个服务器同时起、无头参数一致、驱动脚本同一份【samsy】【kimi】。镜像参照服即 `scripts/serve.mjs`（终身兼任对拍基准端，如 `PORT=3200 SERVE_ROOT=legacy-mirror`）【noomo】。
+- **双侧同参数启动**：复刻与镜像两个服务器同时起、无头参数一致、驱动脚本同一份【samsy】【kimi】。镜像参照服即 `scripts/serve.mjs`（终身兼任对拍基准端，如 `PORT=3200 SERVE_ROOT=mirror`）【noomo】。
 - **hover 类位姿用 CDP 真实鼠标**（Input 域射线），不用 CSS 类模拟【kimi】。
 
 ## 6. 常见坑

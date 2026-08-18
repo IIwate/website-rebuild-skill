@@ -2,11 +2,11 @@
 // serve.mjs — zero-dependency static server for the pristine mirror (and the
 // rebuild), so source and rebuild can be diffed side-by-side without network.
 //
-//   node serve.mjs --side mirror  --root legacy-mirror   # the source site
+//   node serve.mjs --side mirror  --root mirror   # the source site
 //   node serve.mjs --side rebuild --root dist            # the rebuild
-//   node serve.mjs --side mirror --root legacy-mirror [--ext-hosts cdn.x.com,fonts.gstatic.com]
+//   node serve.mjs --side mirror --root mirror [--ext-hosts cdn.x.com,fonts.gstatic.com]
 //                  [--stub-ext-hosts telemetry.example.com] [--origin-host example.com] [--port N]
-//   PORT=3200 SERVE_ROOT=legacy-mirror node serve.mjs    # explicit port still wins
+//   PORT=3200 SERVE_ROOT=mirror node serve.mjs    # explicit port still wins
 //
 // PORTS AND IDENTITY (scripts/lib/ports.mjs — read its header once):
 //   --side is what picks the port, and it is REQUIRED unless you pass an
@@ -104,7 +104,7 @@ const flag = (name, dflt) => {
 };
 
 const HOST = flag("host", process.env.HOST || "127.0.0.1");
-const ROOT = path.resolve(flag("root", process.env.SERVE_ROOT || "legacy-mirror"));
+const ROOT = path.resolve(flag("root", process.env.SERVE_ROOT || "mirror"));
 // --fallback-root <dir>: resolve against ROOT first, then this. asset-management.md's
 // headline strategy is "the mirror is the ONLY asset store, never copy": on a
 // strategy-A rebuild site/ holds just the transformed shells plus the generated
@@ -125,7 +125,7 @@ if (SIDE !== null && !(SIDE in SIDES)) {
 if (SIDE === null && !flagGiven("port") && !process.env.PORT) {
   fatal([
     "FATAL: serve.mjs needs to know which side it is serving.",
-    "         node serve.mjs --side mirror  --root legacy-mirror",
+    "         node serve.mjs --side mirror  --root mirror",
     "         node serve.mjs --side rebuild --root dist",
     "       The side picks a distinct, self-describing port for each side of the",
     "       comparison; without it two instances can end up on one port and a",

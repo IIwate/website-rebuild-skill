@@ -4,11 +4,11 @@
 
 ## 0. 三条地基原则
 
-1. **镜像神圣不可污染**：`legacy-mirror/` 磁盘文件抓下来后永不修改。它既是逆向的唯一原始依据，又是后续所有对拍验收的基准端——污染镜像 = 污染裁判【samsy】【noomo】【lando】。
+1. **镜像神圣不可污染**：`mirror/` 磁盘文件抓下来后永不修改。它既是逆向的唯一原始依据，又是后续所有对拍验收的基准端——污染镜像 = 污染裁判【samsy】【noomo】【lando】。
 2. **目录结构 = 源站 URL 空间的字节级还原**：页面按路径落成 `<path>/index.html`，资产按原路径落盘【noomo】【lando】。外部 host 资产落 `assets/<host>/<path>`【lando】。
 3. **账本先行**：每个文件的来源 URL、字节数、sha256、下载结果都要有账（§3）。没有账本的镜像不能作为对账与验收的依据【6/6】。
 
-三目录分离：`legacy-mirror/`（只读证据）≠ `public/`（运行资产）≠ `dist/`（部署产物）【oryzo】。运行侧消费镜像资产用符号链接/中间件映射，永不复制重资产（详见 `references/asset-management.md`）。
+**目录分离**：`mirror/`（① 只读证据）≠ `port/`（② 逐字移植）≠ `src/`（③ 人写的工程）≠ `dist/`（部署产物）【oryzo】。⚠ **不复制策略只作用于 ② 阶段**——工作区靠符号链接/中间件映射消费镜像资产，永不复制重资产；**③ 阶段必须复制**，自包含是它的定义性要求（`references/asset-management.md`、`references/readable-source.md` §2）。
 
 ## 1. 镜像四遍法 + 一条实测
 
@@ -67,10 +67,10 @@ rogier 首创、noomo/lando 三代实战传承的骨架【rogier】【noomo】�
 
 ```bash
 # 引用集（hash 长度按目标站构建器调整；Vite 常见 8 位）
-grep -rhoE '[A-Za-z0-9_.$-]+-[A-Za-z0-9_-]{8}\.(js|css)' legacy-mirror \
+grep -rhoE '[A-Za-z0-9_.$-]+-[A-Za-z0-9_-]{8}\.(js|css)' mirror \
   --include='*.js' --include='*.css' --include='*.html' | sort -u > /tmp/refs.txt
 # 磁盘集
-find legacy-mirror -type f \( -name '*.js' -o -name '*.css' \) -exec basename {} \; | sort -u > /tmp/disk.txt
+find mirror -type f \( -name '*.js' -o -name '*.css' \) -exec basename {} \; | sort -u > /tmp/disk.txt
 comm -23 /tmp/refs.txt /tmp/disk.txt        # 输出非空 = 还有没抓到的 chunk
 ```
 
@@ -134,7 +134,7 @@ shopify.design 实测 26 个引用 vs 25 个文件 → 缺 1，补抓后归零�
 
 实跑必然暴露盲区并当场补录，这是预期内流程而非失败：lando 实跑发现 head/helmet/glass 的 13 件 PBR 纹理"由纹理集拼接，正则不可见"，只有真跑看网络请求才能发现【lando】。
 
-M0.5 之后，`serve.mjs` 终身兼任后续所有对拍的"源站参照服"（如 `PORT=3200 SERVE_ROOT=legacy-mirror`）【noomo】。
+M0.5 之后，`serve.mjs` 终身兼任后续所有对拍的"源站参照服"（如 `PORT=3200 SERVE_ROOT=mirror`）【noomo】。
 
 ### 5.1 镜像要有属于自己的门：下游全绿证明不了镜像对【objectarchive】
 
@@ -169,7 +169,7 @@ M0.5 之后，`serve.mjs` 终身兼任后续所有对拍的"源站参照服"（�
 
 ## 6. 外部依赖决策表
 
-⚠ **先划清这张表管什么**：它管的是**运行侧怎么消费一个外部依赖**（复刻工程加载谁、`public/`/`dist/` 里放什么），**不管镜像抓不抓**。镜像侧照四遍法抓全，"保留原引用不入库"的资产**副本照样落在 `legacy-mirror/external/` 供逆向复核**【oryzo】【samsy】——这正是原判例的做法。**不许用这张表在镜像上开洞**（`legal-and-deploy.md` §0.2）。
+⚠ **先划清这张表管什么**：它管的是**运行侧怎么消费一个外部依赖**（复刻工程加载谁、`public/`/`dist/` 里放什么），**不管镜像抓不抓**。镜像侧照四遍法抓全，"保留原引用不入库"的资产**副本照样落在 `mirror/external/` 供逆向复核**【oryzo】【samsy】——这正是原判例的做法。**不许用这张表在镜像上开洞**（`legal-and-deploy.md` §0.2）。
 
 **两类决策要分开，混在一起就是越权**：
 
@@ -180,7 +180,7 @@ M0.5 之后，`serve.mjs` 终身兼任后续所有对拍的"源站参照服"（�
 
 | 处置 | 适用 | 判例 | 归谁决定 |
 |---|---|---|---|
-| 保留原引用、不进运行资产 | 授权条款禁止自托管的资产 | Adobe Fonts (Typekit) CSS 引用保留，副本仍存 `legacy-mirror/external/` 供参考【oryzo】【samsy】 | 法务侧 → **交用户**（agent 取证 + 建议 + 默认保守） |
+| 保留原引用、不进运行资产 | 授权条款禁止自托管的资产 | Adobe Fonts (Typekit) CSS 引用保留，副本仍存 `mirror/external/` 供参考【oryzo】【samsy】 | 法务侧 → **交用户**（agent 取证 + 建议 + 默认保守） |
 | 换端点/本地化 | 可自托管的 vendor 资源 | detect-gpu 的 unpkg benchmarks 指向本地 `/vendor/`【rogier】；Rive WASM 从 `/ext/unpkg.com/...` 本地提供【lando】 | 纯技术 → agent 决定并登记偏差 |
 | 接受降级 | 纯统计/非行为依赖 | GA/Cloudflare Insights 不接入【oryzo】【samsy】 | 纯技术 → agent 决定并登记偏差 |
 
@@ -237,7 +237,7 @@ M0.5 之后，`serve.mjs` 终身兼任后续所有对拍的"源站参照服"（�
 
 ## 10. M0/M0.5 关账条件（产出物清单）
 
-- [ ] `legacy-mirror/`：目录结构 = 源站 URL 空间，磁盘纯净、只读
+- [ ] `mirror/`：目录结构 = 源站 URL 空间，磁盘纯净、只读
 - [ ] 账本齐备：manifest（含 sha256）、redirects.tsv、netcapture GAP 对账（=0）、external.txt
 - [ ] **静态闭包校验通过**：全镜像的 `<name>-<hash>.{js,css}` 引用集 − 磁盘集 **= ∅**（差集里的外部 chunk 须在 external.txt 有决策）【shopifydesign】
 - [ ] **镜像自检门通过**（§5.1，跑在断网门之前）：映射单射性 / 账本与磁盘 sha256 一致 / 闭包完整 / **真实性（挑战页正文 + 声明类型对魔数；体量离群线索逐条读过）** /（联网可选）抽样回源核对

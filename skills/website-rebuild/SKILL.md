@@ -3,7 +3,7 @@ name: website-rebuild
 description: 1:1 rebuild of award-winning creative websites (WebGL / scroll-animation / portfolio sites). Evidence-driven pipeline - mirror-first forensics, line-number-traceable reverse engineering of minified bundles, verbatim porting, quantitative verification gates. Use when user asks to "复刻网站", "重建网站", "1:1 rebuild", "clone this site", or provides a URL of a creative/award site to reproduce.
 compatibility: Requires Node 22+ (bundled scripts use built-in WebSocket to talk to CDP), npx, and a local Chrome/Chromium for headless comparison. POSIX shell optional - the Step 0 probe protocol has a zero-dependency Node equivalent (scripts/fingerprint.mjs) for shells without curl/cmp/tr/perl (e.g. Windows PowerShell). Agent-agnostic - works in any Agent Skills-compatible runtime.
 metadata:
-  version: "0.1.23"
+  version: "0.1.24"
 ---
 
 # Website Rebuild（获奖创意站 1:1 复刻）
@@ -49,12 +49,14 @@ metadata:
 
 以下六条在六个源项目中被称为"宪法级"，违反任何一条都会在后续阶段以 bug 形式偿还：
 
-1. **镜像神圣不可污染**：`legacy-mirror/` 磁盘文件永不修改；一切本地化适配（CDN 改写、外链 stub）在服务层响应时动态完成。
+1. **镜像神圣不可污染**：`mirror/` 磁盘文件永不修改；一切本地化适配（CDN 改写、外链 stub）在服务层响应时动态完成。
 2. **源站代码是唯一裁决，不凭观感修**：每个改动先在 bundle/CSS/镜像 HTML 里找到归属行号再落地。Do not tune visuals, motion, or interaction by eye.
 3. **源站有的都要有，源站没有的不做**：不自创补偿性 CSS/JS。宁可先不像，也不要发明规则——自创补丁会在机制对齐后反转成 bug。
 4. **bug / 死代码 / 怪写法照抄不修**：压缩代码里的每个怪写法都可能是行为本身。"好心修正" no-op bug 曾导致转场崩溃（实证见 porting-discipline.md）。
 5. **有意偏差必须登记**：写清"源站怎么做 / 我们怎么做 / 为什么 / 什么条件下重新考虑"。**没登记的差异一律视为 bug**。
 6. **代码与文档同一次提交**：每个里程碑成对提交（`Port xxx` + `Update rebuild plan: xxx`），日志固定含产出 / 验收 / 教训 / 下一步断点（带行号）。
+
+⭐ **纪律 3 在 M(n+1) 的边界**：`src/` 是显式登记的衍生物，不是对源站的断言，所以**在 `src/` 里重命名、拆模块、写注释不算"发明"**——纪律 3 约束的是"为了让它看起来像而自创行为"，不是"让已证明等价的代码变得可读"。但两条硬边界不动：**① 结构性重写默认禁止**（合并重复、提取公共函数、改算法——它们让等价不可判定）；**② 注释里的推测必须标注为推测**，不许把逆向笔记里的猜测写成陈述句。`port/` 与 `mirror/` 仍然一个字节都不许动。详见 [references/readable-source.md](references/readable-source.md) §3.4 与 §5。
 
 ## Workflow
 
@@ -69,6 +71,7 @@ metadata:
 [ ] M2+     严格溯源移植（依赖序里程碑推进；先竖切一条端到端链路；每里程碑冷启动实测 + CLEAN 门）
 [ ] M(n-1)  对拍验收（按 verification-gates.md 决策树选门型；根因修复，不调参糊平）
 [ ] M(n)    收口 ⛔（冷头评审 / 模块清单对账；版权取证 + 呈交用户决定——公开部署前必须完成）
+[ ] M(n+1)  源码化（port/ → src/：拆模块、去混淆重命名、补注释、自包含）
 ```
 
 ⛔ = 阻塞门：验收标准未达成不得进入下一阶段。
@@ -88,6 +91,8 @@ metadata:
 **M(n-1) — 对拍验收**。加载 [references/verification-gates.md](references/verification-gates.md) 与 [references/determinism.md](references/determinism.md)。⚠ **归因残差之前先建自比带宽**（`pixelcompare --self`，逐侧 ≥4 次、交错跑）——没有带宽的残差一律 UNCLASSIFIED，而 UNCLASSIFIED 是失败不是通过。门型选择：有 SSR/静态 HTML 产物先建字节门 → DOM 静态场景冻结熵源走 byte-equal → 活场景（WebGL/视频/随机相位）降级量化指标 + 噪声归类 → 数据驱动动画补数值探针门 → CLEAN 门全程兜底。判定时序 bug 前先校准探针（[references/environment-traps.md](references/environment-traps.md)）。
 
 **M(n) — 收口**。冷头评审：对 bundle 顶层类/模块清单逐一核对落点（功能测试测不出整块遗漏，只有清单式核对能）。加载 [references/legal-and-deploy.md](references/legal-and-deploy.md) 完成版权**取证**并把决定**呈交用户**——在用户决定之前按安全默认执行（**私有 + noindex + 不部署**），公开前必须逐资产取证、显著标注非官方复刻。
+
+**M(n+1) — 源码化**。加载 [references/readable-source.md](references/readable-source.md)。到 M(n) 为止产物**已证明正确但人读不了**（实测：14,271 行挤在一个文件里，`e` 出现 2962 次，注释占 0.2%）。本阶段把 `port/` 重写成 `src/`：按声明拆模块 → 作用域安全地去混淆重命名 → 补分档注释 → 复制资产做到自包含。⛔ **前置条件不可协商：必须先有全绿的门。** 没有裁判的重构是盲改；有了 `meanAbsDiff 0.00` 的裁判，每一步都能被证死——**这是重构能有的最好条件，也是它必须排在最后的原因**。现有门全部原样复用（目标换成 `src/` 构建产物，**容差不许放宽**），另加符号映射门与自包含门。⛔ 结构性重写（合并重复、提取公共函数、改算法）**默认禁止**——它会让门从"证明等价"退化为"没测出不等价"。⭐ **纪律 4 在本阶段依然有效**：你现在读得懂了，"这明显是个 bug"的冲动会比任何阶段都强，而它依然可能是行为本身。
 
 ### 分支路由表
 
@@ -109,15 +114,18 @@ Step 1 侦察结果决定加载哪些场景指南（按需，不要全量加载�
 |---|---|---|---|
 | Step 0 | 指纹探测判级 | 判级明确且已告知用户 | 判级结论与依据 |
 | Step 1 | 证否 + 评级 + 确认范围 | 用户确认 | 难度评级表、范围共识 |
-| M0/M0.5 | 镜像 + 账本 + 断网跑通 | **`verify-mirror` 五项全绿**；GAP=0；零 404/零错误/零外联 | `legacy-mirror/`（只读）、manifest、`serve.mjs` 参照服 |
+| M0/M0.5 | 镜像 + 账本 + 断网跑通 | **`verify-mirror` 五项全绿**；GAP=0；零 404/零错误/零外联 | `mirror/`（只读）、manifest、`serve.mjs` 参照服 |
 | M1 | 展开 bundle、逆向笔记、钉栈 | engine-notes 完成；版本钉死表完成 | `_pretty/`、`docs/engine-notes.md`、`REBUILD_PLAN.md` |
 | M2+ | 溯源移植、里程碑成对提交 | 每里程碑冷启动实测 + CLEAN 门绿 | 带行号注释的源码、三张登记表滚动更新 |
 | M(n-1) | 对拍验收 | 所选门型全绿或差异全部登记 | 验证脚本 + 对拍产物入库（`docs/compare/`） |
 | M(n) | 冷头评审 + 版权取证 + 呈交用户 | 清单对账零缺口；用户已作出部署决定（未决则维持安全默认） | 审计记录、DEPLOY.md |
+| M(n+1) | 拆模块 + 去混淆 + 注释 + 自包含 | 现有门全绿且**容差未放宽**；符号门双向单射零孤儿；自包含门（复制出去、断网、构建）过 | `src/`（可读工程）、`docs/rename-map.json`、`src/README.md` |
 
 ## Script Directory
 
 全部为零依赖 Node 脚本（Node 22+），路径相对本 skill 目录。用法与成熟度详见 [scripts/README.md](scripts/README.md)。
+
+⭐ **零依赖是门的属性，不是全项目的属性。** `scripts/` 里的一切都是判据，必须能被独立审查、能在任何环境跑起来、不因依赖升级而改变结论——**永远零依赖**。M(n+1) 的重构器住在项目的 `tools/`，允许 devDependencies（作用域安全的重命名需要真正的 parser）。⛔ 任何门不许 import 任何重构器（`verification-gates.md` §2.1.2）。
 
 | 脚本 | 用途 | 使用阶段 |
 |---|---|---|
@@ -141,23 +149,38 @@ Step 1 侦察结果决定加载哪些场景指南（按需，不要全量加载�
 | `scripts/frame-census.mjs` | **这一帧上有东西吗**：数截图的颜色数与主色占比。⛔ 像素门已内置同一判据作前置条件，本脚本用于事后复核任意截图——`§4.8`「全部的门拍在同一个状态里」的那个状态可能是**空的**，而此前没有任何一道门会问这句 | M(n-1) |
 | `scripts/probe-shim.js` | 确定性驱动 shim（接管整个熵面：rAF/timer/`performance.now`/`Date.now`/定种 `Math.random`，手动泵到任意 t，双侧同位注入） | M(n-1) |
 | `scripts/dump-timelines.mjs` | GLB 动画曲线 dump 成 JSON 数值账本 | M1（数据驱动动画时） |
+| `scripts/verify-symbols.mjs` | **符号映射门**：`port/` 每个顶层声明在 `src/` 中有且仅有一个对应符号（双向单射，读 `docs/rename-map.json`），且 `src/` 里没有无来源的孤儿声明。⛔ **必需不是可选**——门只跑有限条路由，没被跑到的代码改坏了门是绿的；这是冷启动清点在重构阶段的同构物。⛔ 只读 `rename-map.json` 与两侧文本，**不许 import 重构器的 parser** 来"确认"重命名 | M(n+1) |
+| `scripts/verify-standalone.mjs` | **自包含门**：把 `src/` 复制到临时目录 → 断网 → 安装 → 构建 → 跑 CLEAN 与零外联。⛔ **必须复制出去跑**——原地跑会命中项目根的 `node_modules`/`mirror/`/根 `package.json`，而这三样恰好是自包含要证伪的东西 | M(n+1) |
 | `scripts/lib/png.mjs` | 零依赖 PNG 编解码 | 对拍脚本依赖 |
 | `scripts/lib/chrome.mjs` | 无头浏览器生命周期（**进程组**收割 + 全退出路径 + 启动前孤儿自检；漏子进程会抬高参照侧自比带宽，把像素门调松）与 CDP 载荷硬顶常量。`node scripts/lib/chrome.mjs --all/--reap` 可查/回收残留 | 所有 CDP 脚本依赖 |
 
 ## 复刻工程目录结构
 
+三个阶段性产物，**单向依赖，读作「证据 → 移植 → 源码」**：
+
 ```
 <site>-rebuild/
-├── legacy-mirror/        # 只读镜像（源站 URL 空间的字节级还原）
-│   └── _pretty/          # beautify 展开产物 + 再生成说明 README
+├── mirror/               # ① 只读证据：源站 URL 空间的字节级还原。永不修改
+│   └── _pretty/          #    beautify 展开产物 + 再生成说明 README
+├── port/                 # ② 逐字移植：机器读，extract-source --check 守着字节一致。永不手改
+│   └── _gen/             #    切片器产物（行号头指回 mirror/_pretty/）
+├── src/                  # ③ 人写的工程：可读、可改、自包含（复制到任何地方都能跑）
+│   ├── package.json      #    ⛔ 自己的 package.json——自包含门要把它复制出去单独跑
+│   ├── assets/           #    资产在这里（③ 阶段必须复制，见 readable-source.md §2）
+│   └── README.md         #    怎么跑 / 坐标系怎么读 / 哪些注释是我们写的
 ├── docs/
 │   ├── engine-notes.md   # 逆向笔记（事实/怪癖/复刻结论三段式）
+│   ├── rename-map.json   # ③ 阶段符号映射（port 位置 → 旧名 → 新名 → 依据档位）
 │   └── compare/          # 对拍产物留证
 ├── REBUILD_PLAN.md       # §0 纪律 / 阶段计划 / §6 偏差表 / §Q 怪癖表 / §7 里程碑日志
 ├── mirror-manifest.json  # 镜像账本（sha256 逐文件）
-├── scripts/              # 从本 skill 拷入并按站点配置的工具脚本
-└── src/ 或框架工程        # 复刻实现（DOM 策略见 dom-shell-strategies.md）
+├── scripts/              # 验收门：零依赖，从本 skill 拷入
+└── tools/                # 重构器：③ 阶段专用，允许 devDependencies（见下）
 ```
+
+⛔ **`src/` 里发现行为不对，答案在 `port/` 或 `mirror/`，不在 `src/`。** 就地"改到对"会把移植 bug 变成无法追溯的本地补丁，**而且门会变绿**——这是纪律 2 在三段坐标系下的形式。`port/` 在 `src/` 建成后不删除，它是等价性的另一端。
+
+⭐ **依赖分界**：`scripts/`（门）**零依赖，永远**——门是用来证明的，必须能被独立审查；`tools/`（重构器）允许 devDependencies（作用域安全的重命名需要真正的 parser）。任何门不许 import 任何重构器。
 
 ## References
 
@@ -178,6 +201,7 @@ Step 1 侦察结果决定加载哪些场景指南（按需，不要全量加载�
 - [asset-management.md](references/asset-management.md) — 资产不复制策略与字体决策
 - [environment-traps.md](references/environment-traps.md) — 环境陷阱手册
 - [legal-and-deploy.md](references/legal-and-deploy.md) — 版权取证与部署决断（取证归 skill，决定归用户）
+- [readable-source.md](references/readable-source.md) — M(n+1) 源码化：port/ → src/ 的可读工程（拆模块、去混淆、注释纪律、自包含契约）
 - [assets/templates/rebuild-plan.md](assets/templates/rebuild-plan.md)、[assets/templates/engine-notes.md](assets/templates/engine-notes.md) — 文档模板
 
 ## Notes

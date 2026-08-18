@@ -37,7 +37,7 @@ const { port: PORT, label: PORT_LABEL } = resolvePort({
 });
 const BASE = `http://127.0.0.1:${PORT}`;
 console.log(`[verify-ssr] server under test ${BASE}  (${PORT_LABEL})`);
-const MIRROR_DIR = process.env.MIRROR_DIR || "legacy-mirror";
+const MIRROR_DIR = process.env.MIRROR_DIR || "mirror";
 
 // Explicit [route, mirrorFile] pairs; null = auto-discover every index.html
 // under MIRROR_DIR (dirs starting with "_" or "." and assets/ are skipped).

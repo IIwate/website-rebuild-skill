@@ -10,7 +10,7 @@
  *
  * Usage:
  *   node gapfill-video.mjs --master https://cdn.example.com/vp/<id>/<id>.m3u8
- *     [--out legacy-mirror]        mirror root (must match mirror-site.mjs)
+ *     [--out mirror]        mirror root (must match mirror-site.mjs)
  *     [--origin https://example.com]  same-origin path rule + Referer header;
  *                                     defaults to the first master's origin
  *     [--master a.m3u8 --master b.m3u8]  repeatable (or comma-separated)
@@ -79,13 +79,13 @@ const has = (name) => args.includes('--' + name);
 const MASTERS = flagAll('master').flatMap((v) => v.split(',')).filter(Boolean);
 if (!MASTERS.length) {
   console.error(
-    'usage: gapfill-video.mjs --master https://cdn.example.com/vp/id/id.m3u8 [--out legacy-mirror]\n' +
+    'usage: gapfill-video.mjs --master https://cdn.example.com/vp/id/id.m3u8 [--out mirror]\n' +
       '       [--origin https://example.com] [--workers 4] [--delay 60] [--force] [--dry-run] [--manifest path]'
   );
   process.exit(2);
 }
 
-const OUT = join(process.cwd(), flag('out', 'legacy-mirror'));
+const OUT = join(process.cwd(), flag('out', 'mirror'));
 const ORIGIN = (flag('origin', null) || new URL(MASTERS[0]).origin).replace(/\/+$/, '');
 const ORIGIN_HOST = new URL(ORIGIN).hostname;
 const REFERER = flag('referer', ORIGIN + '/');

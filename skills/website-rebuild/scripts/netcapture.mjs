@@ -26,7 +26,7 @@
 // forgive real differences.
 //
 // Usage:
-//   node netcapture.mjs --origin https://example.com [--mirror legacy-mirror]
+//   node netcapture.mjs --origin https://example.com [--mirror mirror]
 //     [--routes /,/about,/contact]      routes to visit (default "/")
 //     [--viewports desktop,mobile]      which emulated viewports to run
 //     [--steps 12] [--dwell 1500]       scroll-walk: wheel steps and per-step dwell (ms)
@@ -76,11 +76,11 @@ const flag = (name, dflt) => {
 
 const ORIGIN_RAW = flag("origin", null);
 if (!ORIGIN_RAW) {
-  console.error("usage: netcapture.mjs --origin https://example.com [--mirror legacy-mirror] [--routes /,/a] [--viewports desktop,mobile] [--steps 12] [--dwell 1500] [--settle 9000] [--hosts cdn.x.com,media.y.net] [--out file.tsv] [--fetch] [--swiftshader]");
+  console.error("usage: netcapture.mjs --origin https://example.com [--mirror mirror] [--routes /,/a] [--viewports desktop,mobile] [--steps 12] [--dwell 1500] [--settle 9000] [--hosts cdn.x.com,media.y.net] [--out file.tsv] [--fetch] [--swiftshader]");
   process.exit(2);
 }
 const ORIGIN = ORIGIN_RAW.replace(/\/+$/, "");
-const ROOT = path.resolve(flag("mirror", "legacy-mirror"));
+const ROOT = path.resolve(flag("mirror", "mirror"));
 const ROUTES = flag("routes", "/").split(",").filter(Boolean);
 const STEPS = Number(flag("steps", 12));
 const DWELL = Number(flag("dwell", 1500));

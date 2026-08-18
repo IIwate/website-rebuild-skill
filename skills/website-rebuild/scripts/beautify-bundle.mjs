@@ -1,13 +1,13 @@
 #!/usr/bin/env node
 // beautify-bundle.mjs — expand minified bundles with a PINNED js-beautify into
-// legacy-mirror/_pretty/, so beautified line numbers form a stable coordinate
+// mirror/_pretty/, so beautified line numbers form a stable coordinate
 // system for provenance notes ("ported from bundle.js:14032"). A beautifier
 // version bump shifts line numbers and INVALIDATES every recorded reference —
 // samsyninja lesson: "版本漂移作废坐标系" — hence the hard pin and the
 // auto-generated _pretty/README.md recording the version and the exact
 // regeneration command per file.
 //
-//   node beautify-bundle.mjs <bundle.js> [...more files] [--out legacy-mirror/_pretty]
+//   node beautify-bundle.mjs <bundle.js> [...more files] [--out mirror/_pretty]
 //
 // The wrapper itself is zero-dependency; it shells out to
 //   npx -y js-beautify@1.15.1
@@ -33,10 +33,10 @@ const flag = (name, dflt) => {
 };
 const FILES = args.filter((a, i) => !a.startsWith("--") && args[i - 1] !== "--out");
 if (FILES.length === 0) {
-  console.error("usage: beautify-bundle.mjs <bundle.js> [...more] [--out legacy-mirror/_pretty]");
+  console.error("usage: beautify-bundle.mjs <bundle.js> [...more] [--out mirror/_pretty]");
   process.exit(2);
 }
-const OUT = path.resolve(flag("out", "legacy-mirror/_pretty"));
+const OUT = path.resolve(flag("out", "mirror/_pretty"));
 mkdirSync(OUT, { recursive: true });
 
 const typeFor = (f) =>
@@ -81,7 +81,7 @@ Generated ${new Date().toISOString()} by scripts/beautify-bundle.mjs.
 ${entries
   .map(
     (e) =>
-      `| ${e.pretty} | ${e.source} | \`${e.sha256.slice(0, 16)}…\` | \`npx -y js-beautify@${JS_BEAUTIFY_VERSION} --type ${e.type} -f ${e.source} -o legacy-mirror/_pretty/${e.pretty}\` |`,
+      `| ${e.pretty} | ${e.source} | \`${e.sha256.slice(0, 16)}…\` | \`npx -y js-beautify@${JS_BEAUTIFY_VERSION} --type ${e.type} -f ${e.source} -o mirror/_pretty/${e.pretty}\` |`,
   )
   .join("\n")}
 

@@ -2,9 +2,11 @@
 
 > **何时加载本文件**：M0 镜像完成、开始搭建复刻工程骨架时——需要决定"运行工程如何消费镜像资产"；以及遇到授权字体、百 MB 级媒体的处置决策时。
 
+⛔ **适用阶段：本文全部内容只作用于 ② `port/` 阶段（工作区）。** 到 ③ `src/` 阶段，不复制策略**反转**——自包含是那一阶段的定义性要求，资产必须完整复制进 `src/assets/`，否则"复制到任何地方都能跑"不成立。⚠ 反转的是**盘上复不复制**，不是**入不入 git**：git 里默认仍排除源站字节、只留账本，是否分发仍是用户的决定。见 [readable-source.md](readable-source.md) §2。
+
 ## 0. 核心原则
 
-1. **镜像神圣不可污染**：`legacy-mirror/` 磁盘文件永不修改，一切本地化适配在服务层/中间件动态完成【samsy】【noomo】【lando】。
+1. **镜像神圣不可污染**：`mirror/` 磁盘文件永不修改，一切本地化适配在服务层/中间件动态完成【samsy】【noomo】【lando】。
 2. **镜像是唯一资产库**：manifest（sha256）是权威清单；复刻工程尽量不产生资产的第二份拷贝，让"这些不是我写的"在文件系统层面成立【kimi】【lando】。
 3. **不做"找相似替代资源"**：字体、GLB、HDRI、视频全部用镜像原件，没有任何替代资源环节【lando】。
 
@@ -13,7 +15,7 @@
 不复制策略成立的前提是账本可信，镜像阶段就要备好：
 
 - 权威清单逐文件登记：`mirror-manifest.json`（url → path/bytes/type）【lando】、`manifest.tsv` 逐文件记 OK/FAIL/大小留证【samsy】、`inventory.tsv`（sha256）作为资产比对的唯一来源【kimi】；
-- 多外部 host 的镜像按 `legacy-mirror/assets/<host>/<path>` 组织，URL 空间与磁盘一一对应【lando】；
+- 多外部 host 的镜像按 `mirror/assets/<host>/<path>` 组织，URL 空间与磁盘一一对应【lando】；
 - 后续一切"资产在不在、对不对"的判断只对账本，不对目测。
 
 ## 1. 选型：先量体量，再看构建器
@@ -28,11 +30,11 @@
 | 做法 | 项目 | 要点 |
 |---|---|---|
 | ① 全量复制 + 哈希验证 | 【rogier】 | `public/` 与源站逐字节一致，且真的验证过：116 个非视频文件 byte-identical、23 个视频 size 匹配、3 个不一致的 png 替换为源站字节；约 111MB 媒体直接进 git，部署只上 `dist/`。**一代做法，后代全部演进为不复制** |
-| ② 三目录分离 | 【oryzo】 | `legacy-mirror/`（只读逆向依据）→ `public/`（运行资产）→ `dist/`（部署产物）三层分离，镜像永远不动。仍有复制，但确立了"镜像 ≠ 运行资产"的边界 |
-| ③ dev 中间件回落 | 【samsy】 | vite dev 中间件 `mirrorFallback()` 把根路径资产请求（/textures、/videos 等 11 个目录）回落到 `legacy-mirror/`，238MB 二进制不进 `public/` |
-| ④ 符号链接 | 【kimi】 | `public/` 用符号链接指向 `legacy-mirror/`——"让『这些不是我写的』这件事在文件系统层面就成立"，资产比对只有一个 sha256 来源（inventory.tsv），登记为偏差 §6.4 |
-| ⑤ nitro publicAssets 挂载 | 【noomo】 | 轻资产（images/audio/字体）复制进 `public/` 与 `app/assets/` 走 Vite 构建；重资产（models/textures/timelines/videos/libs）不复制入库，用 nitro `publicAssets` 把 `legacy-mirror/` 对应目录直接挂载到 URL 空间；构建时 nitro 自动拷入 `.output/public`，产物自包含 |
-| ⑥ `/ext/<host>/` 映射 + rsync -L | 【lando】 | 资产按 `legacy-mirror/assets/<host>/<path>` 组织；dev 用 vite 插件 `extAssets()` 把 `/ext/<host>/` 映射回镜像；build 后 `postbuild.mjs` 建 `dist/ext → legacy-mirror/assets` 符号链接，部署时 `rsync -L` 解引用（登记为偏差 6.4）。适合资产分散在多个外部 CDN 域的站 |
+| ② 三目录分离 | 【oryzo】 | `mirror/`（只读逆向依据）→ `public/`（运行资产）→ `dist/`（部署产物）三层分离，镜像永远不动。仍有复制，但确立了"镜像 ≠ 运行资产"的边界 |
+| ③ dev 中间件回落 | 【samsy】 | vite dev 中间件 `mirrorFallback()` 把根路径资产请求（/textures、/videos 等 11 个目录）回落到 `mirror/`，238MB 二进制不进 `public/` |
+| ④ 符号链接 | 【kimi】 | `public/` 用符号链接指向 `mirror/`——"让『这些不是我写的』这件事在文件系统层面就成立"，资产比对只有一个 sha256 来源（inventory.tsv），登记为偏差 §6.4 |
+| ⑤ nitro publicAssets 挂载 | 【noomo】 | 轻资产（images/audio/字体）复制进 `public/` 与 `app/assets/` 走 Vite 构建；重资产（models/textures/timelines/videos/libs）不复制入库，用 nitro `publicAssets` 把 `mirror/` 对应目录直接挂载到 URL 空间；构建时 nitro 自动拷入 `.output/public`，产物自包含 |
+| ⑥ `/ext/<host>/` 映射 + rsync -L | 【lando】 | 资产按 `mirror/assets/<host>/<path>` 组织；dev 用 vite 插件 `extAssets()` 把 `/ext/<host>/` 映射回镜像；build 后 `postbuild.mjs` 建 `dist/ext → mirror/assets` 符号链接，部署时 `rsync -L` 解引用（登记为偏差 6.4）。适合资产分散在多个外部 CDN 域的站 |
 
 **选型指令**：
 - 资产分散在多个外部 host（CDN 跨域引用限制、第三方域）→ 走 ⑥（`/ext/<host>/` 统一收编，服务层把外部 URL 改写为该前缀，"same trick as samsyninja-rebuild"【lando】）。
@@ -69,7 +71,7 @@ kimi 的"省力路径"同理【kimi】：美术资产直接复用镜像；职位
 - **"坏资产"也要复刻**：源站 `favicon.svg` 是 404，rogier 删除本地占位文件但保留 head 里的 link——复刻"这个链接在源站就是坏的"【rogier】。
 - **MSDF bitmap 字体直接镜像**：bmfont JSON+PNG 原件照用，`msdfunit = 6/图集尺寸` 等硬编码照抄；布局算法用同库同算法的 npm 包替代 vendored 版时登记偏差【samsy】。
 - **第三方 WASM 也从镜像出**：Rive WASM 从本地镜像 `/ext/unpkg.com/...` 提供，使复刻离线自包含（登记为偏差 6.6）【lando】。
-- **bundle 内联资产单独提取**：base64 内嵌的纹理/LUT 提取到 `legacy-mirror/_extracted/`；复刻侧反向内嵌时做字节级一致性验证【noomo】。
+- **bundle 内联资产单独提取**：base64 内嵌的纹理/LUT 提取到 `mirror/_extracted/`；复刻侧反向内嵌时做字节级一致性验证【noomo】。
 
 ## 6. 字体决策
 
@@ -77,7 +79,7 @@ kimi 的"省力路径"同理【kimi】：美术资产直接复用镜像；职位
 
 ⚠ **先分清两件事**：**字体抓不抓进镜像**是技术问题（答案永远是抓，镜像完整性是技术不变量）；**能不能把这份二进制自托管到我们自己的 origin、能不能再分发**是法务问题，**归用户决定**。agent 的活是取证（许可条款原文、文件内 banner、文件名信号如 `*Unlicensed*.woff2`）+ 给建议 + 在用户决定前执行安全默认，**不是自己下结论**（`references/legal-and-deploy.md` §0.1/§0.2）。
 
-**安全默认（用户决定之前照此执行）**：Adobe Fonts（Typekit）类商用授权字体不自托管——保留源站的 Typekit CSS 引用、接受离线时的字体回退【oryzo】；**镜像抓到的副本照常存 `legacy-mirror/external/typekit/` 供逆向复核**，只是不进运行资产【samsy】。
+**安全默认（用户决定之前照此执行）**：Adobe Fonts（Typekit）类商用授权字体不自托管——保留源站的 Typekit CSS 引用、接受离线时的字体回退【oryzo】；**镜像抓到的副本照常存 `mirror/external/typekit/` 供逆向复核**，只是不进运行资产【samsy】。
 
 **取证要点**：源站自己有没有授权**不改变我们的处境**——把同一份二进制自托管到另一个 origin 是一次独立的、我们自己的使用行为；商用网页字体常按域名/流量计价。把这句连同证据一起呈给用户，让他决定，别替他决定。
 

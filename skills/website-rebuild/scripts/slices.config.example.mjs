@@ -30,7 +30,7 @@ export default {
   // The beautified bundle to slice. NEVER slice the minified original: the
   // whole coordinate system is `_pretty/` line numbers (beautify-bundle.mjs
   // pins js-beautify@1.15.1 for exactly this reason).
-  source: "legacy-mirror/_pretty/_index-c3dAurQC.js",
+  source: "mirror/_pretty/_index-c3dAurQC.js",
 
   // TRIO #2 — the sha256 guard. `shasum -a 256 <source>`. If the beautifier
   // version changes or the site is re-mirrored, this stops the script instead

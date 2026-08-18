@@ -67,7 +67,7 @@
    - **验收不许读构建脚本自己的计数器**：计数器证明的只是"脚本以为自己做了什么"。要从**产物字节**反推——逐页 diff，**每个差异 hunk 都必须能被变换表重放出来**（objectandarchive：5 页 **1,048 个 hunk 全部可重放**）；并且**表里登记、却从未在 diff 里被观测到的变换同样判 fail**，否则变换表会悄悄漂在现实前面。块级的配套断言（"哪些层只允许逐字或只允许被本地化动过"）见 `shopify-platform.md` §0.3 步骤 6。
    - ⭐ **这条论证与"变换"无关，它是关于"表"这个东西本身的**——凡是**记录状态的表**（变换表 / 分层归属表 / 销账·进度表 / §6 偏差表 / §Q 怪癖表）都要有一道从产物或运行时**反查它**的门。通用条款、双向判据，以及"**共用宿主 ≠ 覆盖**"的实证（销账表建起来第一天就抓到一条虚报）见 `porting-discipline.md` §4.1【objectarchive】。
 4. 配套路由/资产层（lando 的 vite 两个自定义插件）：
-   - `extAssets()`：dev 下把 `/ext/<host>/` 映射回 `legacy-mirror/assets/`（重资产永不复制进源码树）；
+   - `extAssets()`：dev 下把 `/ext/<host>/` 映射回 `mirror/assets/`（重资产永不复制进源码树）；
    - `shellRouter()`：干净 URL 映射到 shells，未知 URL 回落源站 404 模板并返回 HTTP 404（复刻 Webflow 语义）【lando】。
 5. **平台运行时当行为契约逆向**，写进逆向笔记（lando 的 `05-webflow-html.md`）：
    - 哪些模块必须保留："必须保留 webflow 三连（jQuery→schunk→entry）"，因为 taxi 换页后要调 `window.Webflow.destroy()+ready()`；

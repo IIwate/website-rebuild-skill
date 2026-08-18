@@ -376,7 +376,7 @@
 - **1Panel 私有部署 + CSP**：noomo 的 DEPLOY.md 含具体配置，CSP 拦截源站 GA 上报【noomo】；
 - **nginx 加 `X-Robots-Tag: noindex`**：samsy 预览站配置【samsy】；
 - **纯本地 `127.0.0.1`，不部署到任何主机**：objectarchive 的终态——**"无部署脚本，因为不部署"**【objectarchive】；
-- **符号链接资产的部署解引用**：lando 用 `rsync -L` 把 `dist/ext → legacy-mirror/assets` 符号链接解成实体文件【lando】；noomo 靠 nitro 构建时自动拷入 `.output/public` 使产物自包含（DEPLOY.md 实测更正过这一点——部署前实测，别想当然）【noomo】。
+- **符号链接资产的部署解引用**：lando 用 `rsync -L` 把 `dist/ext → mirror/assets` 符号链接解成实体文件【lando】；noomo 靠 nitro 构建时自动拷入 `.output/public` 使产物自包含（DEPLOY.md 实测更正过这一点——部署前实测，别想当然）【noomo】。
 
 ## 6. 部署即验证——以及"不部署"的验收盲区
 

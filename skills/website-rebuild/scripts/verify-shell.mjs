@@ -34,7 +34,7 @@ const flag = (n, d) => {
   return i >= 0 && args[i + 1] !== undefined ? args[i + 1] : d;
 };
 const CONFIG = flag("config", "scripts/shell-config.mjs");
-const MIRROR = path.resolve(flag("mirror", "legacy-mirror"));
+const MIRROR = path.resolve(flag("mirror", "mirror"));
 const SITE = path.resolve(flag("site", "site"));
 const MAX_REPORT = Number(flag("max-report", 8));
 

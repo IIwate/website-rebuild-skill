@@ -102,6 +102,6 @@ for (const [host, rec] of [...census].sort((a, b) => b[1].count - a[1].count)) {
 }
 console.log(
   `\n${problems ? "FAIL" : "PASS"} — ${problems} static outbound problem(s). ` +
-    `Every host in the census above must have a line in legacy-mirror/external.txt.`,
+    `Every host in the census above must have a line in mirror/external.txt.`,
 );
 process.exit(problems ? 1 : 0);

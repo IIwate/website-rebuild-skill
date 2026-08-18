@@ -7,7 +7,7 @@
 # {项目名} 逆向笔记（engine-notes）
 
 > **纪律**：本文档只陈述源站事实，不做"应该怎么改"的判断；未坐实的一律标注 **[未确认]**，不猜【kimi】【noomo】。
-> **坐标系**：全部行号引用 `legacy-mirror/_pretty/` 展开产物（js-beautify@{版本，钉死} 生成，再生成命令见 `_pretty/README.md`）。换 beautifier 版本行号会漂移，整套引用作废【samsy】【noomo】。
+> **坐标系**：全部行号引用 `mirror/_pretty/` 展开产物（js-beautify@{版本，钉死} 生成，再生成命令见 `_pretty/README.md`）。换 beautifier 版本行号会漂移，整套引用作废【samsy】【noomo】。
 
 <!-- 三段式总结构【samsy】【noomo】：第一部分 源站事实 / 第二部分 怪癖清单（照抄不修）/ 第三部分 对复刻的直接结论。大型站可按 lando 拆成多份编号笔记（00-boot / 01-rive / 02-gl-core / …），但每份内部仍守三段式与行号纪律。 -->
 
@@ -81,7 +81,7 @@
 
 ### 11. bundle 内联资产提取登记
 
-<!-- base64 内嵌的纹理/LUT/查找表提取到 legacy-mirror/_extracted/ 并在此登记，注明缺失后果（如"缺 colorsMap 玻璃会变灰白"）【noomo】。 -->
+<!-- base64 内嵌的纹理/LUT/查找表提取到 mirror/_extracted/ 并在此登记，注明缺失后果（如"缺 colorsMap 玻璃会变灰白"）【noomo】。 -->
 
 ### 12. 页面 init/destroy 矩阵
 

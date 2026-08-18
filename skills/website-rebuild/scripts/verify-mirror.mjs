@@ -65,9 +65,9 @@
  *      deliberately slow (--resample-delay, default 1500 ms).
  *
  * Usage:
- *   node verify-mirror.mjs --mirror legacy-mirror
- *   node verify-mirror.mjs --mirror legacy-mirror --allow-missing legacy-mirror/external.txt
- *   node verify-mirror.mjs --mirror legacy-mirror --resample 8 --resample-delay 2000
+ *   node verify-mirror.mjs --mirror mirror
+ *   node verify-mirror.mjs --mirror mirror --allow-missing mirror/external.txt
+ *   node verify-mirror.mjs --mirror mirror --resample 8 --resample-delay 2000
  *
  *   [--origin https://example.com]  default: the manifest's own `origin`
  *   [--hosts a,b]                   extra hosts for the closure pass (default:
@@ -106,7 +106,7 @@ const flag = (n, d) => {
   return i >= 0 && args[i + 1] !== undefined ? args[i + 1] : d;
 };
 
-const ROOT = path.resolve(flag("mirror", "legacy-mirror"));
+const ROOT = path.resolve(flag("mirror", "mirror"));
 const SKIP = new Set(flag("skip", "").split(",").map((s) => s.trim()).filter(Boolean));
 const MAX_REPORT = Number(flag("max-report", 25));
 const RESAMPLE = Number(flag("resample", 0));

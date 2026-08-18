@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 // verify-routes.mjs — routing / redirect / <head> contract gate. Compares the
-// rebuild's route surface field-by-field against legacy-mirror files (never
+// rebuild's route surface field-by-field against mirror files (never
 // against expectations typed out by hand) and asserts the redirect table
 // measured on the origin — status CODE included: Next.js `permanent: true`
 // emits 308 where origins often emit 301, and only asserting the Location
@@ -50,7 +50,7 @@ const CONFIG = {
   server: null,
 
   // Where the pristine mirror lives (the comparison baseline).
-  mirrorDir: "legacy-mirror",
+  mirrorDir: "mirror",
 
   // [route, mirror file relative to mirrorDir] — head + <main> + favicon are
   // compared field-by-field against these files.
