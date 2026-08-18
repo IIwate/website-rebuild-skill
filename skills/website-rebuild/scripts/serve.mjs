@@ -87,7 +87,7 @@ const args = process.argv.slice(2);
 // is worse than a crash.
 const KNOWN_FLAGS = new Set([
   "host", "port", "root", "fallback-root", "side", "origin-host", "ext-hosts",
-  "stub-ext-hosts", "query-ignore", "query-only", "redirects", "cdp-port",
+  "stub-ext-hosts", "query-ignore", "query-only", "redirects", "cdp-port", "rewrite",
 ]);
 {
   const unknown = args.filter((a) => a.startsWith("--") && !KNOWN_FLAGS.has(a.slice(2)));
@@ -352,6 +352,42 @@ function unicodeSlash(text, host, to) {
     .replace(new RegExp(`${U_RE}${U_RE}${esc(host)}${U_RE}`, "gi"), `${toEsc}${U}`);
 }
 
+// --rewrite 'FROM::TO' (repeatable): a REGISTERED literal replacement applied to
+// text responses. It exists for one recurring shape that no url localisation can
+// reach — THE SOURCE PROGRAM BRANCHING ON ITS OWN HOSTNAME:
+//
+//     let CDN_PATH = "";
+//     window.location.hostname == "example.com" && (CDN_PATH = "https://cdn.example");
+//
+// Served from 127.0.0.1 that assignment never runs, so a whole subsystem takes a
+// different path and every asset request goes somewhere that does not exist.
+// Measured on a WebGL target: 36 request failures per page, all of them assets,
+// while the localisation layer had done its job perfectly.
+//
+// ⛔ THIS EDITS THE SOURCE PROGRAM, so it obeys the deviation rules: every rule
+// is a §6 entry, and its FIRST HIT IS LOGGED so a rule that never fires cannot
+// pass for one that worked (silence here used to be indistinguishable from
+// success). asset-management.md §3 is the precedent — the same response-layer
+// rewrite of a CDN base, registered.
+//
+// The faithful alternative is to make the browser believe the hostname
+// (`--host-resolver-rules=MAP host 127.0.0.1:PORT`), which needs no source edit
+// at all. It is blocked here for a mundane reason worth writing down: these
+// scripts verify the server's identity with Node's fetch, and Node does not
+// share Chrome's resolver rules, so the two halves would disagree about what
+// they are talking to.
+const REWRITES = args
+  .map((a, i) => (a === "--rewrite" ? args[i + 1] : null))
+  .filter(Boolean)
+  .map((spec) => {
+    const at = spec.indexOf("::");
+    if (at < 0) {
+      console.error(`FATAL: --rewrite needs FROM::TO, got ${JSON.stringify(spec)}`);
+      process.exit(2);
+    }
+    return { from: spec.slice(0, at), to: spec.slice(at + 2), hits: 0 };
+  });
+
 function rewrite(text, ext) {
   // Rewritten bytes can no longer match SRI hashes; drop integrity attrs (HTML only).
   if (ext === ".html") text = text.replace(/ integrity="[^"]*"/g, "");
@@ -387,6 +423,15 @@ function rewrite(text, ext) {
     // often concatenated with a "https:" prefix and rewriting would corrupt it.
     if (ext === ".html" || ext === ".css") text = text.replaceAll(`//${h}/`, `/ext/${h}/`);
     text = text.replace(bareHostRe(h), `/ext/${h}`);
+  }
+  for (const r of REWRITES) {
+    if (!text.includes(r.from)) continue;
+    const n = text.split(r.from).length - 1;
+    if (r.hits === 0) {
+      console.log(`  [rewrite] first hit: ${JSON.stringify(r.from).slice(0, 70)} -> ${JSON.stringify(r.to).slice(0, 40)}`);
+    }
+    r.hits += n;
+    text = text.split(r.from).join(r.to);
   }
   return text;
 }

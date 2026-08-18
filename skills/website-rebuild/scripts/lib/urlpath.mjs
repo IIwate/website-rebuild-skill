@@ -229,7 +229,18 @@ export function withQuerySuffix(p, suffix) {
 export function localRelPath(absUrl, originHost, policy = DEFAULT_POLICY) {
   const u = new URL(absUrl);
   const suffix = querySuffix(u.search, policy);
-  let clean = decodeURIComponent(u.pathname);
+  // ⚠ COLLAPSE CONSECUTIVE SLASHES HERE, not somewhere downstream. Sites build
+  // asset URLs by concatenating a base that ends in "/" with a path that starts
+  // with one, so `…/textures//tunnels/x.png` is common and origins serve it
+  // happily. The crawler used to write such a file through path.join(), which
+  // silently normalises it, while this function kept the "//" — so the ledger
+  // said one path, the mapping computed another, and serve.mjs (which resolves
+  // through this function) would 404 on a file that is right there on disk.
+  // Measured on a WebGL target: 2 texture files, caught by the mapping-drift
+  // gate. Normalising in the ONE shared mapping is what keeps crawler, capture,
+  // server and gate on the same answer (§2.1.1) — normalising downstream is how
+  // they drifted in the first place.
+  let clean = decodeURIComponent(u.pathname).replace(/\/{2,}/g, "/");
   if (u.hostname !== originHost) {
     if (clean.endsWith("/")) clean += "index";
     return "assets/" + u.hostname + withQuerySuffix(clean, suffix);
@@ -238,7 +249,13 @@ export function localRelPath(absUrl, originHost, policy = DEFAULT_POLICY) {
   let p = clean.replace(/^\/+/, "");
   if (p.endsWith("/")) p = p.slice(0, -1);
   // Extension-less origin URLs are pages; extensioned ones are assets.
-  if (!p.includes(".") || !/\.[a-z0-9]{1,8}$/i.test(p)) return p + suffix + "/index.html";
+  // ⚠ {1,12}, not {1,8}: `.webmanifest` is ELEVEN characters and the shorter cap
+  // classified it as a page, so the crawler wrote the file as a DIRECTORY with an
+  // index.html inside while serve.mjs (which sees a real extension via
+  // path.extname) looked for a file and 404'd. The cap still exists — it keeps a
+  // path segment like `/v1.2.3` from reading as an extension — it was just set
+  // before `.webmanifest`, `.geojson` and friends were common.
+  if (!p.includes(".") || !/\.[a-z0-9]{1,12}$/i.test(p)) return p + suffix + "/index.html";
   return withQuerySuffix(p, suffix);
 }
 

@@ -3,7 +3,7 @@ name: website-rebuild
 description: 1:1 rebuild of award-winning creative websites (WebGL / scroll-animation / portfolio sites). Evidence-driven pipeline - mirror-first forensics, line-number-traceable reverse engineering of minified bundles, verbatim porting, quantitative verification gates. Use when user asks to "复刻网站", "重建网站", "1:1 rebuild", "clone this site", or provides a URL of a creative/award site to reproduce.
 compatibility: Requires Node 22+ (bundled scripts use built-in WebSocket to talk to CDP), npx, and a local Chrome/Chromium for headless comparison. POSIX shell optional - the Step 0 probe protocol has a zero-dependency Node equivalent (scripts/fingerprint.mjs) for shells without curl/cmp/tr/perl (e.g. Windows PowerShell). Agent-agnostic - works in any Agent Skills-compatible runtime.
 metadata:
-  version: "0.1.19"
+  version: "0.1.20"
 ---
 
 # Website Rebuild（获奖创意站 1:1 复刻）
@@ -126,7 +126,7 @@ Step 1 侦察结果决定加载哪些场景指南（按需，不要全量加载�
 | `scripts/netcapture.mjs` | 真实浏览器 CDP 抓包对账补录运行时资源（**CDN 站必须传 `--hosts`**，否则只观测同源流量、会报假 GAP=0） | M0 第二遍 |
 | `scripts/verify-mirror.mjs` | **镜像自己的门**，跑在断网门之前。五项断言：映射单射性 / 账本与磁盘 sha256 / **真实性（挑战页正文 + 声明类型对魔数——一个 200 不是"你拿到了那个资源"的证据）** / 闭包 / 可选抽样回源。下游所有门问的都是"渲染得出来吗"，**错的镜像能让它们全绿** | M0 关账前，每次重抓镜像后 |
 | `scripts/gapfill-video.mjs` | HLS/DASH 流媒体阶梯补录（master → rendition → 分片），静态爬虫的结构性盲区 | M0（有流媒体时） |
-| `scripts/serve.mjs` | 零依赖静态服务器（MIME/Range/服务层改写/重定向回放），兼任源站参照服。`--fallback-root` 让复刻侧只放产出、资产全部从只读镜像读（`asset-management.md` 的不复制策略）；**未知旗标响亮失败**——被静默忽略的旗标是一次没人知道的降级 | M0.5 起全程 |
+| `scripts/serve.mjs` | 零依赖静态服务器（MIME/Range/服务层改写/重定向回放），兼任源站参照服。`--rewrite FROM::TO` 是**登记式字面量替换**，为的是一类本地化触及不到的东西——**源程序按自己的域名分支**（`location.hostname=="x.com" && (CDN=...)`，镜像不在那个域名上于是整个子系统走空路径）；**首次命中打印**，因为沉默与生效此前无法区分。`--fallback-root` 让复刻侧只放产出、资产全部从只读镜像读（`asset-management.md` 的不复制策略）；**未知旗标响亮失败**——被静默忽略的旗标是一次没人知道的降级 | M0.5 起全程 |
 | `scripts/build-site.mjs` | **策略 A 构建层**：按 `shell-config.mjs` 的登记变换表从镜像生成 `site/`，逐条命中下限 + `--check` 可复现性 + 目的断言（下限说明变换还活着，目的断言说明它达成了目的） | M2+（策略 A） |
 | `scripts/verify-shell.mjs` | **外壳字节门**：逐文档 patience diff，每个差异块必须能被变换表**重放**解释。⛔ 不 import `build-site.mjs`——门不许生产它所审计之物（`verification-gates.md` §2.1.2） | M2+（策略 A） |
 | `scripts/verify-payload.mjs` | **SSG payload 门**：把内联序列化数据块（Nuxt2 `window.__NUXT__` / Nuxt3 `__NUXT_DATA__`）**求值展开**再按结构对拍。字节门在这里不够用——payload 是一段"输出数据的程序"（参数去重、`\u002F` 转义），两份可以字节不同而语义相同，也可以字节相近而语义不同；且服务层要**改写它内部**的 URL。实测：它抓到两侧本地化实现不一致（一侧留 `href="http://host"`、另一侧写出 `href=""`），而外壳字节门全绿 | M0.5 起（有 SSG payload 时） |
