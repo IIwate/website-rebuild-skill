@@ -157,7 +157,7 @@ shopify.design 的 Step 0 用 `tr ';{}' '\n' | grep -c` 数 token，一次产出
    ├─ 【必要】静态构建器产物（webpack/Vite/Astro/Browserify 皆可，年代无关——2019 老栈照样 A）
    ├─ 【必要】少数几个 bundle（而非上百个组件粒度 chunk）；单体 ≥1MB 是常见形态，不是门槛
    ├─ 【必要】双抓 byte-identical（或仅 token 级差异）
-   ├─ 【必要】无内容级 API 依赖（bundle 内 /api/ 为零或仅遥测）
+   ├─ 【必要】无内容级 API 依赖（⚠ `/api/` 为零**不足以**判定，见 §8 的假阴性实测；以 M0 补录观测到的实际请求为准）
    └─ 【⚠ 条件式，不是必要条件】**若站上有 3D**，three 必须认强签名
         （WebGLRenderer/REVISION 命中，弱字符串 "three" 不算）。
         ⛔ **无 3D 不影响判 A**：GSAP 时间轴 / Canvas 2D / 纯 CSS-JS 编排的滚动站
@@ -216,6 +216,15 @@ shopify.design 的 Step 0 用 `tr ';{}' '\n' | grep -c` 数 token，一次产出
 6. 现代站 HTML 可能**没有任何 `<script src>`**（Shopify Editions 三代全靠内联 `import()`）——只认 script 标签会漏掉全部 JS。
 7. **catch-all 假 200**：请求 `.map` 返回 index.html（other-side-of-truth）——对下载物做 content-type 与哈希碰撞校验。
 8. bundle 内出现 `/api/` 字符串 ⇒ 强制做**运行时 API 快照**（synchronized-studio 的导航数据在 Contentful，实测 5 个运行时 API）。
+
+   ⛔ **但零命中不能反过来当作"无接口"——这条判据假阴性高发**【airpodspro】。它测的是**命名习惯**，不是行为。实测一个大厂产品页 Step 0 报 `/api/` = **0**，而 M0 的真实浏览器补录抓到：
+
+   ```
+   /us/shop/mcm/product-price?parts=…      /us/shop/bag/status?apikey=…
+   /search-services/suggestions/defaultlinks/…    /api-www/global-elements/…/flyouts
+   ```
+
+   **全是运行时接口，前三条路径里没有 `/api/`**（大厂常按业务命名），第四条带 `/api` 但不在主 bundle 里。**M0 补录之前不得据此排除 B/D 类。** 那次签名行为仍在客户端所以判 A 不变，只是漏了一项 B 侧工作；但**同一个盲点用在别的站上可能把 D 类误判成 A 类**。
 9. MB 级单行文件先 `tr` 注入换行再 grep，防有界量词正则卡死。
 10. 未混淆产物（bruno-simon、star-atlas）可跳过 js-beautify——先做 **minification 形态预检**再决定流程。
 11. 有公开 sourcemap（orano、linear）时直取 sourcesContent 源码，替代 beautify 流程。

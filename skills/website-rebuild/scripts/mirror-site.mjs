@@ -288,7 +288,27 @@ while (pageQueue.length) {
       await save(url, buf, res.headers.get('content-type'));
     }
     console.log(`[page] ${path} (${buf.length}b${res.ok ? '' : `, HTTP ${res.status}`})`);
-    for (const u of extractAssetUrls(html, url)) assetQueue.add(u);
+    // ⛔ A same-origin HTML document is a PAGE, not an asset, and letting the
+    // asset queue take it punches straight through --scope. The asset extractor
+    // asks only "does this have an extension", and `.html` says yes — so
+    // `href="/legal/…/site.html"` was blocked by the page guard and then fetched
+    // anyway through the asset path, rescanned as text, and pulled an entire
+    // cross-locale legal tree behind it. Measured: a 5-page microsite crawl
+    // became 1,492 files and 239 MB.
+    //
+    // Out of scope it is dropped; in scope (or with no scope at all) it goes to
+    // the PAGE queue where it belongs. Cross-origin documents keep the old
+    // behaviour — they are not this origin's pages and have no page queue.
+    for (const u of extractAssetUrls(html, url)) {
+      let doc = null;
+      try {
+        const parsed = new URL(u);
+        if (parsed.hostname === ORIGIN_HOST && /\.x?html?($|\?)/i.test(parsed.pathname)) doc = parsed.pathname;
+      } catch {}
+      if (doc === null) { assetQueue.add(u); continue; }
+      if (!inScope(doc)) continue;
+      if (!pagesDone.has(doc)) pageQueue.push(doc);
+    }
     if (!isNotFoundProbe) {
       for (const p of extractPageLinks(html)) if (!pagesDone.has(p)) pageQueue.push(p);
     }

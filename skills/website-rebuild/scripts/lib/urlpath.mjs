@@ -268,7 +268,19 @@ export function localRelPath(absUrl, originHost, policy = DEFAULT_POLICY) {
 export function serveCandidates(pathname, search, policy = DEFAULT_POLICY) {
   const suffix = querySuffix(search, policy);
   const out = [];
-  if (suffix) out.push(withQuerySuffix(pathname, suffix));
+  if (suffix) {
+    // ⛔ For a DIRECTORY-style path the crawler and the server used to disagree
+    // about the ORDER of two operations — attach the query suffix, and append
+    // `/index.html`. The crawler suffixes the last SEGMENT and then adds the
+    // index (`…/defaultlinks@@locale=en_US&src=globalnav/index.html`); this
+    // function suffixed the path INCLUDING its trailing slash
+    // (`…/defaultlinks/@@locale=…`). Same library, same URL, two filenames, and
+    // the mirror served a 404 for a file it had on disk.
+    //
+    // Emit the crawler's shape first, since that is the one that exists.
+    if (pathname.endsWith("/")) out.push(pathname.slice(0, -1) + suffix + "/");
+    out.push(withQuerySuffix(pathname, suffix));
+  }
   out.push(pathname);
   return out;
 }
