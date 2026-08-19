@@ -163,7 +163,16 @@ const dest = path.join(tmp, "src");
 console.log(`\n  copying to ${dest} (outside ${ROOT})`);
 await cp(SRC, dest, { recursive: true, filter: (s) => !SKIP_DIRS.has(path.basename(s)) });
 
-for (const step of [["npm", "install", "--offline", "--no-audit", "--no-fund"], ["npm", "run", "build"]]) {
+// ⛔ Not every deliverable has a build step, and assuming one made this gate
+// FAIL on a project that was fine: a site loaded through an importmap ships its
+// module tree as-is, so there is nothing to bundle. Run what the package
+// actually declares; say plainly when there is no build rather than inventing
+// a failure.
+const steps = [["npm", "install", "--offline", "--no-audit", "--no-fund"]];
+if (pkg?.scripts?.build) steps.push(["npm", "run", "build"]);
+else console.log(`  (no build script — nothing to bundle; the tree ships as source)`);
+
+for (const step of steps) {
   process.stdout.write(`  ${step.join(" ")} … `);
   const { code, out } = await run(step, dest);
   if (code !== 0) {
