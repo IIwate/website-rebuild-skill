@@ -46,19 +46,25 @@ if (!A) { console.error("usage: verify-tween.mjs --a <urlA> [--b <urlB>] [--reco
 // A suite written from intuition would have passed while testing one curve five
 // times.
 const CASES = [
-  { name: "linear opacity", spec: { start: 0, end: 100, opacity: [0, 1] } },
-  { name: "easeInOutQuad opacity", spec: { start: 0, end: 100, opacity: [0, 1], easeFunction: "easeInOutQuad" } },
-  { name: "easeOutQuad opacity", spec: { start: 0, end: 100, opacity: [0, 1], easeFunction: "easeOutQuad" } },
-  { name: "reverse range", spec: { start: 0, end: 100, opacity: [1, 0] } },
-  { name: "translate x", spec: { start: 0, end: 100, x: [0, 240] } },
-  { name: "video currentTime", spec: { start: 0, end: 100, currentTime: [0, 10] } },
-  { name: "currentTime eased", spec: { start: 0, end: 100, currentTime: [0, 10], easeFunction: "easeOutQuad" } },
+  { name: "linear opacity", spec: { start: 0, end: 100, opacity: [0, 1] }, range: [0, 100] },
+  // ⭐ The expression cases resolve start/end from LIVE LAYOUT rather than from
+  // an override — `a0t`/`a0b` are the anchor's top and bottom as scroll t-values.
+  // They are the only cases that exercise the parser at all, and they are what
+  // retires the numeric-override deviation (REBUILD_PLAN §6 D6).
+  { name: "anchor expression a0t..a0b", spec: { start: "a0t", end: "a0b", opacity: [0, 1], anchors: [".anchor"] }, anchor: {} },
+  { name: "anchor expression, eased", spec: { start: "a0t", end: "a0b", currentTime: [0, 10], anchors: [".anchor"], easeFunction: "easeOutQuad" }, anchor: {} },
+  { name: "easeInOutQuad opacity", range: [0, 100], spec: { start: 0, end: 100, opacity: [0, 1], easeFunction: "easeInOutQuad" } },
+  { name: "easeOutQuad opacity", range: [0, 100], spec: { start: 0, end: 100, opacity: [0, 1], easeFunction: "easeOutQuad" } },
+  { name: "reverse range", range: [0, 100], spec: { start: 0, end: 100, opacity: [1, 0] } },
+  { name: "translate x", range: [0, 100], spec: { start: 0, end: 100, x: [0, 240] } },
+  { name: "video currentTime", range: [0, 100], spec: { start: 0, end: 100, currentTime: [0, 10] } },
+  { name: "currentTime eased", range: [0, 100], spec: { start: 0, end: 100, currentTime: [0, 10], easeFunction: "easeOutQuad" } },
   // ⛔ The pair below is the point. The same spec under two class masks MUST
   // give different answers — enabled under the default, fully disabled under
   // reduced-motion. A default-preference comparison can never see this, which is
   // exactly why it needs its own case (porting-discipline.md §0.3).
-  { name: "disabledWhen, default classes", spec: { start: 0, end: 100, opacity: [0, 1], disabledWhen: ["reduced-motion"] }, classes: [] },
-  { name: "disabledWhen, reduced-motion on", spec: { start: 0, end: 100, opacity: [0, 1], disabledWhen: ["reduced-motion"] }, classes: ["reduced-motion"] },
+  { name: "disabledWhen, default classes", range: [0, 100], spec: { start: 0, end: 100, opacity: [0, 1], disabledWhen: ["reduced-motion"] }, classes: [] },
+  { name: "disabledWhen, reduced-motion on", range: [0, 100], spec: { start: 0, end: 100, opacity: [0, 1], disabledWhen: ["reduced-motion"] }, classes: ["reduced-motion"] },
 ];
 
 const evalOn = (url, expr) =>
@@ -77,7 +83,7 @@ const evalOn = (url, expr) =>
 async function runSide(url) {
   const results = [];
   for (const c of CASES) {
-    const expr = `JSON.stringify((()=>{try{return window.__tweenProbe(${JSON.stringify({ steps: 9, spec: c.spec, classes: c.classes || [] })});}catch(e){return {error:String(e).slice(0,200)};}})())`;
+    const expr = `JSON.stringify((()=>{try{return window.__tweenProbe(${JSON.stringify({ steps: 9, spec: c.spec, classes: c.classes || [], range: c.range || null, anchor: c.anchor || null })});}catch(e){return {error:String(e).slice(0,200)};}})())`;
     results.push({ case: c.name, ...(await evalOn(url, expr)) });
   }
   return results;
@@ -108,6 +114,10 @@ for (let i = 0; i < CASES.length; i++) {
   const diffs = [];
   if (x.attr !== y.attr) diffs.push(`attr ${x.attr} vs ${y.attr}`);
   if (!!x.disabled !== !!y.disabled) diffs.push(`disabled ${!!x.disabled} vs ${!!y.disabled}`);
+  // Resolved start/end are part of the answer: a parser that resolves a
+  // different range produces the same CURVE over a different span.
+  if (x.start !== undefined && Math.abs((x.start ?? 0) - (y.start ?? 0)) > TOL) diffs.push(`start ${x.start} vs ${y.start}`);
+  if (x.end !== undefined && Math.abs((x.end ?? 0) - (y.end ?? 0)) > TOL) diffs.push(`end ${x.end} vs ${y.end}`);
   if (x.ease !== y.ease) diffs.push(`ease ${x.ease} vs ${y.ease}`);
   for (let k = 0; k < Math.max(x.out.length, y.out.length); k++) {
     const p = x.out[k], q = y.out[k];
