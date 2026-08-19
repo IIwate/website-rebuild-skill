@@ -39,13 +39,35 @@ if (FILES.length === 0) {
 const OUT = path.resolve(flag("out", "mirror/_pretty"));
 mkdirSync(OUT, { recursive: true });
 
+// basename -> the source that claimed it, so a repeat is caught rather than lost.
+const takenNames = new Map();
+
 const typeFor = (f) =>
   /\.css$/i.test(f) ? "css" : /\.html?$/i.test(f) ? "html" : "js";
 
 const entries = [];
 for (const file of FILES) {
   const src = path.resolve(file);
-  const dest = path.join(OUT, path.basename(src));
+  // ⛔ Flattening to the basename is not injective, and the coordinate system
+  // this file exists to create is built on the assumption that it is. Two
+  // bundles named `main.built.js` under different directories
+  // (`overview/` and `hearing-health/`) landed on ONE output: the second
+  // silently overwrote the first, the ledger recorded both rows pointing at the
+  // same destination with different sha256, and nothing reported it. Every line
+  // number cited after that would have named the wrong file.
+  //
+  // So disambiguate with the parent directory when a basename repeats. This is
+  // the same assertion verify-mirror makes about the mirror's own mapping —
+  // the pretty tree needs it too, and did not have it.
+  let dest = path.join(OUT, path.basename(src));
+  if (takenNames.has(path.basename(src))) {
+    const parent = path.basename(path.dirname(src));
+    dest = path.join(OUT, `${parent}--${path.basename(src)}`);
+    console.log(`[beautify] ⚠ basename collision: ${path.basename(src)} already written from`);
+    console.log(`           ${takenNames.get(path.basename(src))}`);
+    console.log(`           -> this one becomes ${path.basename(dest)}`);
+  }
+  takenNames.set(path.basename(src), path.relative(process.cwd(), src));
   const type = typeFor(src);
   console.log(`[beautify] ${path.basename(src)} (${type}) -> ${path.relative(process.cwd(), dest)}`);
   const r = spawnSync(
@@ -91,4 +113,9 @@ Rules:
   regenerate, and re-audit every line-number citation that pointed into it.
 `;
 writeFileSync(path.join(OUT, "README.md"), readme);
-console.log(`[beautify] ${entries.length} file(s) done; ledger -> ${path.relative(process.cwd(), path.join(OUT, "README.md"))}`);
+const dests = entries.map((e) => e.pretty);
+if (new Set(dests).size !== dests.length) {
+  console.error(`FATAL: ${dests.length} inputs produced ${new Set(dests).size} distinct outputs — the pretty tree is not injective and every line number cited against it would be ambiguous.`);
+  process.exit(5);
+}
+console.log(`[beautify] ${entries.length} file(s) done; ${new Set(dests).size} distinct output(s); ledger -> ${path.relative(process.cwd(), path.join(OUT, "README.md"))}`);
