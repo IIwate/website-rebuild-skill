@@ -51,7 +51,14 @@ const CASES = [
   { name: "easeOutQuad opacity", spec: { start: 0, end: 100, opacity: [0, 1], easeFunction: "easeOutQuad" } },
   { name: "reverse range", spec: { start: 0, end: 100, opacity: [1, 0] } },
   { name: "translate x", spec: { start: 0, end: 100, x: [0, 240] } },
-  { name: "disabled when reduced-motion", spec: { start: 0, end: 100, opacity: [0, 1], disabledWhen: ["reduced-motion"] } },
+  { name: "video currentTime", spec: { start: 0, end: 100, currentTime: [0, 10] } },
+  { name: "currentTime eased", spec: { start: 0, end: 100, currentTime: [0, 10], easeFunction: "easeOutQuad" } },
+  // ⛔ The pair below is the point. The same spec under two class masks MUST
+  // give different answers — enabled under the default, fully disabled under
+  // reduced-motion. A default-preference comparison can never see this, which is
+  // exactly why it needs its own case (porting-discipline.md §0.3).
+  { name: "disabledWhen, default classes", spec: { start: 0, end: 100, opacity: [0, 1], disabledWhen: ["reduced-motion"] }, classes: [] },
+  { name: "disabledWhen, reduced-motion on", spec: { start: 0, end: 100, opacity: [0, 1], disabledWhen: ["reduced-motion"] }, classes: ["reduced-motion"] },
 ];
 
 const evalOn = (url, expr) =>
@@ -70,7 +77,7 @@ const evalOn = (url, expr) =>
 async function runSide(url) {
   const results = [];
   for (const c of CASES) {
-    const expr = `JSON.stringify((()=>{try{return window.__tweenProbe(${JSON.stringify({ steps: 9, spec: c.spec })});}catch(e){return {error:String(e).slice(0,200)};}})())`;
+    const expr = `JSON.stringify((()=>{try{return window.__tweenProbe(${JSON.stringify({ steps: 9, spec: c.spec, classes: c.classes || [] })});}catch(e){return {error:String(e).slice(0,200)};}})())`;
     results.push({ case: c.name, ...(await evalOn(url, expr)) });
   }
   return results;
@@ -79,7 +86,7 @@ async function runSide(url) {
 console.log(`=== verify-tween ===`);
 const a = await runSide(A);
 console.log(`  A ${A}`);
-for (const r of a) console.log(`    ${r.error ? "ERR " : "ok  "} ${r.case.padEnd(30)} ${r.error ? r.error.slice(0, 70) : `${r.attr} / ${r.ease}`}`);
+for (const r of a) console.log(`    ${r.error ? "ERR " : "ok  "} ${r.case.padEnd(32)} ${r.error ? r.error.slice(0, 70) : r.disabled ? `DISABLED (${r.ease})` : `${r.attr} / ${r.ease}`}`);
 
 if (RECORD) {
   await mkdir(path.dirname(path.resolve(RECORD)), { recursive: true });
@@ -100,12 +107,16 @@ for (let i = 0; i < CASES.length; i++) {
   if (x.error || y.error) { fail++; console.log(`\n  FAIL ${CASES[i].name}: ${x.error || ""} ${y.error || ""}`.slice(0, 160)); continue; }
   const diffs = [];
   if (x.attr !== y.attr) diffs.push(`attr ${x.attr} vs ${y.attr}`);
+  if (!!x.disabled !== !!y.disabled) diffs.push(`disabled ${!!x.disabled} vs ${!!y.disabled}`);
   if (x.ease !== y.ease) diffs.push(`ease ${x.ease} vs ${y.ease}`);
   for (let k = 0; k < Math.max(x.out.length, y.out.length); k++) {
     const p = x.out[k], q = y.out[k];
     if (!p || !q) { diffs.push(`step ${k} missing on one side`); continue; }
     if (Math.abs(p.value - q.value) > TOL) diffs.push(`pos ${p.pos}: ${p.value} vs ${q.value}`);
     if (Math.abs(p.curved - q.curved) > TOL) diffs.push(`pos ${p.pos} curve: ${p.curved} vs ${q.curved}`);
+    // The written value is the one the page actually sees. Comparing only the
+    // tween's internal `current` would pass a port whose DOM write path is wrong.
+    if (String(p.written) !== String(q.written)) diffs.push(`pos ${p.pos} written: ${p.written} vs ${q.written}`);
   }
   if (diffs.length) { fail++; console.log(`\n  FAIL ${CASES[i].name}`); for (const d of diffs.slice(0, 6)) console.log(`         ${d}`); }
   else console.log(`  ok   ${CASES[i].name} — ${x.out.length} positions agree within ${TOL}`);
