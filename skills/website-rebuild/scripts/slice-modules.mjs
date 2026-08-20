@@ -26,6 +26,24 @@ import path from "node:path";
 const args = process.argv.slice(2);
 const flag = (n, d) => { const i = args.indexOf("--" + n); return i >= 0 && args[i + 1] !== undefined ? args[i + 1] : d; };
 const CHECK = args.includes("--check");
+// ⛔ How the port is LOADED is part of the port. The source's bundle is a
+// classic script — parser-blocking, executed where it sits. An ESM build of the
+// same bytes is deferred by default, so swapping one for the other changes when
+// every module top-level side effect runs, and that difference has nothing to do
+// with the transcription being right. `--format classic --entry <id>` emits an
+// IIFE that boots exactly like the original instead of registering a deviation
+// for a difference that did not have to exist.
+const FORMAT = flag("format", "esm");
+const ENTRY = flag("entry", null);
+if (FORMAT !== "esm" && FORMAT !== "classic") {
+  console.error(`FATAL — --format must be "esm" or "classic" (got ${JSON.stringify(FORMAT)}).`);
+  process.exit(2);
+}
+if (FORMAT === "classic" && !ENTRY) {
+  console.error(`FATAL — --format classic needs --entry <module-id>: a classic script that`);
+  console.error(`        defines modules and never calls one does nothing at all.`);
+  process.exit(2);
+}
 const IN = path.resolve(flag("in", "mirror/_pretty/main.built.js"));
 const MAP = path.resolve(flag("map", "docs/webpack-map.json"));
 const CLOSURE = path.resolve(flag("closure", "docs/slice-closure.json"));
@@ -96,20 +114,35 @@ const header = [
   `Object.assign(__modules, {`,
 ].join("\n");
 
+// A classic script must not leak the runtime into global scope, so everything
+// goes inside an IIFE. ⚠ Inserted after the comment header so the provenance
+// block stays the first thing anyone reads.
+const openIife = FORMAT === "classic" ? "(function () {\n" : "";
+
 const body = parts.map((p) =>
   `\n// ===== ${path.relative(process.cwd(), IN)} L${p.from}-L${p.to}  (${p.lines} lines) =====\n${p.text}`
 ).join("\n");
 
-const footer = [
-  ``,
-  `});`,
-  ``,
-  `export { __req, __modules };`,
-  `export default __req;`,
-  ``,
-].join("\n");
+const footer = FORMAT === "esm"
+  ? [``, `});`, ``, `export { __req, __modules };`, `export default __req;`, ``].join("\n")
+  : [
+      ``,
+      `});`,
+      ``,
+      `// Boot the way the original did: the packer's runtime ends with`,
+      `// \`i(i.s = <entry>)\`, so the entry module runs as the script is executed.`,
+      `__req(${JSON.stringify(ENTRY)});`,
+      ``,
+      `// ⚠ Exposed for probes and gates only. The source does not publish this;`,
+      `// nothing in the port may reach for it.`,
+      `window.__req = __req;`,
+      `})();`,
+      ``,
+    ].join("\n");
 
-const out = header + body + footer;
+const out = FORMAT === "classic"
+  ? header.replace(/\nconst __modules = \{\};/, "\n" + openIife + "const __modules = {};") + body + footer
+  : header + body + footer;
 
 if (CHECK) {
   const have = await readFile(OUT, "utf8").catch(() => null);

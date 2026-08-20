@@ -64,8 +64,17 @@ const NODES = new Map();
 traverse(FILE, {
   ObjectProperty(p) {
     const k = p.node.key;
-    const id = k.type === "StringLiteral" ? k.value : k.type === "Identifier" ? k.name : null;
-    if (!id || !/^[0-9a-f]{16,}$/.test(id)) return;
+    // ⛔ Three key forms, and all three occur: a minifier quotes a key only when
+    // it must. `"02b5c2be…":` is quoted because it starts with a digit,
+    // `a738138e…:` is a bare identifier, and `14:` is a NUMBER — and 14 happens
+    // to be the entry module. Accepting only the long-hex form silently drops
+    // it, and the failure surfaces far away as "candidates is not iterable".
+    // This is the third time a numeric module id has cost time on this target.
+    const id = k.type === "StringLiteral" ? String(k.value)
+      : k.type === "NumericLiteral" ? String(k.value)
+      : k.type === "Identifier" ? k.name
+      : null;
+    if (!id || !/^[0-9a-f]{16,}$|^\d{1,6}$/.test(id)) return;
     const v = p.node.value;
     if (v.type === "FunctionExpression" || v.type === "ArrowFunctionExpression") NODES.set(id, p.get("value"));
   },
@@ -143,6 +152,10 @@ for (const [cid, fnPath] of NODES) {
       const target = local.get(callee.name);
       const field = left.property.name.replace(/^_+/, "");
       if (field.length < 4 || /^[a-z]$/.test(field)) return;
+      // ⛔ Module-system plumbing is not a name. `X.exports = require(id)` and
+      // `X.default = …` are how CommonJS/ESM interop is spelled, and four
+      // different modules laid claim to "exports" on that basis alone.
+      if (/^(exports|default|module|prototype|constructor|options|config|props|state|data|value|instance|current)$/.test(field)) return;
       CONSUMER_NAMES.set(target, (CONSUMER_NAMES.get(target) || []).concat({ field, from: cid }));
     },
   });
@@ -152,10 +165,10 @@ const results = [];
 
 for (const id of CLO.modules) {
   const m = byId.get(id);
-  if (!m) { results.push({ id, name: null, tier: null, why: "not in webpack map" }); continue; }
+  if (!m) { results.push({ id, name: null, tier: null, why: "not in webpack map", candidates: [], evidence: {} }); continue; }
 
   const fnPath = NODES.get(id);
-  if (!fnPath) { results.push({ id, name: null, tier: null, why: "in the map but not in the parsed container" }); continue; }
+  if (!fnPath) { results.push({ id, name: null, tier: null, why: "in the map but not in the parsed container", candidates: [], evidence: {} }); continue; }
 
   const ev = { globals: [], classes: [], fns: [], consts: [], strings: [], typeNames: [], prefixes: [], registered: [], members: [] };
   let exportedName = null;

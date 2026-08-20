@@ -3,7 +3,7 @@ name: website-rebuild
 description: 1:1 rebuild of award-winning creative websites (WebGL / scroll-animation / portfolio sites). Evidence-driven pipeline - mirror-first forensics, line-number-traceable reverse engineering of minified bundles, verbatim porting, quantitative verification gates. Use when user asks to "复刻网站", "重建网站", "1:1 rebuild", "clone this site", or provides a URL of a creative/award site to reproduce.
 compatibility: Requires Node 22+ (bundled scripts use built-in WebSocket to talk to CDP), npx, and a local Chrome/Chromium for headless comparison. POSIX shell optional - the Step 0 probe protocol has a zero-dependency Node equivalent (scripts/fingerprint.mjs) for shells without curl/cmp/tr/perl (e.g. Windows PowerShell). Agent-agnostic - works in any Agent Skills-compatible runtime.
 metadata:
-  version: "0.1.45"
+  version: "0.1.46"
 ---
 
 # Website Rebuild（获奖创意站 1:1 复刻）
@@ -165,6 +165,9 @@ Step 0 → M(n) 全程不装任何东西；**复刻项目要到 M(n+1) 才获得
 | `scripts/probe-shim.js` | 确定性驱动 shim（接管整个熵面：rAF/timer/`performance.now`/`Date.now`/定种 `Math.random`，手动泵到任意 t，双侧同位注入） | M(n-1) |
 | `scripts/dump-timelines.mjs` | GLB 动画曲线 dump 成 JSON 数值账本 | M1（数据驱动动画时） |
 | `tools/name-modules.mjs` | **模块提名**：模块化 bundle 的 id 是内容哈希，文件名要从证据里来。按 0–4 级证据提名并把**依据的那句话**一起记下（人工裁决 / 自注册与全局 / 多消费方字段名 / 常量值与命名前缀 / 报错主语），⛔ **无证据保留 id——错名比哈希更糟**。⭐ 最强的证据在模块外面：属性名不被压缩，`this._chapterPlayer = new M(…)` 能给一个匿名 `class {}` 命名 | M(n+1)（模块化打包产物） |
+| `scripts/cold-audit-modules.mjs` | **M(n) 冷头清点（模块化产物）**：逐模块对账，并查有没有**计算出来的 require**。⛔ 实测抓到一处条件 require（`require(t ? "a" : "b")`）导致闭包少算两个模块，**而 9 个检查点逐像素全零毫无察觉**。⚠ 零依赖阶段分辨不了作用域遮蔽，所以只**判定**"有没有未移植模块被已移植模块 require"，疑似动态 require **列出来交人读** | M(n)（模块化打包产物） |
+| `scripts/verify-module-map.mjs` | **M(n+1) 等价门（模块化产物）**：一模块一文件，且每个文件与打包器字节 **token 级一致**（只允许包装重命名那组一一映射）。⛔ 用文本把重命名 undo 回去比对会失败——`module.exports` 里的 `exports` 是属性名；**门用捷径就会测到自己的捷径**。⛔ 门也不许重跑重命名来比对 | M(n+1)（模块化打包产物） |
+| `scripts/pixel-walk.mjs` | **检查点巡航**：在 N 个滚动位置各跑一次像素门。⛔ **单个 0.00 是这套工具能产出的最误导的数字**——它是一帧，通常是页面顶部的头两秒。⚠ 先用 `--self` 在同样的检查点上测带宽：实测未冻结时自比 4.6–5.0、跨侧 2.6–3.4，**差异整个落在噪声里**；冻结后两者都归零 | M(n-1) |
 | `scripts/verify-symbols.mjs` | **符号映射门**：`port/` 每个顶层声明在 `src/` 中有且仅有一个对应符号（双向单射，读 `docs/rename-map.json`），且 `src/` 里没有无来源的孤儿声明。⛔ **必需不是可选**——门只跑有限条路由，没被跑到的代码改坏了门是绿的；这是冷启动清点在重构阶段的同构物。⛔ 只读 `rename-map.json` 与两侧文本，**不许 import 重构器的 parser** 来"确认"重命名 | M(n+1) |
 | `scripts/verify-standalone.mjs` | **自包含门**：把 `src/` 复制到临时目录 → 断网 → 安装 → 构建 → 跑 CLEAN 与零外联。⛔ **必须复制出去跑**——原地跑会命中项目根的 `node_modules`/`mirror/`/根 `package.json`，而这三样恰好是自包含要证伪的东西 | M(n+1) |
 | `scripts/verify-zerodep.mjs` | **依赖分界门**：`scripts/` 下不许出现 node: 之外的 import，且没有任何门 import `tools/`。⚠ 存在的理由是这条纪律**被违反了八个版本**都没人发现——它的原文就写在被违反的文件上方三行。**只写在文档里、没有东西去查的规矩会安静失效** | 每次新增脚本 |

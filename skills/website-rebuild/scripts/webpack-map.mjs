@@ -135,6 +135,11 @@ if (!members || members.length < 2) {
 }
 
 // --- walk each module -------------------------------------------------------
+// Every id the container defines. Needed before the walk, because a require
+// argument may be a conditional and the only sound way to read the literals
+// inside it is to check them against the real id set.
+const KNOWN = new Set(entries.map((e) => String(e.id)));
+
 const mods = [];
 for (const { id, fi } of entries) {
   // fi points at `function`. Params run from the next `(` to its match.
@@ -165,10 +170,27 @@ for (const { id, fi } of entries) {
   const exportNames = new Set();
   let exportsAssigned = 0;
   for (let k = b; k < end; k++) {
-    // reqName("id") | reqName(3)
-    if (reqName && lab(k) === "name" && val(k) === reqName && lab(k + 1) === "(" &&
-        (lab(k + 2) === "string" || lab(k + 2) === "num") && lab(k + 3) === ")") {
-      requires.add(String(val(k + 2)));
+    // reqName(<anything>) — collect every literal inside the call that is a real
+    // module id, at any depth.
+    //
+    // ⛔ Matching only `reqName("id")` misses a CONDITIONAL require, and this
+    // bundle has one: `i(t ? "c0e8c815…" : "2f021872…")` picks a video-player
+    // implementation by browser and options. Both targets then had no inbound
+    // edge, the closure classified them as dead code, and the port shipped
+    // without them — while a nine-checkpoint pixel walk stayed at 0.00, because
+    // the branch is not taken on the paths that were driven. This is exactly the
+    // hole a list reconciliation exists to find and a functional test cannot.
+    if (reqName && lab(k) === "name" && val(k) === reqName && lab(k + 1) === "(") {
+      let d = 0;
+      for (let j = k + 1; j < end; j++) {
+        const l = lab(j);
+        if (l === "(" || l === "[" || l === "{" || l === "${") d++;
+        else if (l === ")" || l === "]" || l === "}") { d--; if (d === 0) { k = j; break; } }
+        else if (d >= 1 && (l === "string" || l === "num")) {
+          const v = String(val(j));
+          if (KNOWN.has(v)) requires.add(v);
+        }
+      }
       continue;
     }
     // modName.exports =

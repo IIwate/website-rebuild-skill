@@ -296,10 +296,26 @@ async function capture(url, label) {
     // So: the pump budget is spread across the settle window. Both sides get the
     // IDENTICAL dt sequence, which is what makes the frames comparable.
     const [dt, frames] = PUMP.split(',').map((n) => Number(n.trim()));
-    const ok = await evalJs(`typeof window.__pump === "function"`);
-    if (ok !== true && ok !== 'true') {
-      console.error(`[pixel] FATAL: --pump given but window.__pump is not defined on ${label}.\n` +
-        `        The determinism shim is injected by serve.mjs for requests carrying ?__probe — the URL needs it.`);
+    // ⛔ WAIT for the shim, do not test for it once. `Page.navigate` resolves when
+    // navigation STARTS, so a single check runs against the previous document or
+    // before the injected script has executed — and then this gate blames the URL
+    // for a shim that was there all along. Measured: the same URL that made this
+    // FATAL answered `typeof window.__pump === "function"` from a plain probe.
+    // ⚠ A wrong diagnosis is more expensive than no diagnosis: it sends you to
+    // change something that was already correct.
+    const ok = await waitFor(
+      async () => {
+        const r = await evalJs(`document.readyState !== "loading" && typeof window.__pump === "function"`);
+        return r === true || r === 'true';
+      },
+      30000,
+      label + ' determinism shim',
+    ).catch(() => false);
+    if (!ok) {
+      console.error(`[pixel] FATAL: window.__pump never appeared on ${label} within 30s.\n` +
+        `        serve.mjs injects the shim into HTML responses carrying ?__probe — check that the\n` +
+        `        URL has it, that the response is HTML, and that the shim did not throw (probe the\n` +
+        `        page directly and read the console).`);
       chrome.reap();
       process.exit(6);
     }
