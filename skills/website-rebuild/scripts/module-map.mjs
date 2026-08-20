@@ -113,27 +113,6 @@ const byOwner = new Map();
 for (const i of props) byOwner.set(ownerAt[i], (byOwner.get(ownerAt[i]) || []).concat(i));
 const [, members] = [...byOwner].sort((a, b) => b[1].length - a[1].length)[0] || [];
 
-// --- array-form container: `[function(…), function(…)]` ---------------------
-let entries = [];
-let containerKind = "ObjectExpression";
-if (!members || members.length < 2) {
-  // Fall back to the array form before giving up.
-  const arr = [];
-  for (let i = 0; i + 1 < T.length; i++) {
-    if (lab(i) !== "function") continue;
-    if (lab(i - 1) === "[" || lab(i - 1) === ",") arr.push(i);
-  }
-  if (arr.length < 2) {
-    console.error("FATAL: no webpack module container found — this bundle is not `!function(m){…}([…])`.");
-    console.error("       Do NOT fall back to the flat layer map: a wrong unit boundary is a silent 65% error.");
-    process.exit(5);
-  }
-  containerKind = "ArrayExpression";
-  entries = arr.map((fi, idx) => ({ id: String(idx), fi }));
-} else {
-  entries = members.map((i) => ({ id: String(val(i)), fi: i + 2 }));
-}
-
 // --- Turbopack container ----------------------------------------------------
 // ⭐ A second packer, a different container syntax, the same porting unit.
 // Next.js with Turbopack emits
@@ -170,10 +149,50 @@ for (let i = 0; i + 2 < T.length; i++) {
   break;
 }
 
+
+// --- array-form container: `[function(…), function(…)]` ---------------------
+let entries = [];
+let containerKind = "ObjectExpression";
+if (!members || members.length < 2) {
+  // Fall back to the array form before giving up.
+  const arr = [];
+  for (let i = 0; i + 1 < T.length; i++) {
+    if (lab(i) !== "function") continue;
+    if (lab(i - 1) === "[" || lab(i - 1) === ",") arr.push(i);
+  }
+  if (arr.length < 2) {
+    // ⛔ Do not give up before the OTHER reader has spoken. This exit used to run
+    // first, so a Turbopack chunk with fewer than two webpack-shaped properties
+    // FATAL'd as "no container" while its container sat on line 1 — and the
+    // chunks that did work only worked because they happened to contain two
+    // spurious `key: function` properties. An accident is not a code path.
+    if (turbo.length >= 2) {
+      containerKind = "TurbopackChunk";
+      entries = turbo;
+    } else {
+      console.error("FATAL: no module container found — neither a webpack container");
+      console.error("       (`!function(m){…}({…})`) nor a Turbopack chunk");
+      console.error("       (`(globalThis.TURBOPACK||=[]).push([currentScript, id, factory, …])`).");
+      console.error("       Do NOT fall back to the flat layer map: a wrong unit boundary is a silent 65% error.");
+      process.exit(5);
+    }
+  } else {
+    containerKind = "ArrayExpression";
+    entries = arr.map((fi, idx) => ({ id: String(idx), fi }));
+  }
+} else {
+  entries = members.map((i) => ({ id: String(val(i)), fi: i + 2 }));
+}
+
+// ⭐ Both readers have run; take whichever explains more of the file. A webpack
+// reader pointed at a Turbopack chunk finds a couple of unrelated properties,
+// so "more modules wins" is the right tiebreak, and the plausibility check
+// below still has to pass either way.
 if (turbo.length > entries.length) {
   containerKind = "TurbopackChunk";
   entries = turbo;
 }
+
 
 // --- walk each module -------------------------------------------------------
 // Every id the container defines. Needed before the walk, because a require
