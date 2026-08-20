@@ -3,7 +3,7 @@ name: website-rebuild
 description: 1:1 rebuild of award-winning creative websites (WebGL / scroll-animation / portfolio sites). Evidence-driven pipeline - mirror-first forensics, line-number-traceable reverse engineering of minified bundles, verbatim porting, quantitative verification gates. Use when user asks to "复刻网站", "重建网站", "1:1 rebuild", "clone this site", or provides a URL of a creative/award site to reproduce.
 compatibility: Requires Node 22+ (bundled scripts use built-in WebSocket to talk to CDP), npx, and a local Chrome/Chromium for headless comparison. POSIX shell optional - the Step 0 probe protocol has a zero-dependency Node equivalent (scripts/fingerprint.mjs) for shells without curl/cmp/tr/perl (e.g. Windows PowerShell). Agent-agnostic - works in any Agent Skills-compatible runtime.
 metadata:
-  version: "0.1.46"
+  version: "0.1.47"
 ---
 
 # Website Rebuild（获奖创意站 1:1 复刻）
@@ -148,7 +148,7 @@ Step 0 → M(n) 全程不装任何东西；**复刻项目要到 M(n+1) 才获得
 | `scripts/verify-payload.mjs` | **SSG payload 门**：把内联序列化数据块（Nuxt2 `window.__NUXT__` / Nuxt3 `__NUXT_DATA__`）**求值展开**再按结构对拍。字节门在这里不够用——payload 是一段"输出数据的程序"（参数去重、`\u002F` 转义），两份可以字节不同而语义相同，也可以字节相近而语义不同；且服务层要**改写它内部**的 URL。实测：它抓到两侧本地化实现不一致（一侧留 `href="http://host"`、另一侧写出 `href=""`），而外壳字节门全绿 | M0.5 起（有 SSG payload 时） |
 | `scripts/verify-offline.mjs` | **零外联门的静态一半**：枚举产出字节里每个外部绝对 URL 并逐条裁决（§1.6 的四类断言面里，资源级探针看不见的那三类） | M0.5 起每 commit |
 | `scripts/beautify-bundle.mjs` | js-beautify@1.15.1 钉死展开 bundle 到 `_pretty/` 并生成再生成说明。⛔ **撞名响亮告警 + 单射断言**——两个不同目录下的 `main.built.js` 曾静默互相覆盖，而 `_pretty/` 是全项目唯一溯源坐标系，覆盖之后每个行号都指向错误的文件 | M1 |
-| `scripts/module-map.mjs` | **模块化 bundle 的分层表**：spawn 钉死的 `acorn --tokenize`（零依赖），逐模块给出行区间、`requires`、导出名。⛔ 认不出容器即 FATAL，不许回退到扁平分层表。⛔ **容器可以重复定义同一个 id**——实测 597 条属性只有 569 个不同模块，且其中 4 条被遮蔽的定义**实现不同**；语义是**对象字面量后者胜出**，工具必须去重并报告，否则每份文档记的模块数都是错的，而下游拿到哪一份取决于迭代顺序 | M1（模块化打包产物） |
+| `scripts/module-map.mjs` | **模块化 bundle 的分层表**：spawn 钉死的 `acorn --tokenize`（零依赖），逐模块给出行区间、`requires`、导出名。**认两种容器**：webpack 对象容器与 **Turbopack 扁平列表**（后者把导出名直接写在容器里，M(n+1) 命名因此几乎全是 tier-1 证据）。⛔ 认不出容器即 FATAL；⛔⛔ **认出来的还必须解释得了这个文件**——行覆盖率 <50%、或依赖边不足 require 调用数的 25%，一律 FATAL：读错容器时工具会「成功」（实测对一个真有 20 个工厂的 chunk 报了 2 个模块）。⛔ **容器可以重复定义同一个 id**——实测 597 条属性只有 569 个不同模块，且其中 4 条被遮蔽的定义**实现不同**；语义是**对象字面量后者胜出**，工具必须去重并报告，否则每份文档记的模块数都是错的，而下游拿到哪一份取决于迭代顺序 | M1（模块化打包产物） |
 | `scripts/closure.mjs` | 从种子模块算**传递依赖闭包**，是竖切边界的唯一依据。⛔ **未知种子 ID 一律 FATAL** 并给出 did-you-mean——静默丢弃会产出一个“小一号但看似合理”的切片，失败推迟到运行时 | M2+（模块化打包产物） |
 | `scripts/verify-tween.mjs` | **竖切的数值门**：同一关键帧规格喂两侧、逐点比补间值与缓动曲线。比像素门**早得多**判红，且失败会带上产生它的输入。⛔ 用例的字段名与值域必须从源码抄——第一版凭直觉写，六个用例全落在同一条曲线上、全绿、零区分力 | M2+（有补间/时间轴引擎时） |
 | `scripts/harvest-cases.mjs` | **从源站活引擎采用例**：驱动源站到 N 个状态，逐状态记录它自己对象里的数值（站点侧写在 `harvest.config.mjs`，样例见 `harvest.config.example.mjs`）。手写用例编码的是**你相信引擎的参数是什么**——六个手写用例曾全落在同一条曲线上、全绿。⛔ 只产出 A 侧，必须配 `verify-harvest.mjs`。⚠ 采**解析完的数值**而非源文本 | M2+（源站引擎可达时） |
