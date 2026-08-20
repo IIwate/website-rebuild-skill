@@ -79,9 +79,24 @@ traverse(FILE, {
     if (v.type === "FunctionExpression" || v.type === "ArrowFunctionExpression") NODES.set(id, p.get("value"));
   },
 });
-if (NODES.size === 0) {
-  console.error("FATAL — parsed the source but found no module container. The map and the file disagree.");
+// ⭐ A packer that DECLARES export names has already answered the question this
+// tool exists to answer. Turbopack writes `ctx.s([["HeroSection", () => x]], id)`
+// and module-map records it, so those names are evidence of the strongest kind:
+// not inferred from a global, a registry or a consumer's field name, but stated
+// by the build. webpack declares nothing of the sort, which is why the tiers
+// below had to be invented for it.
+const DECLARED = new Map(
+  MAP.modules.filter((m) => (m.exportNames || []).length).map((m) => [String(m.id), m.exportNames]),
+);
+
+if (NODES.size === 0 && DECLARED.size === 0) {
+  console.error("FATAL — no module container was parsed AND the map declares no export names.");
+  console.error("        Either the map and the file disagree, or this packer's container is one");
+  console.error("        this tool does not read yet.");
   process.exit(5);
+}
+if (NODES.size === 0) {
+  console.log(`  (container not parsed; naming from the ${DECLARED.size} module(s) whose exports the packer declares)`);
 }
 
 // Words that name nothing. A file called `index.js` or `utils.js` tells the
@@ -168,7 +183,22 @@ for (const id of CLO.modules) {
   if (!m) { results.push({ id, name: null, tier: null, why: "not in webpack map", candidates: [], evidence: {} }); continue; }
 
   const fnPath = NODES.get(id);
-  if (!fnPath) { results.push({ id, name: null, tier: null, why: "in the map but not in the parsed container", candidates: [], evidence: {} }); continue; }
+  if (!fnPath) {
+    // No parsed body, but the packer may still have named it.
+    const decl = DECLARED.get(String(id));
+    if (decl && decl.length) {
+      const usable2 = decl.filter((n) => n && n !== "default" && n.length > 2);
+      const pick = usable2[0] ?? null;
+      results.push({
+        id, lines: m.lines, name: null, tier: null, why: null,
+        candidates: pick ? [{ name: kebab(pick), tier: 1, why: `the packer declares it exports \`${pick}\`` }] : [],
+        evidence: { declaredExports: decl },
+      });
+      continue;
+    }
+    results.push({ id, name: null, tier: null, why: "in the map but not in the parsed container", candidates: [], evidence: {} });
+    continue;
+  }
 
   const ev = { globals: [], classes: [], fns: [], consts: [], strings: [], typeNames: [], prefixes: [], registered: [], members: [] };
   let exportedName = null;
@@ -265,6 +295,9 @@ for (const id of CLO.modules) {
   const cand = [];
   const add = (n, tier, why) => { const k = kebab(n); if (k && k.length >= 3 && !EMPTY.has(k) && !cand.some((c) => c.name === k)) cand.push({ name: k, tier, why }); };
 
+  for (const d of (DECLARED.get(String(id)) || [])) {
+    if (d && d !== "default") add(d, 1, `the packer declares it exports \`${d}\``);
+  }
   for (const g of ev.globals) add(g, 1, `window.${g} = …`);
   for (const r of ev.registered) add(r.name, 1, `registers itself as ${r.how}`);
   for (const c of ev.classes.filter(usable)) add(c, 2, `class ${c}`);

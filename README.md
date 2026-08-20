@@ -150,6 +150,7 @@ cp -R skills/website-rebuild ~/.claude/skills/website-rebuild
 | AIM Services 50th | [aimservices.co.jp/50th](https://www.aimservices.co.jp/50th/) | 日文企业周年微站，第一次**全程无人介入**的实测目标 |
 | ChungiYoo | [chungiyoo.com](https://chungiyoo.com/) | 设计师作品集，Nuxt 2 SSG，页面里的数据块占文档 54%、展开后膨胀 8.9 倍 |
 | Apple AirPods Pro | [apple.com/airpods-pro](https://www.apple.com/airpods-pro/) | 判级的基准物种，也是第一个 webpack 模块容器目标。565 个模块逐字移植，**9 个滚动检查点逐像素一致**，源码化为 565 个文件并做到 token 级等价——仓库外断网重建后仍是 0.00 |
+| Optimus（v0 生成） | [v0-optimus-delta.vercel.app](https://v0-optimus-delta.vercel.app/) | Next.js + **Turbopack** 容器，第二种模块打包形态。⭐ 打包器自带导出名，命名从推断变成转写（16/20 tier-1）；移植产物仍是一个 Turbopack chunk，**全程没有转写任何运行时** |
 | Lusion | [lusion.co](https://lusion.co/) | 创意工作室官网，1.25 MB 自研 WebGL 引擎 + 156 个 shader；三条路由**逐像素一致**，并走完了**源码化**——389 个模块、可独立复制运行 |
 
 ### 只做过判级的边界样本
@@ -264,6 +265,8 @@ README.md                  # 本文件
 
 - **v0.1.47**：工具认第二种模块容器（Turbopack）。⛔ 更要紧的是加了一条**合理性判据**：光有"认不出就报错"不够——读错容器时它会**"成功"**，对一个真有 20 个模块工厂的文件报了 2 个模块并打印愉快的摘要。现在"认出来的东西必须解释得了这个文件"。
 - **v0.1.48**：**冻结 JS 时钟冻不住 CSS 动画**——`animation` 跑在浏览器自己的时间线上。症状很反直觉：**同侧对照比跨侧还大**，且残差在两次运行之间换位置。两条证据都说明残差不可归因于移植，而正确的读法不是"复刻得好"，是**这道门在这个目标上带宽受限**。
+
+- **v0.1.49**：**模块 id 的类型是容器契约的一部分。** 源码化发射器把 id 写成了字符串而容器要数字，页面渲染成空白——**而所有静态门全绿**（它们查的是内容，不是容器键的类型）。唯一说话的是巡航门的**非空画面前置条件**：它拒绝在空帧上给出比较结果。⚠ 同一目标上还有两个发射器对同一件事给了不同答案。
 
 ## 下一步
 

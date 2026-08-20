@@ -47,7 +47,8 @@ const MAP = JSON.parse(await readFile(path.resolve(flag("map", "docs/module-map.
 const CLO = JSON.parse(await readFile(path.resolve(flag("closure", "docs/app-closure.json")), "utf8"));
 const SRCDIR = path.resolve(flag("src", "src"));
 const MODDIR = path.join(SRCDIR, "modules");
-const SRC = (await readFile(path.resolve(MAP.source), "utf8")).split("\n");
+const SRCTEXT = await readFile(path.resolve(MAP.source), "utf8");
+const SRC = SRCTEXT.split("\n");
 
 const byId = new Map(MAP.modules.map((m) => [String(m.id), m]));
 const ids = CLO.modules.map(String);
@@ -81,8 +82,14 @@ const bodies = [];   // { id, file, srcText, origText }
 const mismatches = [];
 for (const id of ids) {
   const m = byId.get(id);
-  const raw = SRC.slice(m.startLine - 1, m.endLine).join("\n");
-  const origText = raw.replace(/^\s*(?:"[^"]+"|[A-Za-z_$][\w$]*|\d+)\s*:\s*/, "").replace(/,\s*$/, "");
+  // ⛔ Character offsets when the map has them. A Turbopack factory starts
+  // mid-line, so a line slice carries the container prefix in with it — which
+  // showed up here as every module being ~10 tokens longer on the packer's side
+  // than in src/, a difference entirely manufactured by this gate.
+  const origText = (m.startChar != null && m.endChar != null)
+    ? SRCTEXT.slice(m.startChar, m.endChar)
+    : SRC.slice(m.startLine - 1, m.endLine).join("\n")
+        .replace(/^\s*(?:"[^"]+"|[A-Za-z_$][\w$]*|\d+)\s*:\s*/, "").replace(/,\s*$/, "");
   const file = claims.get(id);
   if (!file) { fail++; mismatches.push(`${id}: no file claims it`); continue; }
   const text = await readFile(path.join(MODDIR, file), "utf8");
@@ -116,7 +123,11 @@ if (srcToks.length !== origToks.length || srcToks.length !== bodies.length) {
   process.exit(5);
 }
 
-const WRAP = new Set(["module", "exports", "require"]);
+// The wrapper names a port is allowed to introduce, across both packers:
+// webpack's (module, exports, require) and Turbopack's single (ctx).
+// ⛔ Anything else renamed is not a wrapper rename and must fail — that is the
+// whole point of the check.
+const WRAP = new Set(["module", "exports", "require", "ctx"]);
 let renamedModules = 0;
 for (let i = 0; i < bodies.length; i++) {
   const b = bodies[i];

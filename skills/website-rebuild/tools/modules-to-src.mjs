@@ -45,13 +45,20 @@ const NAMES = JSON.parse(await readFile(path.resolve(flag("names", "docs/app-nam
 const ENTRY = String(flag("entry", ""));
 const OUT = path.resolve(flag("out", "src"));
 const SRC = (await readFile(path.resolve(MAP.source), "utf8")).split("\n");
+const SRCTEXT = (await readFile(path.resolve(MAP.source), "utf8"));
+const TURBO = MAP.container === "TurbopackChunk";
 
-if (!ENTRY) { console.error("FATAL — --entry <module-id> is required: a tree with no entry does not run."); process.exit(2); }
+// ⚠ A Turbopack chunk has no entry of its own — the runtime decides what to
+// evaluate. Requiring one here would invent a concept the packer does not have.
+if (!ENTRY && MAP.container !== "TurbopackChunk") {
+  console.error("FATAL — --entry <module-id> is required: a tree with no entry does not run.");
+  process.exit(2);
+}
 
 const byId = new Map(MAP.modules.map((m) => [String(m.id), m]));
 const nameOf = new Map(NAMES.modules.filter((m) => m.name).map((m) => [String(m.id), m]));
 const ids = CLO.modules.map(String);
-if (!ids.includes(ENTRY)) { console.error(`FATAL — entry ${ENTRY} is not in the closure.`); process.exit(5); }
+if (ENTRY && !ids.includes(ENTRY)) { console.error(`FATAL — entry ${ENTRY} is not in the closure.`); process.exit(5); }
 
 const fileFor = (id) => (nameOf.has(id) ? `${nameOf.get(id).name}.js` : `${id}.js`);
 
@@ -62,7 +69,9 @@ let named = 0, wrapperRenamed = 0;
 for (const id of ids) {
   const m = byId.get(id);
   if (!m) { console.error(`FATAL — ${id} is in the closure but not in the map.`); process.exit(5); }
-  const raw = SRC.slice(m.startLine - 1, m.endLine).join("\n");
+  const raw = (m.startChar != null && m.endChar != null)
+    ? SRCTEXT.slice(m.startChar, m.endChar)
+    : SRC.slice(m.startLine - 1, m.endLine).join("\n");
 
   // Strip `"<id>": ` / `<id>: ` so the file starts at `function (…)`.
   const fnText = raw.replace(/^\s*(?:"[^"]+"|[A-Za-z_$][\w$]*|\d+)\s*:\s*/, "").replace(/,\s*$/, "");
@@ -86,9 +95,18 @@ for (const id of ids) {
   try {
     const ast = parse(`(${fnText})`, { sourceType: "script", errorRecovery: true });
     let fnPath = null;
-    traverse(ast, { FunctionExpression(p) { if (!fnPath) { fnPath = p; p.stop(); } } });
-    if (fnPath && fnPath.node.params.length === 3 && fnPath.node.params.every((p) => p.type === "Identifier")) {
-      const wanted = ["module", "exports", "require"];
+    traverse(ast, {
+      FunctionExpression(p) { if (!fnPath) { fnPath = p; p.stop(); } },
+      ArrowFunctionExpression(p) { if (!fnPath) { fnPath = p; p.stop(); } },
+    });
+    // ⭐ Two packers, two contracts, one rename. webpack passes
+    // (module, exports, require); Turbopack passes a single context object whose
+    // methods are the contract (ctx.i / ctx.r / ctx.s). Both are fixed by the
+    // build, not inferred, so renaming them is free readability either way.
+    const arity = fnPath ? fnPath.node.params.length : 0;
+    const WANTED_BY_ARITY = { 1: ["ctx"], 2: ["module", "exports"], 3: ["module", "exports", "require"] };
+    if (fnPath && WANTED_BY_ARITY[arity] && fnPath.node.params.every((p) => p.type === "Identifier")) {
+      const wanted = WANTED_BY_ARITY[arity];
       const spans = [];
       let clash = false;
       fnPath.node.params.forEach((param, i) => {
@@ -120,7 +138,7 @@ for (const id of ids) {
   const header = [
     `// ${meta ? meta.name : id}`,
     `//`,
-    `// Verbatim webpack module \`${id}\` from ${MAP.source} L${m.startLine}-L${m.endLine}`,
+    `// Verbatim ${TURBO ? "Turbopack" : "webpack"} module \`${id}\` from ${MAP.source} L${m.startLine}-L${m.endLine}`,
     `// (${m.lines} lines). ⛔ The body below is transcribed, not rewritten: source-site`,
     `// bugs, dead code and odd spellings are the port.`,
     meta ? `//` : null,
@@ -141,8 +159,34 @@ for (const id of ids) {
 // BODIES still run lazily, the first time require() asks — which is the
 // evaluation order the packer's runtime guarantees.
 const imports = ids.map((id, i) => `import __m${i} from "./modules/${fileFor(id)}";`).join("\n");
-const reg = ids.map((id, i) => `  ${JSON.stringify(id)}: __m${i},`).join("\n");
-await writeFile(path.join(OUT, "registry.js"),
+// ⛔ THE ID'S TYPE IS PART OF THE CONTRACT. Turbopack writes numeric ids in the
+// container and modules require them as numeric literals (`ctx.i(84998)`); the
+// runtime keys its registry by the pushed value, so a quoted "84998" is a
+// different key and the lookup misses. It surfaces three layers away as
+// "module 84998 … the module factory is not available", with nothing pointing
+// at a quote mark.
+//
+// ⚠ The map normalises every id to a string ON PURPOSE — that fixed a real
+// webpack bug where a numeric id could never be selected. So emitters have to
+// put the type back, and two of them disagreed here: the slice emitter wrote
+// bare ids and worked, this one wrote JSON strings and did not.
+const emitId = (id) => (TURBO && /^\d+$/.test(String(id)) ? String(id) : JSON.stringify(String(id)));
+const reg = TURBO
+  ? ids.map((id, i) => `  ${emitId(id)}, __m${i},`).join("\n")
+  : ids.map((id, i) => `  ${JSON.stringify(id)}: __m${i},`).join("\n");
+await writeFile(path.join(OUT, "registry.js"), TURBO
+? `${imports}
+
+// registry.js — the packer's own FLAT id/factory list, one entry per file in
+// modules/. ⛔ Flat and ordered, not an object: this is the shape the runtime
+// drains, and an object would be read as ids with no factories.
+//
+// Generated. Regenerate with tools/modules-to-src.mjs.
+export const modules = [
+${reg}
+];
+`
+:
 `${imports}
 
 // registry.js — id -> module factory, one entry per file in modules/.
@@ -225,6 +269,25 @@ export function makeRequire(modules) {
 }
 `);
 
+if (TURBO) {
+  // ⭐ The deliverable stays a Turbopack chunk. It pushes into the SAME array the
+  // origin's runtime drains, so ids in other chunks (React, Next) resolve as
+  // before and no runtime has to be re-implemented — there is nothing here to
+  // register as a deviation.
+  await writeFile(path.join(OUT, "index.js"),
+`// index.js — registers this chunk's modules with the packer's own runtime.
+//
+// ⛔ Do NOT replace this with an ESM entry that imports and runs things. These
+// modules are compiled against Turbopack's contract (ctx.i / ctx.r / ctx.s) and
+// are evaluated BY THAT RUNTIME, lazily, in the order it decides.
+import { modules } from "./registry.js";
+
+(globalThis.TURBOPACK || (globalThis.TURBOPACK = [])).push([
+  "object" == typeof document ? document.currentScript : void 0,
+  ...modules,
+]);
+`);
+} else {
 await writeFile(path.join(OUT, "index.js"),
 `// index.js — the entry the packer's runtime called: \`__webpack_require__(${JSON.stringify(ENTRY)})\`.
 import { modules } from "./registry.js";
@@ -237,10 +300,11 @@ require(${JSON.stringify(ENTRY)});
 // port may reach for it.
 if (typeof window !== "undefined") window.__req = require;
 `);
+}
 
 console.log(`=== modules-to-src ===`);
 console.log(`  ${ids.length} module(s) -> ${path.relative(process.cwd(), OUT)}/modules/`);
 console.log(`  ${named} named from evidence, ${ids.length - named} keep their id`);
-console.log(`  ${wrapperRenamed} wrapper signature(s) renamed to (module, exports, require);`);
-console.log(`  ${ids.length - wrapperRenamed} left alone (not the 3-parameter shape, or the target name is taken)`);
+console.log(`  ${wrapperRenamed} wrapper signature(s) renamed to ${TURBO ? "(ctx)" : "(module, exports, require)"};`);
+console.log(`  ${ids.length - wrapperRenamed} left alone (unexpected parameter shape, or the target name is taken)`);
 console.log(`\n  ⚠ Bodies are still verbatim. Local renaming is the next step and has its own gate.`);
