@@ -80,11 +80,24 @@ const evalOn = (url, expr) =>
     });
   });
 
+// ⭐ The end-to-end case: real window scroll driving a video's currentTime. The
+// cases above exercise the engine through its internals; this one exercises the
+// path the PAGE uses, so a port that got every curve right while wiring the
+// scroll system wrong still fails here.
+const SCROLL_CASES = [
+  { name: "scroll -> currentTime", spec: { start: "a0t", end: "a0b", currentTime: [0, 10], anchors: [".anchor"] } },
+  { name: "scroll -> currentTime, eased", spec: { start: "a0t", end: "a0b", currentTime: [0, 10], anchors: [".anchor"], easeFunction: "easeOutQuad" } },
+];
+
 async function runSide(url) {
   const results = [];
   for (const c of CASES) {
     const expr = `JSON.stringify((()=>{try{return window.__tweenProbe(${JSON.stringify({ steps: 9, spec: c.spec, classes: c.classes || [], range: c.range || null, anchor: c.anchor || null })});}catch(e){return {error:String(e).slice(0,200)};}})())`;
     results.push({ case: c.name, ...(await evalOn(url, expr)) });
+  }
+  for (const c of SCROLL_CASES) {
+    const expr = `JSON.stringify((()=>{try{return window.__scrollProbe(${JSON.stringify({ fracs: [0, 0.2, 0.3, 0.35, 0.4, 0.5, 0.75, 1], spec: c.spec })});}catch(e){return {error:String(e).slice(0,200)};}})())`;
+    results.push({ case: c.name, scroll: true, ...(await evalOn(url, expr)) });
   }
   return results;
 }
@@ -92,7 +105,7 @@ async function runSide(url) {
 console.log(`=== verify-tween ===`);
 const a = await runSide(A);
 console.log(`  A ${A}`);
-for (const r of a) console.log(`    ${r.error ? "ERR " : "ok  "} ${r.case.padEnd(32)} ${r.error ? r.error.slice(0, 70) : r.disabled ? `DISABLED (${r.ease})` : `${r.attr} / ${r.ease}`}`);
+for (const r of a) console.log(`    ${r.error ? "ERR " : "ok  "} ${r.case.padEnd(32)} ${r.error ? r.error.slice(0, 70) : r.disabled ? `DISABLED (${r.ease})` : r.scroll ? `${r.attr} @ scroll [${(+r.start).toFixed(3)}, ${(+r.end).toFixed(3)}]` : `${r.attr} / ${r.ease}`}`);
 
 if (RECORD) {
   await mkdir(path.dirname(path.resolve(RECORD)), { recursive: true });
@@ -108,9 +121,10 @@ if (!B) { console.log(`\n  ⚠ no --b: nothing was COMPARED. One side alone cann
 const b = await runSide(B);
 console.log(`  B ${B}`);
 let fail = 0;
-for (let i = 0; i < CASES.length; i++) {
+const ALL = [...CASES, ...SCROLL_CASES];
+for (let i = 0; i < ALL.length; i++) {
   const x = a[i], y = b[i];
-  if (x.error || y.error) { fail++; console.log(`\n  FAIL ${CASES[i].name}: ${x.error || ""} ${y.error || ""}`.slice(0, 160)); continue; }
+  if (x.error || y.error) { fail++; console.log(`\n  FAIL ${ALL[i].name}: ${x.error || ""} ${y.error || ""}`.slice(0, 160)); continue; }
   const diffs = [];
   if (x.attr !== y.attr) diffs.push(`attr ${x.attr} vs ${y.attr}`);
   if (!!x.disabled !== !!y.disabled) diffs.push(`disabled ${!!x.disabled} vs ${!!y.disabled}`);
@@ -128,8 +142,8 @@ for (let i = 0; i < CASES.length; i++) {
     // tween's internal `current` would pass a port whose DOM write path is wrong.
     if (String(p.written) !== String(q.written)) diffs.push(`pos ${p.pos} written: ${p.written} vs ${q.written}`);
   }
-  if (diffs.length) { fail++; console.log(`\n  FAIL ${CASES[i].name}`); for (const d of diffs.slice(0, 6)) console.log(`         ${d}`); }
-  else console.log(`  ok   ${CASES[i].name} — ${x.out.length} positions agree within ${TOL}`);
+  if (diffs.length) { fail++; console.log(`\n  FAIL ${ALL[i].name}`); for (const d of diffs.slice(0, 6)) console.log(`         ${d}`); }
+  else console.log(`  ok   ${ALL[i].name} — ${x.out.length} positions agree within ${TOL}`);
 }
-console.log(fail ? `\nFAIL — ${fail}/${CASES.length} case(s) differ.` : `\nPASS — ${CASES.length}/${CASES.length} cases agree within ${TOL}.`);
+console.log(fail ? `\nFAIL — ${fail}/${ALL.length} case(s) differ.` : `\nPASS — ${ALL.length}/${ALL.length} cases agree within ${TOL}.`);
 process.exit(fail ? 1 : 0);
