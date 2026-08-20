@@ -66,7 +66,7 @@
  * Zero dependencies (Node 22+ builtins only).
  */
 import { execFileSync, spawn } from "node:child_process";
-import { mkdtempSync, readdirSync, rmSync, statSync } from "node:fs";
+import { accessSync, mkdtempSync, readdirSync, rmSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -91,6 +91,39 @@ export function profileMarker(role, slot = portSlot()) {
 export function parseProfileName(name) {
   const m = new RegExp(`^${PROFILE_PREFIX}-s(\\d+)-([a-z0-9-]+?)-p(\\d+)-`).exec(name);
   return m ? { slot: Number(m[1]), role: m[2], port: Number(m[3]) } : null;
+}
+
+// --- chrome binary discovery ------------------------------------------------
+
+/**
+ * Standard candidates for local Chrome / Chromium executables across macOS,
+ * Linux, and Windows. Respects CHROME_BIN / CHROME_PATH overrides.
+ */
+export const CHROME_CANDIDATES = Object.freeze([
+  process.env.CHROME_BIN,
+  process.env.CHROME_PATH,
+  "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
+  "/Applications/Chromium.app/Contents/MacOS/Chromium",
+  "/usr/bin/google-chrome",
+  "/usr/bin/google-chrome-stable",
+  "/usr/bin/chromium",
+  "/usr/bin/chromium-browser",
+  "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe",
+  "C:\\Program Files (x86)\\Google\\Chrome\\Application\\chrome.exe",
+].filter(Boolean));
+
+/**
+ * Find the first runnable Chrome executable path from candidate list.
+ * Throws a fatal descriptive Error if none can be found.
+ */
+export function findChrome() {
+  for (const c of CHROME_CANDIDATES) {
+    try {
+      accessSync(c);
+      return c;
+    } catch {}
+  }
+  throw new Error("Chrome not found. Set CHROME_BIN or CHROME_PATH.");
 }
 
 // --- process table ----------------------------------------------------------

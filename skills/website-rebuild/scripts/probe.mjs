@@ -58,7 +58,7 @@
  *   -> shopifydesign-rebuild (--no-external assertion for the offline gate,
  *      --walk full-page scroll walk).
  */
-import { writeFile, access } from 'node:fs/promises';
+import { writeFile } from 'node:fs/promises';
 import {
   annotateHost,
   assertOwnBrowser,
@@ -69,32 +69,12 @@ import {
   resolvePort,
 } from './lib/ports.mjs';
 import {
+  findChrome,
   launchChrome,
   preflightChrome,
   shotCeilingAdvice,
   shotLikelyTooBig,
 } from './lib/chrome.mjs';
-
-// Chrome discovery: first existing candidate wins; override with CHROME_PATH.
-const CHROME_CANDIDATES = [
-  process.env.CHROME_PATH,
-  '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',
-  '/Applications/Chromium.app/Contents/MacOS/Chromium',
-  '/usr/bin/google-chrome',
-  '/usr/bin/chromium',
-  '/usr/bin/chromium-browser',
-].filter(Boolean);
-
-async function findChrome() {
-  for (const c of CHROME_CANDIDATES) {
-    try {
-      await access(c);
-      return c;
-    } catch {}
-  }
-  console.error('FATAL: Chrome not found. Set CHROME_PATH.');
-  process.exit(3);
-}
 
 const args = process.argv.slice(2);
 const url = args.find((a) => !a.startsWith('--'));
@@ -163,7 +143,7 @@ await preflightChrome({
   note: PORT_EXPLICIT ? 'this port came from --cdp-port/CDP_PORT' : null,
 });
 
-const CHROME = await findChrome();
+const CHROME = findChrome();
 // One-shot landing page: the attach step below refuses anything else, so this
 // probe cannot end up driving a browser some other script started.
 const sentinel = chromeSentinel();

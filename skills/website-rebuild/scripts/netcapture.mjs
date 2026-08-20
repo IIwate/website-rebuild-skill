@@ -61,7 +61,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { assertOwnBrowser, chromeSentinel, resolvePort } from "./lib/ports.mjs";
-import { launchChrome, preflightChrome } from "./lib/chrome.mjs";
+import { findChrome, launchChrome, preflightChrome } from "./lib/chrome.mjs";
 // Shared, query-aware url -> local path. This pass keys its records by url+search
 // but used to resolve disk by pathname alone, so on a query-parameterised image
 // CDN every responsive variant after the first reported HAVE against a file that
@@ -113,25 +113,6 @@ const VIEWPORTS = Object.fromEntries(
     .filter((v) => VIEWPORT_DEFS[v])
     .map((v) => [v, VIEWPORT_DEFS[v]]),
 );
-
-const CHROME_CANDIDATES = [
-  process.env.CHROME_PATH,
-  "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
-  "/Applications/Chromium.app/Contents/MacOS/Chromium",
-  "/usr/bin/google-chrome",
-  "/usr/bin/chromium",
-  "/usr/bin/chromium-browser",
-].filter(Boolean);
-
-async function findChrome() {
-  for (const c of CHROME_CANDIDATES) {
-    try {
-      await fs.access(c);
-      return c;
-    } catch {}
-  }
-  throw new Error("Chrome not found. Set CHROME_PATH.");
-}
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
@@ -201,7 +182,7 @@ console.log(`[netcapture] cdp port ${CDP_LABEL}`);
 // one of them is the most likely occupant of this port.
 await preflightChrome({ role: "netcapture", port: CDP_PORT, tool: "netcapture.mjs" });
 
-const chromePath = await findChrome();
+const chromePath = findChrome();
 const sentinel = chromeSentinel();
 
 // launchChrome owns --user-data-dir (fresh temp profile, deleted on teardown)

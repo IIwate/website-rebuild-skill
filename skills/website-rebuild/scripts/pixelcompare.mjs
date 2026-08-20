@@ -71,6 +71,7 @@ import {
   resolvePort,
 } from './lib/ports.mjs';
 import {
+  findChrome,
   launchChrome,
   preflightChrome,
   shotCeilingAdvice,
@@ -147,10 +148,7 @@ const { port: CDP_PORT, label: CDP_LABEL } = resolvePort({
   envName: 'CDP_PORT',
 });
 
-const CHROME =
-  process.env.CHROME_BIN ||
-  process.env.CHROME_PATH ||
-  '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome';
+const CHROME = findChrome();
 
 const waitFor = (fn, ms, label) => new Promise((resolve, reject) => {
   const t0 = Date.now();
