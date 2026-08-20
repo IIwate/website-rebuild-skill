@@ -41,6 +41,21 @@ const NAMESPACE_HOSTS = new Set(["www.w3.org", "schema.org", "json-schema.org", 
 let problems = 0;
 const census = new Map(); // host -> { count, kinds:Set, sample }
 
+// ⛔ A gate must fail legibly. Pointed at a base with nothing listening, this
+// one used to die on an unhandled `TypeError: fetch failed` and a stack trace —
+// which reads as "the gate is broken", not "you did not start the server". The
+// difference matters most in a registered command someone runs months later.
+try {
+  await fetch(BASE, { redirect: "manual", signal: AbortSignal.timeout(5000) });
+} catch (e) {
+  console.error(`FATAL — nothing answered at ${BASE} (${e.cause?.code || e.name || e.message}).`);
+  console.error(`        This gate reads the SERVED rebuild, so a server has to be up:`);
+  console.error(`          node scripts/serve.mjs --root <rebuild-root> --port ${new URL(BASE).port || 80}`);
+  console.error(`        ⚠ If the rebuild has no routes yet, this gate is not applicable at this stage —`);
+  console.error(`          say so in the plan rather than leaving a registered command that always dies.`);
+  process.exit(5);
+}
+
 for (const route of ROUTES) {
   const res = await fetch(BASE + route, { redirect: "manual" });
   const html = await res.text();
