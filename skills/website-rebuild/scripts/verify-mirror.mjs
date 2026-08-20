@@ -481,6 +481,15 @@ if (!SKIP.has("ledger")) {
 // size-outlier lead's job, and --interstitial-extra's once you have seen the
 // one your origin serves.
 const WEAK_MAX = 32 * 1024;
+// Does this body present as an HTML document at all? Cheap and decisive: a
+// challenge page is served as a page. Anything that opens with a packer's
+// container, an ESM import, or "use strict" is code that happens to contain a
+// word, not a refusal.
+const looksLikeDocument = (text) => {
+  const head = text.slice(0, 2048).trimStart();
+  if (/^(?:<!doctype|<html|<\?xml)/i.test(head)) return true;
+  return /<html[\s>]/i.test(head) && /<body[\s>]/i.test(text.slice(0, 8192));
+};
 const INTERSTITIAL = [
   [/_cf_chl_opt|cf-browser-verification|cf_chl_prog|__cf_chl_/, "Cloudflare challenge"],
   [/<title>\s*Just a moment/i, "Cloudflare 'Just a moment'"],
@@ -558,7 +567,17 @@ if (!SKIP.has("authenticity")) {
     if (!head || !sniffTextBytes(head)) continue;
     const text = head.toString("utf8");
     for (const [re, what, weak] of patterns) {
-      if (weak && st.size > WEAK_MAX) continue;
+      // ⛔ A weak marker may only fire on something that could BE a challenge
+      // page, and a challenge page is an HTML DOCUMENT. Size alone is not that
+      // test: a 28 KB JavaScript chunk is under WEAK_MAX, and Next.js ships
+      // `forbidden()` as an API name plus HTTP status constants, so "refusal
+      // wording" matched a perfectly real bundle. ⚠ A false red here is
+      // expensive in a specific way — it teaches you to skim this gate, which is
+      // exactly how the 43 real challenge pages would survive the next run.
+      //
+      // ⭐ Strong markers still apply to every text file: a challenge body
+      // served at a .js path is precisely the case they exist for.
+      if (weak && (st.size > WEAK_MAX || !looksLikeDocument(text))) continue;
       if (re.test(text)) {
         hits.push(`${rel} — ${what}${weak ? ` (weak marker, ${st.size} B document)` : ""}`);
         break;
