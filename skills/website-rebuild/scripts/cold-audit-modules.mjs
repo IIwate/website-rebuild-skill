@@ -56,6 +56,14 @@ console.log(`  unaccounted for  ${missing.length}\n`);
 let dynamic = [];
 const resolved = [];
 const KNOWN = new Set(all.map((m) => String(m.id)));
+// ⛔⛔ COUNT WHAT WAS ACTUALLY EXAMINED. This check reported
+// "no call site resembles a require with a computed id" after scanning ZERO of
+// 20 modules: its signature probe only matched webpack's `function(m, e, r)`,
+// and a Turbopack factory is `ctx => {…}`, so every module fell through the
+// `continue` and the loop found nothing to look at. A check that examined
+// nothing must SAY SO — reporting ok is the most expensive thing it can do.
+let examined = 0;
+const TURBO = MAP.container === "TurbopackChunk";
 for (const m of all) {
   const body = SRC.slice(m.startLine - 1, m.endLine).join("\n");
   // ⛔ Take the signature from the module's FIRST LINE, not from the first match
@@ -63,10 +71,28 @@ for (const m of all) {
   // three-argument one is often a callback whose third parameter is unrelated —
   // which made this audit report `i(this.xhr.responseText, …)` as a computed
   // require. A regex that finds A match is not a regex that finds THE match.
-  const sig = SRC[m.startLine - 1].match(/function\s*\(\s*(\w+)\s*,\s*(\w+)\s*,\s*(\w+)\s*\)/);
-  if (!sig) continue;
-  const R = sig[3];
-  const re = new RegExp(`\\b${R}\\s*\\(`, "g");
+  // Two packers, two signatures. webpack: `function (module, exports, require)`,
+  // and the third parameter is the require. Turbopack: `ctx => {…}` or
+  // `(ctx, …) => {…}`, and requires go through `ctx.i(id)` / `ctx.r(id)`.
+  // ⚠ A map can point past the end of the file (stale map, wrong source). Fail
+  // that loudly rather than throwing on `undefined.match`.
+  const head = SRC[m.startLine - 1];
+  if (head === undefined) {
+    console.error(`FATAL — module ${m.id} starts at line ${m.startLine} but ${MAP.source} has ${SRC.length}.`);
+    console.error(`        The map and the source disagree; regenerate the map.`);
+    process.exit(5);
+  }
+  let R = null, viaCtx = false;
+  const wsig = head.match(/function\s*\(\s*(\w+)\s*,\s*(\w+)\s*,\s*(\w+)\s*\)/);
+  if (wsig) R = wsig[3];
+  else {
+    const tsig = head.match(/(?:^|[,[]\s*)(?:\(\s*(\w+)[^)]*\)|(\w+))\s*=>/);
+    if (tsig) { R = tsig[1] || tsig[2]; viaCtx = true; }
+  }
+  if (!R) continue;
+  examined++;
+  // For Turbopack the call shape is `ctx.i(` / `ctx.r(`, not `ctx(`.
+  const re = viaCtx ? new RegExp(`\\b${R}\\.[ir]\\s*\\(`, "g") : new RegExp(`\\b${R}\\s*\\(`, "g");
   for (const hit of body.matchAll(re)) {
     const after = body.slice(hit.index + hit[0].length, hit.index + hit[0].length + 60);
     // Literal string or number -> static. `R.d(`, `R.n(` etc are runtime helpers
@@ -119,14 +145,23 @@ if (resolved.length) {
 const review = [...dynamic];
 dynamic = [];   // question 2 does not decide the exit code; see the header
 if (review.length) {
-  console.log(`  ⚠    ${review.length} call site(s) LOOK like a require with a computed id. Read each one:`);
+  console.log(`  ⚠    ${review.length} call site(s) LOOK like a require with a computed id (${examined}/${all.length} module(s) examined). Read each one:`);
   for (const d of review.slice(0, 12)) console.log(`         ${d.id}  L${d.line}  ${d.snippet}`);
   if (review.length > 12) console.log(`         … ${review.length - 12} more`);
   console.log(`       Most are the require parameter SHADOWED by an inner function's parameter of`);
   console.log(`       the same name. A genuine one means the static closure under-approximates:`);
   console.log(`       resolve what it can reach and add those ids to the closure seeds.`);
+} else if (examined < all.length * 0.8) {
+  // ⛔ "Did it examine ANYTHING" is the wrong threshold. A version guarding only
+  // on zero reported `ok` after examining 1 of 20 modules — as blind as zero,
+  // and now wearing a green tick. What a check has to state is COVERAGE, and a
+  // check that reached under four fifths of its subjects has not looked.
+  console.log(`  FAIL the computed-require check examined only ${examined} of ${all.length} module(s) — it could`);
+  console.log(`       not recognise this packer's factory signature on the rest, so its silence`);
+  console.log(`       covers ${Math.round((examined / all.length) * 100)}% of the bundle and means nothing about the other ${all.length - examined}.`);
+  dynamic.push({ id: "-", line: 0, snippet: `check examined ${examined}/${all.length}` });
 } else {
-  console.log(`  ok   no call site resembles a require with a computed id`);
+  console.log(`  ok   no call site resembles a require with a computed id (${examined}/${all.length} module(s) examined)`);
 }
 
 // --- 2. account for the leftovers ------------------------------------------
