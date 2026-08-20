@@ -46,7 +46,7 @@ Step 0 依据"81 处 `requestAnimationFrame`、0 处 `gsap`"判为"自研命令�
 | 形态 | 识别 | 工具 | 单位 |
 |---|---|---|---|
 | **扁平拼接** | 几百个顶层 `class`/`const`/`function`，共享一个作用域 | `layer-map`（分层表） | 行号区间 |
-| **模块化打包**（webpack/rollup 运行时） | `!function(m){…}([…])` 或 `({…})`，**顶层声明数 = 0** | `scripts/webpack-map.mjs` | **模块** |
+| **模块化打包**（webpack/rollup 运行时） | `!function(m){…}([…])` 或 `({…})`，**顶层声明数 = 0** | `tools/webpack-map.mjs` | **模块** |
 | **多 chunk** | 跨文件 import/export 重命名 | 分层表 + 跨 chunk 重命名表（§2.1） | 行号区间 + 别名表 |
 
 ⭐ **模块化打包产物的模块边界与依赖边是给定的**——打包器已经写下了它们。实测一个 24,378 行的 bundle：**597 个模块**，181 个叶子、416 个有依赖，最大 1,544 行，`requires` 直接可读。
