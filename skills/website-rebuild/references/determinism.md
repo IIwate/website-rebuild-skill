@@ -4,6 +4,46 @@
 >
 > **⚠ 回答"距对拍验收还差什么"时别去数脚本**：`pixelcompare` / `side-by-side` / `probe-shim` 都在盘上 ≠ 协议就绪。objectandarchive 在行为侧 26/26 块全绿（两侧各 PASS 0、跨侧 0 差异）之后清点这一问，缺口正是本文件这套东西——九条熵源里**三条本轮之前不存在或没登记**（`Math.random()` 选首屏底色、两条 `localStorage` 跨会话持久状态），而那三个脚本一次都没跑过。**脚本齐备 ≠ 协议就绪；开工前先按 §1 冻结熵源清单，再谈跑哪个脚本。**【objectarchive】
 
+## 0.1 ⛔⛔ 冻结 JS 时钟冻不住 CSS 动画【v0-optimus】
+
+`probe-shim.js` 接管的是**每一个经过 JavaScript 的时钟**：rAF、`setTimeout`/`setInterval`、
+`performance.now`、`Date.now`、`new Date`、定种 `Math.random`。在前几个目标上这就是全部——
+它们的动画由 GSAP / 自研引擎 / 裸 rAF 驱动，冻住 JS 就冻住了画面。
+
+⛔ **CSS 动画不经过 JS。** `animation: marquee 30s infinite` 跑在浏览器自己的动画时间线上，
+一个"完全冻结"的页面里它照样在走。实测一个 v0 生成的站：7 个无限 CSS 动画 + 191 个带动画/
+过渡的元素，于是——
+
+⭐ **症状是"同侧对照比跨侧还大"**：源站与它自己比 `meanAbsDiff 0.31`，跨侧只有 0.22，
+**且最差格完全相同**。再加上残差**在两次运行之间换位置**（第一次最差在 25% 处，第二次那里
+归零、最差跑到 0% 处），两条独立证据都指向同一结论：**不可归因于移植**（§6.1 (D)）。
+
+⚠ 别把它误读成"移植很好"。正确的读法是**这道门在这个目标上带宽受限**——它此刻分辨不出
+比 0.3 更小的差异，所以阈值必须写成"实测带宽"，且计划里要注明它是带宽不是精度。
+
+### 0.1.1 补法与它的边界
+
+`pixelcompare.mjs --freeze-css` 给所有元素（含 `::before`/`::after`）加：
+
+```css
+animation-play-state: paused !important;
+animation-delay: -1s !important;   /* 同一相位，两侧一致 */
+transition: none !important;
+```
+
+⚠ 它**改变被渲染的内容**（marquee 被定格在行程中间而不是各自漂到的位置），这正是目的：
+**两侧定格在同一位置**。实测带宽 0.31 → **0.20**。
+
+⛔ 但它仍然没归零，因为剩下的熵源是 **canvas**：3 个 rAF 驱动的画布，其**启动**受
+`IntersectionObserver` 门控，而 IO 的触发时机不在 shim 的接管面内。**要把这类站真正冻住，
+shim 还需要拦截 IntersectionObserver 并按泵的节奏投递回调**——尚未实现，记为已知缺口。
+
+### 0.1.2 ⚠ 冻结页上的探针不许用真实计时器
+
+shim 把 `setTimeout` 换成了受泵驱动的队列。所以在 `?__probe` 页上写
+`await new Promise(r => setTimeout(r, 3000))` **永远不会返回**——探针挂死，而看起来像页面卡住。
+在冻结页上等待，只能用 `window.__pump(dt, n)` 推进，或者干脆去掉 `?__probe` 再测。
+
 ## 0. byte-equal 的前提假设与失效条件
 
 - **前提假设**："同机同版本 Chrome 的 DOM 渲染是逐字节确定的"【kimi，M5.2 确立】——这个事实使"整页 byte-equal"成为可行的常规验收。但它只在**同一台机器、同一版本 Chrome、全部熵源被冻结**时成立。

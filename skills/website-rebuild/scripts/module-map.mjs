@@ -234,6 +234,11 @@ for (const { id, fi } of entries) {
     else if (l === "}") { bd--; if (bd === 0) { end = k; break; } }
   }
   const startLine = T[fi].loc.start.line, endLine = T[end].loc.end.line;
+  // ⛔ Character offsets, not just lines. A Turbopack factory begins MID-LINE —
+  // line 1 holds the container header and the first factory — so a line-range
+  // slice would carry the container prefix into the module. Recorded for every
+  // packer: harmless where lines already suffice, essential where they do not.
+  const startChar = T[fi].start, endChar = T[end].end;
 
   // webpack's module signature is (module, exports, __webpack_require__).
   // Turbopack's is (ctx) or (ctx, …), where ctx.i / ctx.r require by id and
@@ -299,7 +304,7 @@ for (const { id, fi } of entries) {
       else if (lab(k + 3) === "." && isProp(k + 4) && lab(k + 5) === "=") exportNames.add(propName(k + 4));
     }
   }
-  mods.push({ id, startLine, endLine, lines: endLine - startLine + 1, requires: [...requires], exportsAssigned, exportNames: [...exportNames].slice(0, 12) });
+  mods.push({ id, startLine, endLine, startChar, endChar, lines: endLine - startLine + 1, requires: [...requires], exportsAssigned, exportNames: [...exportNames].slice(0, 12) });
 }
 
 // ⛔ A container can define the same id more than once, and this one does: 597

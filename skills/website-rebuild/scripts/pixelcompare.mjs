@@ -116,6 +116,25 @@ const READY = flag('ready', null);
 // window.__pump(dt, frames)" and this script had no way to do it, so the frozen
 // comparison everyone reaches for was one expression-shaped workaround away.
 const PUMP = flag('pump', null);
+// ⛔⛔ THE SHIM CANNOT FREEZE CSS. probe-shim.js takes over rAF, timers,
+// performance.now, Date.now and Math.random — every clock that runs through
+// JavaScript. A CSS `animation` does not: it runs on the browser's own
+// animation timeline, and a marquee at `animation: marquee 30s infinite` keeps
+// moving through a fully "frozen" page.
+//
+// Measured on a CSS-animated target: the same side compared with ITSELF drifted
+// 0.31 meanAbsDiff with the same worst cell every run, while cross-side was
+// 0.22 — the residual was larger within one side than between the two, and no
+// amount of settling converged it, because the thing moving was never going to
+// stop.
+//
+// --freeze-css pins every animation to the SAME PHASE on both sides: paused,
+// with a fixed negative delay so each one is evaluated at the same offset into
+// its own timeline. ⚠ It changes what is rendered (a marquee is captured
+// mid-travel rather than wherever it drifted to), which is exactly the point —
+// both sides are captured at the same mid-travel position.
+const FREEZE_CSS = args.includes('--freeze-css');
+const FREEZE_AT = flag('freeze-at', '-1s');
 const SEED = flag('seed', null);
 const LABEL_A = flag('label-a', 'REBUILD');
 const LABEL_B = flag('label-b', 'MIRROR');
@@ -264,6 +283,29 @@ await cdp('Runtime.enable');
 await cdp('Page.enable');
 await cdp('Emulation.setDeviceMetricsOverride', { width: W, height: H, deviceScaleFactor: 1, mobile: false });
 if (SEED) await cdp('Page.addScriptToEvaluateOnNewDocument', { source: SEED });
+if (FREEZE_CSS) {
+  // Injected on new document so it applies before first paint, and re-applied
+  // after settle (below) for anything mounted later.
+  await cdp('Page.addScriptToEvaluateOnNewDocument', {
+    source: `(() => {
+      const css = \`*, *::before, *::after {
+        animation-play-state: paused !important;
+        animation-delay: ${FREEZE_AT} !important;
+        transition: none !important;
+      }\`;
+      const put = () => {
+        if (document.getElementById('__freeze_css')) return;
+        const s = document.createElement('style');
+        s.id = '__freeze_css';
+        s.textContent = css;
+        (document.head || document.documentElement).appendChild(s);
+      };
+      put();
+      document.addEventListener('DOMContentLoaded', put);
+      new MutationObserver(put).observe(document.documentElement, { childList: true, subtree: true });
+    })()`,
+  });
+}
 
 /** Die with an actionable message instead of hanging or dumping a stack. */
 function shotFatal(label, err) {
