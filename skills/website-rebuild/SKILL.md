@@ -3,7 +3,7 @@ name: website-rebuild
 description: 1:1 rebuild of award-winning creative websites (WebGL / scroll-animation / portfolio sites). Evidence-driven pipeline - mirror-first forensics, line-number-traceable reverse engineering of minified bundles, verbatim porting, quantitative verification gates. Use when user asks to "复刻网站", "重建网站", "1:1 rebuild", "clone this site", or provides a URL of a creative/award site to reproduce.
 compatibility: Requires Node 22+ (bundled scripts use built-in WebSocket to talk to CDP), npx, and a local Chrome/Chromium for headless comparison. POSIX shell optional - the Step 0 probe protocol has a zero-dependency Node equivalent (scripts/fingerprint.mjs) for shells without curl/cmp/tr/perl (e.g. Windows PowerShell). Agent-agnostic - works in any Agent Skills-compatible runtime.
 metadata:
-  version: "0.1.41"
+  version: "0.1.42"
 ---
 
 # Website Rebuild（获奖创意站 1:1 复刻）
@@ -125,14 +125,15 @@ Step 1 侦察结果决定加载哪些场景指南（按需，不要全量加载�
 
 Node 22+，路径相对本 skill 目录。用法与成熟度详见 [scripts/README.md](scripts/README.md)。
 
-⭐ **两个目录，两条依赖纪律，边界是"它出判据还是出产物"：**
+⭐⭐ **依赖纪律是按阶段划的，不是按目录划的：源码化之前，整条流水线零依赖。**
 
-- **`scripts/` —— 判据，永远零依赖。** 门必须能被独立审查、能在任何环境跑起来、**不因依赖升级而改变结论**。
-- **`tools/` —— 产物，允许 devDependencies。** 分层表、闭包、切片、提名都需要真正的 parser。
+Step 0 → M(n) 全程不装任何东西；**复刻项目要到 M(n+1) 才获得 devDependencies**（作用域安全的重命名需要真正的 parser）。`scripts/`（零依赖）与 `tools/`（允许 devDeps）只是这条阶段线在目录上的投影——**判据住 `scripts/`，源码化阶段的重构器住 `tools/`**。
 
 ⛔ **任何门不许 import 任何工具**（`verification-gates.md` §2.1.2）——检查者不能是生产者。
 
-⚠ 这条分界是**被违反之后才被发现的**：`webpack-map.mjs` 依赖 `@babel/*`，却在 `scripts/` 里住了整整八个版本，而同一份纪律的原话就写在它上面三行。**一条只写在文档里、没有任何东西去查的规矩，会安静地失效。** 判据很便宜：`scripts/` 下出现任何 node: 之外的 import 就是红灯。
+⭐ **前面的阶段需要真正的 parser 怎么办？外挂，不要 import。** `beautify-bundle.mjs`（js-beautify）与 `webpack-map.mjs`（acorn）都是 `spawn` 一个**钉死版本的 npx**，脚本自身仍然零依赖、仍然可独立审查。⛔ **不要改成手写词法器**——本 skill 里试过，一个含引号的正则字面量把它带偏了 16,177 行（F27）。**token 流上的括号匹配是精确的，文本上的括号匹配是对字符串/正则/注释的猜测。**
+
+⚠ 这条线是**被违反之后才被发现的**：`webpack-map.mjs` 依赖 `@babel/*`，却在 `scripts/` 里住了整整八个版本，而同一份纪律的原话就写在它上面三行。**一条只写在文档里、没有任何东西去查的规矩，会安静地失效。**
 
 | 脚本 | 用途 | 使用阶段 |
 |---|---|---|
@@ -147,11 +148,11 @@ Node 22+，路径相对本 skill 目录。用法与成熟度详见 [scripts/READ
 | `scripts/verify-payload.mjs` | **SSG payload 门**：把内联序列化数据块（Nuxt2 `window.__NUXT__` / Nuxt3 `__NUXT_DATA__`）**求值展开**再按结构对拍。字节门在这里不够用——payload 是一段"输出数据的程序"（参数去重、`\u002F` 转义），两份可以字节不同而语义相同，也可以字节相近而语义不同；且服务层要**改写它内部**的 URL。实测：它抓到两侧本地化实现不一致（一侧留 `href="http://host"`、另一侧写出 `href=""`），而外壳字节门全绿 | M0.5 起（有 SSG payload 时） |
 | `scripts/verify-offline.mjs` | **零外联门的静态一半**：枚举产出字节里每个外部绝对 URL 并逐条裁决（§1.6 的四类断言面里，资源级探针看不见的那三类） | M0.5 起每 commit |
 | `scripts/beautify-bundle.mjs` | js-beautify@1.15.1 钉死展开 bundle 到 `_pretty/` 并生成再生成说明。⛔ **撞名响亮告警 + 单射断言**——两个不同目录下的 `main.built.js` 曾静默互相覆盖，而 `_pretty/` 是全项目唯一溯源坐标系，覆盖之后每个行号都指向错误的文件 | M1 |
-| `tools/webpack-map.mjs` | **模块化 bundle 的分层表**：从 AST 读 webpack 模块容器，逐模块给出行区间、`requires`、导出名。⛔ 认不出容器即 FATAL，不许回退到扁平分层表 | M1（模块化打包产物） |
-| `tools/closure.mjs` | 从种子模块算**传递依赖闭包**，是竖切边界的唯一依据。⛔ **未知种子 ID 一律 FATAL** 并给出 did-you-mean——静默丢弃会产出一个“小一号但看似合理”的切片，失败推迟到运行时 | M2+（模块化打包产物） |
+| `scripts/webpack-map.mjs` | **模块化 bundle 的分层表**：spawn 钉死的 `acorn --tokenize`（零依赖），逐模块给出行区间、`requires`、导出名。⛔ 认不出容器即 FATAL，不许回退到扁平分层表。⛔ **容器可以重复定义同一个 id**——实测 597 条属性只有 569 个不同模块，且其中 4 条被遮蔽的定义**实现不同**；语义是**对象字面量后者胜出**，工具必须去重并报告，否则每份文档记的模块数都是错的，而下游拿到哪一份取决于迭代顺序 | M1（模块化打包产物） |
+| `scripts/closure.mjs` | 从种子模块算**传递依赖闭包**，是竖切边界的唯一依据。⛔ **未知种子 ID 一律 FATAL** 并给出 did-you-mean——静默丢弃会产出一个“小一号但看似合理”的切片，失败推迟到运行时 | M2+（模块化打包产物） |
 | `scripts/verify-tween.mjs` | **竖切的数值门**：同一关键帧规格喂两侧、逐点比补间值与缓动曲线。比像素门**早得多**判红，且失败会带上产生它的输入。⛔ 用例的字段名与值域必须从源码抄——第一版凭直觉写，六个用例全落在同一条曲线上、全绿、零区分力 | M2+（有补间/时间轴引擎时） |
 | `scripts/verify-crossside.mjs` | **跨侧门**：同一份输入同时喂镜像与移植，逐条比结果（站点侧写在 `crossside.config.mjs`，样例见 `crossside.config.example.mjs`）。用在源站**公开了接缝**时——bundle 没有模块注册表也可能有 `window.<Name> =` 这类模块顶层副作用，抓住编排层的那一个接缝，覆盖面远大于它的体积。⛔ 两侧**串行**求值，且每次运行给两侧取指纹、**URL 相同直接 FATAL**——并发探针会让第二个接到第一个拉起的浏览器，把一侧量两遍并报告**完美一致**。⛔ 用例分 `judged`（条件无关，逐字必须相同）与 `info`（条件相关，只打印但两侧都得解析得出来） | M2+（源站有可直接调用的接缝时） |
-| `tools/slice-modules.mjs` | **按模块 id 逐字切片**：边界由打包器给定，所以切片表就是一串 id，且工具能自校（`--check` 重切须字节一致）。转写的 webpack 运行时在文件头登记为偏差 | M2+（模块化打包产物） |
+| `scripts/slice-modules.mjs` | **按模块 id 逐字切片**：边界由打包器给定，所以切片表就是一串 id，且工具能自校（`--check` 重切须字节一致）。转写的 webpack 运行时在文件头登记为偏差 | M2+（模块化打包产物） |
 | `scripts/extract-source.mjs` | 字节切片器：按钉死行号区间切 `_pretty/` 拼成生成文件（sha256 守卫 + 切片表 + 别名/桩表，`--check` 进门），逐字移植首选形式（§2.2；配置样例 `scripts/slices.config.example.mjs`） | M2+（逐字移植期） |
 | `scripts/probe.mjs` | CDP 无头探针（console/异常/网络 CLEAN 判定，退出码进 CI；`--no-external` 断言零外联、`--walk` 全滚动走查） | M0.5 起每 commit |
 | `scripts/verify-routes.mjs` | 路由/重定向/状态码契约门 | M2+ |
@@ -188,13 +189,13 @@ Node 22+，路径相对本 skill 目录。用法与成熟度详见 [scripts/READ
 │   └── compare/          # 对拍产物留证
 ├── REBUILD_PLAN.md       # §0 纪律 / 阶段计划 / §6 偏差表 / §Q 怪癖表 / §7 里程碑日志
 ├── mirror-manifest.json  # 镜像账本（sha256 逐文件）
-├── scripts/              # 验收门：零依赖，从本 skill 拷入
+├── scripts/              # 判据与前置工序：零依赖，从本 skill 拷入
 └── tools/                # 重构器：③ 阶段专用，允许 devDependencies（见下）
 ```
 
 ⛔ **`src/` 里发现行为不对，答案在 `port/` 或 `mirror/`，不在 `src/`。** 就地"改到对"会把移植 bug 变成无法追溯的本地补丁，**而且门会变绿**——这是纪律 2 在三段坐标系下的形式。`port/` 在 `src/` 建成后不删除，它是等价性的另一端。
 
-⭐ **依赖分界**：`scripts/`（门）**零依赖，永远**——门是用来证明的，必须能被独立审查；`tools/`（重构器）允许 devDependencies（作用域安全的重命名需要真正的 parser）。任何门不许 import 任何重构器。
+⭐ **依赖分界按阶段**：**源码化之前零依赖**——项目到 M(n+1) 才有 devDependencies。`scripts/`（判据与前置工序）零依赖，必要时 spawn 钉死版本的 npx；`tools/`（源码化重构器）允许 devDependencies。任何门不许 import 任何重构器。由 `scripts/verify-zerodep.mjs` 守。
 
 ## References
 
