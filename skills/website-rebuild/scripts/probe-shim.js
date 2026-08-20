@@ -175,6 +175,81 @@
         return;
       }
   };
+  // --- IntersectionObserver -------------------------------------------------
+  // ⛔ IO is a CLOCK THIS SHIM DOES NOT OWN, and on a scroll-reveal site it is
+  // the one that matters. The browser delivers intersection records on its own
+  // schedule, off the main thread's frame loop, so two captures of the same
+  // frozen page can start their entrance animations at different pump counts —
+  // and the residual that produces MOVES between runs, which is exactly what
+  // makes it unclassifiable.
+  //
+  // Measured on a CSS/IO-driven target: the same side compared with itself
+  // drifted 0.2–0.31 meanAbsDiff and no amount of settling converged it.
+  //
+  // ⭐ So take it over: record every observer, and deliver its records ON THE
+  // PUMP, synchronously, in registration order. Both sides then see the same
+  // callbacks at the same virtual frame.
+  //
+  // ⚠ This changes WHEN callbacks fire, not WHETHER they do — and it is
+  // verification instrumentation, active only under ?__probe. A page that never
+  // pumps still gets its records, because the first pump delivers the backlog.
+  var NativeIO = window.IntersectionObserver;
+  var observers = [];
+  if (NativeIO) {
+    window.IntersectionObserver = function (cb, opts) {
+      var targets = [];
+      var self = this;
+      var rec = { cb: cb, opts: opts || {}, targets: targets, seen: new Map() };
+      observers.push(rec);
+      this.observe = function (el) { if (targets.indexOf(el) < 0) targets.push(el); };
+      this.unobserve = function (el) { var i = targets.indexOf(el); if (i >= 0) targets.splice(i, 1); };
+      this.disconnect = function () { targets.length = 0; };
+      this.takeRecords = function () { return []; };
+      this.root = (opts && opts.root) || null;
+      this.rootMargin = (opts && opts.rootMargin) || "0px 0px 0px 0px";
+      this.thresholds = [].concat((opts && opts.threshold) || 0);
+      void self;
+    };
+    window.IntersectionObserver.prototype = {};
+  }
+
+  // Compute intersection against the viewport the way the real IO would, and
+  // deliver only on CHANGE — an observer that fires every frame is a different
+  // observer, and would keep re-triggering one-shot reveals.
+  function deliverIntersections() {
+    for (var o = 0; o < observers.length; o++) {
+      var rec = observers[o];
+      var entries = [];
+      for (var t = 0; t < rec.targets.length; t++) {
+        var el = rec.targets[t];
+        var r;
+        try { r = el.getBoundingClientRect(); } catch (e) { continue; }
+        var vh = window.innerHeight, vw = window.innerWidth;
+        var iw = Math.max(0, Math.min(r.right, vw) - Math.max(r.left, 0));
+        var ih = Math.max(0, Math.min(r.bottom, vh) - Math.max(r.top, 0));
+        var area = r.width * r.height;
+        var ratio = area > 0 ? (iw * ih) / area : 0;
+        var isIn = ratio > 0;
+        var prev = rec.seen.get(el);
+        if (prev !== undefined && prev === isIn) continue;
+        rec.seen.set(el, isIn);
+        entries.push({
+          target: el,
+          isIntersecting: isIn,
+          intersectionRatio: ratio,
+          boundingClientRect: r,
+          intersectionRect: r,
+          rootBounds: { top: 0, left: 0, right: vw, bottom: vh, width: vw, height: vh },
+          time: now,
+        });
+      }
+      if (entries.length) {
+        try { rec.cb(entries, { takeRecords: function () { return []; } }); }
+        catch (e) { console.error("[__pump/io]", e); }
+      }
+    }
+  }
+
   window.__pump = function (dt, frames) {
     dt = dt || 16.7;
     frames = frames || 1;
@@ -182,6 +257,9 @@
       now += dt;
       __t = now; // keep the frozen clocks in lockstep with the rAF timestamp
       runDueTimers();
+      // ⚠ Before the frame's callbacks, so a reveal triggered this frame is
+      // animating within it — the order the browser would produce.
+      deliverIntersections();
       var batch = queue.splice(0, queue.length);
       for (var i = 0; i < batch.length; i++) {
         try {
