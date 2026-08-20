@@ -387,9 +387,16 @@ export function spawnReaped({ bin, args = [], options = {}, cleanupDir = null, r
  */
 export function launchChrome({ bin, role, port, tool = "(script)", args = [], stdio = "ignore" }) {
   const profile = mkdtempSync(path.join(tmpdir(), `${profilePrefix(role)}p${port}-`));
+  const extraArgs = [];
+  if (typeof process.getuid === "function" && process.getuid() === 0 && !args.includes("--no-sandbox")) {
+    extraArgs.push("--no-sandbox");
+  }
+  if (process.env.CHROME_FLAGS) {
+    extraArgs.push(...process.env.CHROME_FLAGS.split(/\s+/).filter(Boolean));
+  }
   const h = spawnReaped({
     bin,
-    args: [`--user-data-dir=${profile}`, ...args],
+    args: [`--user-data-dir=${profile}`, ...extraArgs, ...args],
     options: { stdio },
     cleanupDir: profile,
     role,
