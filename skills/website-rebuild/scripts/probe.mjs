@@ -190,9 +190,21 @@ const chrome = launchChrome({
     sentinel.url,
   ],
 });
+// ⛔ process.exit() truncates whatever stdout has not drained. Piped to another
+// process, stdout is async, so a single console.log larger than the 64 KiB pipe
+// buffer is CUT AT EXACTLY 65,536 BYTES — and what the caller receives is a
+// well-formed prefix, not an error. Measured: a 70,000-character --eval result
+// arrived as 65,536, and the JSON parse failure was the only symptom.
+//
+// Wait for the write to drain, then exit. ⚠ Do not "fix" this by setting only
+// process.exitCode: the browser's socket keeps the loop alive, so the process
+// would hang instead.
 const cleanup = (code) => {
   chrome.reap();
-  process.exit(code);
+  const done = () => process.exit(code);
+  // write("") resolves once everything queued before it has flushed.
+  if (process.stdout.write("")) done();
+  else process.stdout.once("drain", done);
 };
 
 // Attach ONLY to our own sentinel page. The old code took the first target of
@@ -350,7 +362,14 @@ if (walk > 0) {
 
 const evalExpr = flag('eval', null);
 if (evalExpr) {
-  const r = await send('Runtime.evaluate', { expression: evalExpr, returnByValue: true });
+  // ⛔ awaitPromise, or an async expression silently returns `{}`. JSON.stringify
+  // of a pending Promise is an empty object, so the caller gets a well-formed
+  // answer that contains nothing — and anything driving the page has to await a
+  // frame, which means anything interesting here is async.
+  const r = await send('Runtime.evaluate', { expression: evalExpr, returnByValue: true, awaitPromise: true });
+  if (r.exceptionDetails) {
+    console.log('EVAL-THREW:', JSON.stringify(r.exceptionDetails.exception?.description || r.exceptionDetails.text));
+  }
   console.log('EVAL:', JSON.stringify(r.result?.value ?? r.result?.description, null, 1));
 }
 
@@ -358,7 +377,7 @@ if (evalExpr) {
 const evalAfter = flag('evalAfter', null);
 if (evalAfter) {
   await new Promise((r) => setTimeout(r, Number(flag('evalAfterDelay', 2000))));
-  const r = await send('Runtime.evaluate', { expression: evalAfter, returnByValue: true });
+  const r = await send('Runtime.evaluate', { expression: evalAfter, returnByValue: true, awaitPromise: true });
   console.log('EVAL-AFTER:', JSON.stringify(r.result?.value ?? r.result?.description, null, 1));
 }
 
