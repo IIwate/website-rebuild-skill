@@ -6,7 +6,7 @@
  * must run anywhere with no install, and no gate may import a producer
  * (verification-gates.md §2.1.2 — the checker cannot be the producer).
  *
- * Both were already broken when this was written. `webpack-map.mjs` imported
+ * Both were already broken when this was written. `module-map.mjs` imported
  * @babel/* and sat in scripts/ for eight releases, three lines below the
  * paragraph forbidding it. ⛔ A rule that lives only in prose, with nothing
  * checking it, fails silently — and the check costs almost nothing.

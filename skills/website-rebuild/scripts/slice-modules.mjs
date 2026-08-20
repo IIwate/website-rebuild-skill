@@ -15,7 +15,7 @@
  * than sliced — it is registered as such in the header.
  *
  *   node scripts/slice-modules.mjs --closure docs/slice-closure.json
- *                                [--map docs/webpack-map.json]
+ *                                [--map docs/module-map.json]
  *                                [--in mirror/_pretty/main.built.js]
  *                                [--out port/_gen/tween.gen.js] [--check]
  */
@@ -45,7 +45,7 @@ if (FORMAT === "classic" && !ENTRY) {
   process.exit(2);
 }
 const IN = path.resolve(flag("in", "mirror/_pretty/main.built.js"));
-const MAP = path.resolve(flag("map", "docs/webpack-map.json"));
+const MAP = path.resolve(flag("map", "docs/module-map.json"));
 const CLOSURE = path.resolve(flag("closure", "docs/slice-closure.json"));
 const OUT = path.resolve(flag("out", "port/_gen/tween.gen.js"));
 
@@ -64,7 +64,7 @@ const wanted = closure.modules.filter((id) => byId.has(id));
 const missing = closure.modules.filter((id) => !byId.has(id));
 if (missing.length) {
   console.error(`FATAL: ${missing.length} module id(s) in the closure are not in the map: ${missing.slice(0, 5).join(", ")}`);
-  console.error(`       Re-run webpack-map.mjs, or the closure was computed against a different bundle.`);
+  console.error(`       Re-run module-map.mjs, or the closure was computed against a different bundle.`);
   process.exit(5);
 }
 

@@ -84,7 +84,7 @@ metadata:
 
 **M0 / M0.5 — 镜像取证**。加载 [references/mirroring.md](references/mirroring.md)。用 `scripts/mirror-site.mjs` BFS 爬取 + `scripts/netcapture.mjs` 真实浏览器补录，manifest 逐文件登记 sha256，`redirect: manual` 纪律，外部依赖逐项决策。`scripts/verify-mirror.mjs` 是**镜像自己的门**（五项断言，跑在断网门之前——下游所有门问的都是"渲染得出来吗"，错的镜像能让它们全绿；**一个 HTTP 200 也不是"你拿到了那个资源"的证据**）。`scripts/serve.mjs` 伺服镜像，断网验收。**这一步永远最先做**——原站随时可能消失或改版，镜像是全项目唯一证据基准，也是后续一切对拍的参照服。
 
-**M1 — 逆向建坐标系**。加载 [references/reverse-engineering.md](references/reverse-engineering.md)。⛔ **第一个动作是判 bundle 形态**（扁平拼接 / 模块化打包 / 多 chunk），再选工具——分层表扫顶层声明，而 webpack 打包产物的顶层声明数是 **0**，边界与依赖边由打包器给定（实测 24,378 行 → 569 个现成模块，用 `scripts/webpack-map.mjs`）。认不出容器时 FATAL，**禁止回退到分层表**（§0.5）。`scripts/beautify-bundle.mjs`（js-beautify 钉 1.15.1）展开 bundle 到 `_pretty/`，此后行号是全项目唯一溯源坐标系。先写 `docs/engine-notes.md`（模板：[assets/templates/engine-notes.md](assets/templates/engine-notes.md)）再写任何代码。技术栈从 bundle 取证钉死精确版本。数据驱动动画先 dump 数值账本。建立 `REBUILD_PLAN.md`（模板：[assets/templates/rebuild-plan.md](assets/templates/rebuild-plan.md)）。
+**M1 — 逆向建坐标系**。加载 [references/reverse-engineering.md](references/reverse-engineering.md)。⛔ **第一个动作是判 bundle 形态**（扁平拼接 / 模块化打包 / 多 chunk），再选工具——分层表扫顶层声明，而 webpack 打包产物的顶层声明数是 **0**，边界与依赖边由打包器给定（实测 24,378 行 → 569 个现成模块，用 `scripts/module-map.mjs`）。认不出容器时 FATAL，**禁止回退到分层表**（§0.5）。`scripts/beautify-bundle.mjs`（js-beautify 钉 1.15.1）展开 bundle 到 `_pretty/`，此后行号是全项目唯一溯源坐标系。先写 `docs/engine-notes.md`（模板：[assets/templates/engine-notes.md](assets/templates/engine-notes.md)）再写任何代码。技术栈从 bundle 取证钉死精确版本。数据驱动动画先 dump 数值账本。建立 `REBUILD_PLAN.md`（模板：[assets/templates/rebuild-plan.md](assets/templates/rebuild-plan.md)）。
 
 **M2+ — 严格溯源移植**。加载 [references/porting-discipline.md](references/porting-discipline.md)，并按分支路由表加载对应场景指南。每个移植文件头部注明源行号区间；GLSL/魔数/数据逐字提取；数据资产脚本抽取入库不手抄。
 
@@ -131,9 +131,9 @@ Step 0 → M(n) 全程不装任何东西；**复刻项目要到 M(n+1) 才获得
 
 ⛔ **任何门不许 import 任何工具**（`verification-gates.md` §2.1.2）——检查者不能是生产者。
 
-⭐ **前面的阶段需要真正的 parser 怎么办？外挂，不要 import。** `beautify-bundle.mjs`（js-beautify）与 `webpack-map.mjs`（acorn）都是 `spawn` 一个**钉死版本的 npx**，脚本自身仍然零依赖、仍然可独立审查。⛔ **不要改成手写词法器**——本 skill 里试过，一个含引号的正则字面量把它带偏了 16,177 行（F27）。**token 流上的括号匹配是精确的，文本上的括号匹配是对字符串/正则/注释的猜测。**
+⭐ **前面的阶段需要真正的 parser 怎么办？外挂，不要 import。** `beautify-bundle.mjs`（js-beautify）与 `module-map.mjs`（acorn）都是 `spawn` 一个**钉死版本的 npx**，脚本自身仍然零依赖、仍然可独立审查。⛔ **不要改成手写词法器**——本 skill 里试过，一个含引号的正则字面量把它带偏了 16,177 行（F27）。**token 流上的括号匹配是精确的，文本上的括号匹配是对字符串/正则/注释的猜测。**
 
-⚠ 这条线是**被违反之后才被发现的**：`webpack-map.mjs` 依赖 `@babel/*`，却在 `scripts/` 里住了整整八个版本，而同一份纪律的原话就写在它上面三行。**一条只写在文档里、没有任何东西去查的规矩，会安静地失效。**
+⚠ 这条线是**被违反之后才被发现的**：`module-map.mjs` 依赖 `@babel/*`，却在 `scripts/` 里住了整整八个版本，而同一份纪律的原话就写在它上面三行。**一条只写在文档里、没有任何东西去查的规矩，会安静地失效。**
 
 | 脚本 | 用途 | 使用阶段 |
 |---|---|---|
@@ -148,7 +148,7 @@ Step 0 → M(n) 全程不装任何东西；**复刻项目要到 M(n+1) 才获得
 | `scripts/verify-payload.mjs` | **SSG payload 门**：把内联序列化数据块（Nuxt2 `window.__NUXT__` / Nuxt3 `__NUXT_DATA__`）**求值展开**再按结构对拍。字节门在这里不够用——payload 是一段"输出数据的程序"（参数去重、`\u002F` 转义），两份可以字节不同而语义相同，也可以字节相近而语义不同；且服务层要**改写它内部**的 URL。实测：它抓到两侧本地化实现不一致（一侧留 `href="http://host"`、另一侧写出 `href=""`），而外壳字节门全绿 | M0.5 起（有 SSG payload 时） |
 | `scripts/verify-offline.mjs` | **零外联门的静态一半**：枚举产出字节里每个外部绝对 URL 并逐条裁决（§1.6 的四类断言面里，资源级探针看不见的那三类） | M0.5 起每 commit |
 | `scripts/beautify-bundle.mjs` | js-beautify@1.15.1 钉死展开 bundle 到 `_pretty/` 并生成再生成说明。⛔ **撞名响亮告警 + 单射断言**——两个不同目录下的 `main.built.js` 曾静默互相覆盖，而 `_pretty/` 是全项目唯一溯源坐标系，覆盖之后每个行号都指向错误的文件 | M1 |
-| `scripts/webpack-map.mjs` | **模块化 bundle 的分层表**：spawn 钉死的 `acorn --tokenize`（零依赖），逐模块给出行区间、`requires`、导出名。⛔ 认不出容器即 FATAL，不许回退到扁平分层表。⛔ **容器可以重复定义同一个 id**——实测 597 条属性只有 569 个不同模块，且其中 4 条被遮蔽的定义**实现不同**；语义是**对象字面量后者胜出**，工具必须去重并报告，否则每份文档记的模块数都是错的，而下游拿到哪一份取决于迭代顺序 | M1（模块化打包产物） |
+| `scripts/module-map.mjs` | **模块化 bundle 的分层表**：spawn 钉死的 `acorn --tokenize`（零依赖），逐模块给出行区间、`requires`、导出名。⛔ 认不出容器即 FATAL，不许回退到扁平分层表。⛔ **容器可以重复定义同一个 id**——实测 597 条属性只有 569 个不同模块，且其中 4 条被遮蔽的定义**实现不同**；语义是**对象字面量后者胜出**，工具必须去重并报告，否则每份文档记的模块数都是错的，而下游拿到哪一份取决于迭代顺序 | M1（模块化打包产物） |
 | `scripts/closure.mjs` | 从种子模块算**传递依赖闭包**，是竖切边界的唯一依据。⛔ **未知种子 ID 一律 FATAL** 并给出 did-you-mean——静默丢弃会产出一个“小一号但看似合理”的切片，失败推迟到运行时 | M2+（模块化打包产物） |
 | `scripts/verify-tween.mjs` | **竖切的数值门**：同一关键帧规格喂两侧、逐点比补间值与缓动曲线。比像素门**早得多**判红，且失败会带上产生它的输入。⛔ 用例的字段名与值域必须从源码抄——第一版凭直觉写，六个用例全落在同一条曲线上、全绿、零区分力 | M2+（有补间/时间轴引擎时） |
 | `scripts/harvest-cases.mjs` | **从源站活引擎采用例**：驱动源站到 N 个状态，逐状态记录它自己对象里的数值（站点侧写在 `harvest.config.mjs`，样例见 `harvest.config.example.mjs`）。手写用例编码的是**你相信引擎的参数是什么**——六个手写用例曾全落在同一条曲线上、全绿。⛔ 只产出 A 侧，必须配 `verify-harvest.mjs`。⚠ 采**解析完的数值**而非源文本 | M2+（源站引擎可达时） |

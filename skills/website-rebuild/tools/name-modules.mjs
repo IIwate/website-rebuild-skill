@@ -36,7 +36,7 @@ const traverse = _traverse.default ?? _traverse;
 
 const argv = process.argv.slice(2);
 const flag = (n, d) => { const i = argv.indexOf("--" + n); return i >= 0 && argv[i + 1] !== undefined ? argv[i + 1] : d; };
-const MAP = JSON.parse(fs.readFileSync(flag("map", "docs/webpack-map.json"), "utf8"));
+const MAP = JSON.parse(fs.readFileSync(flag("map", "docs/module-map.json"), "utf8"));
 const CLO = JSON.parse(fs.readFileSync(flag("closure", "docs/slice-closure.json"), "utf8"));
 const OUT = flag("out", "docs/module-names.json");
 // ⭐ Tier 0: a name someone arrived at BY READING THE MODULE. The tool proposes;

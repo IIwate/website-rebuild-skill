@@ -39,7 +39,7 @@ const traverse = _traverse.default ?? _traverse;
 
 const args = process.argv.slice(2);
 const flag = (n, d) => { const i = args.indexOf("--" + n); return i >= 0 && args[i + 1] !== undefined ? args[i + 1] : d; };
-const MAP = JSON.parse(await readFile(path.resolve(flag("map", "docs/webpack-map.json")), "utf8"));
+const MAP = JSON.parse(await readFile(path.resolve(flag("map", "docs/module-map.json")), "utf8"));
 const CLO = JSON.parse(await readFile(path.resolve(flag("closure", "docs/app-closure.json")), "utf8"));
 const NAMES = JSON.parse(await readFile(path.resolve(flag("names", "docs/app-names.json")), "utf8"));
 const ENTRY = String(flag("entry", ""));

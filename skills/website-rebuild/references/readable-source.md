@@ -432,7 +432,7 @@ M(n-1) 建立的全部门（CLEAN / 零外联 / DOM / 几何探针 / 像素）**
 ⭐ **这条线是按阶段划的：源码化之前，整条流水线零依赖。** 复刻项目从 Step 0 到 M(n) 不装任何东西，**到 M(n+1) 才获得 devDependencies**。目录只是这条阶段线的投影：
 
 ```
-scripts/   判据 + 源码化之前的全部工序   零依赖   verify-* / probe / pixelcompare / webpack-map / closure / slice-modules
+scripts/   判据 + 源码化之前的全部工序   零依赖   verify-* / probe / pixelcompare / module-map / closure / slice-modules
 tools/     源码化阶段的重构器            devDeps  demangle / split-modules / symbol-map / name-modules
 ```
 
@@ -440,7 +440,7 @@ tools/     源码化阶段的重构器            devDeps  demangle / split-modu
 
 ⭐ **前面的阶段确实需要真正的 parser 时，外挂而不是 import**：`spawn` 一个**钉死版本**的 npx（`js-beautify@1.15.1`、`acorn@8.14.0`），脚本自身零依赖、仍可独立审查，版本写死在文件里。⛔ **不要改成手写词法器**——本 skill 里试过一次，一个含引号的正则字面量把它带偏 16,177 行（F27）。
 
-⚠ 这条线**被违反了八个版本才被发现**：`webpack-map.mjs` import 了 `@babel/*` 住在 `scripts/` 里，而禁止它的原话就在同一份文档上方三行。**只写在文档里、没有东西去查的规矩会安静失效**——`scripts/verify-zerodep.mjs` 现在两个方向都查。
+⚠ 这条线**被违反了八个版本才被发现**：`module-map.mjs` import 了 `@babel/*` 住在 `scripts/` 里，而禁止它的原话就在同一份文档上方三行。**只写在文档里、没有东西去查的规矩会安静失效**——`scripts/verify-zerodep.mjs` 现在两个方向都查。
 
 所以作用域分析用 babel 是允许的，而任何门都不许 `import` 它。⛔ 推论：`verify-symbols.mjs` 不许 import `tools/demangle.mjs` 的解析器来"确认"重命名——那是门在生产它所审计之物（`verification-gates.md` §2.1.2）。符号门只读 `rename-map.json` 和两侧的文本。
 

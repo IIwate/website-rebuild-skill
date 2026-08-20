@@ -43,7 +43,7 @@ const ACORN_VERSION = "8.14.0"; // PINNED — token shapes are the contract here
 
 const args = process.argv.slice(2);
 const flag = (n, d) => { const i = args.indexOf("--" + n); return i >= 0 && args[i + 1] !== undefined ? args[i + 1] : d; };
-const MAP = JSON.parse(await readFile(path.resolve(flag("map", "docs/webpack-map.json")), "utf8"));
+const MAP = JSON.parse(await readFile(path.resolve(flag("map", "docs/module-map.json")), "utf8"));
 const CLO = JSON.parse(await readFile(path.resolve(flag("closure", "docs/app-closure.json")), "utf8"));
 const SRCDIR = path.resolve(flag("src", "src"));
 const MODDIR = path.join(SRCDIR, "modules");

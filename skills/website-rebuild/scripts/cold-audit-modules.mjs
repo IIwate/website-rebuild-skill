@@ -28,7 +28,7 @@
  * several (lazy chunks, a second page's entry); this reconciles against the
  * entries you name and says so.
  *
- *   node scripts/cold-audit-modules.mjs --map docs/webpack-map.json \
+ *   node scripts/cold-audit-modules.mjs --map docs/module-map.json \
  *        --closure docs/app-closure.json [--entry 14]
  */
 import { readFile } from "node:fs/promises";
@@ -36,7 +36,7 @@ import path from "node:path";
 
 const args = process.argv.slice(2);
 const flag = (n, d) => { const i = args.indexOf("--" + n); return i >= 0 && args[i + 1] !== undefined ? args[i + 1] : d; };
-const MAP = JSON.parse(await readFile(path.resolve(flag("map", "docs/webpack-map.json")), "utf8"));
+const MAP = JSON.parse(await readFile(path.resolve(flag("map", "docs/module-map.json")), "utf8"));
 const CLO = JSON.parse(await readFile(path.resolve(flag("closure", "docs/app-closure.json")), "utf8"));
 const SRC = (await readFile(path.resolve(MAP.source), "utf8")).split("\n");
 

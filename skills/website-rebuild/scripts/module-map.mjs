@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * webpack-map.mjs — enumerate a webpack bundle's modules as the porting units.
+ * module-map.mjs — enumerate a packed bundle's modules as the porting units.
  *
  * reverse-engineering.md's layer map scans TOP-LEVEL DECLARATIONS, because the
  * four projects before this one were flat concatenations: hundreds of
@@ -21,7 +21,7 @@
  * 16,177 lines (F27). Brace matching over a real token stream is exact; brace
  * matching over text is a guess about strings, regexes and comments.
  *
- *   node scripts/webpack-map.mjs [--in mirror/_pretty/main.built.js] [--out docs/webpack-map.json]
+ *   node scripts/module-map.mjs [--in mirror/_pretty/main.built.js] [--out docs/module-map.json]
  */
 import { writeFile, mkdir, readFile } from "node:fs/promises";
 import { spawnSync } from "node:child_process";
@@ -32,7 +32,7 @@ const ACORN_VERSION = "8.14.0"; // PINNED — a version bump can change token sh
 const args = process.argv.slice(2);
 const flag = (n, d) => { const i = args.indexOf("--" + n); return i >= 0 && args[i + 1] !== undefined ? args[i + 1] : d; };
 const IN = path.resolve(flag("in", "mirror/_pretty/main.built.js"));
-const OUT = path.resolve(flag("out", "docs/webpack-map.json"));
+const OUT = path.resolve(flag("out", "docs/module-map.json"));
 
 const code = await readFile(IN, "utf8");
 
@@ -134,6 +134,47 @@ if (!members || members.length < 2) {
   entries = members.map((i) => ({ id: String(val(i)), fi: i + 2 }));
 }
 
+// --- Turbopack container ----------------------------------------------------
+// ⭐ A second packer, a different container syntax, the same porting unit.
+// Next.js with Turbopack emits
+//   (globalThis.TURBOPACK ||= []).push([currentScript, <id>, <factory>, <id>, …])
+// i.e. a FLAT alternating list inside one push(), not an object of properties.
+// Its modules take a context object rather than (module, exports, require):
+//   ctx.i(<id>) / ctx.r(<id>)  require another module
+//   ctx.s([[name, () => binding], …], <ownId>)  DECLARES this module's exports
+//
+// ⛔ The webpack reader does not merely miss this — it finds a couple of
+// unrelated `key: function` properties elsewhere in the file and reports
+// success. See the plausibility check at the end: a container that explains
+// almost none of the require calls in the file is not the container.
+const turbo = [];
+for (let i = 0; i + 2 < T.length; i++) {
+  if (lab(i) !== "name" || val(i) !== "TURBOPACK") continue;
+  // Walk to the `push(` that follows and take its array literal.
+  let j = i;
+  while (j < T.length && !(lab(j) === "name" && val(j) === "push")) j++;
+  while (j < T.length && lab(j) !== "[") j++;
+  if (j >= T.length) continue;
+  let d = 0;
+  for (let k = j; k < T.length; k++) {
+    const l = lab(k);
+    if (OPEN.has(l)) d++;
+    else if (CLOSE.has(l)) { d--; if (d === 0) break; }
+    // At depth 1, a number immediately followed by a comma and an arrow
+    // function or `function` is `<id>, <factory>`.
+    if (d === 1 && lab(k) === "num" && lab(k + 1) === ",") {
+      const after = lab(k + 2);
+      if (after === "(" || after === "name" || after === "function") turbo.push({ id: String(val(k)), fi: k + 2 });
+    }
+  }
+  break;
+}
+
+if (turbo.length > entries.length) {
+  containerKind = "TurbopackChunk";
+  entries = turbo;
+}
+
 // --- walk each module -------------------------------------------------------
 // Every id the container defines. Needed before the walk, because a require
 // argument may be a conditional and the only sound way to read the literals
@@ -142,18 +183,29 @@ const KNOWN = new Set(entries.map((e) => String(e.id)));
 
 const mods = [];
 for (const { id, fi } of entries) {
-  // fi points at `function`. Params run from the next `(` to its match.
-  let p = fi + 1;
-  while (p < T.length && lab(p) !== "(") p++;
+  // ⛔ Three factory shapes, not one. webpack emits `function (m, e, r) {…}`;
+  // Turbopack emits `(e, t, r) => {…}` and, for a single parameter, the bare
+  // `e => {…}` with no parentheses at all. Assuming the parenthesised form
+  // walks past the arrow into the NEXT module's tokens and silently produces
+  // one enormous module.
   const params = [];
-  let depth = 0, q = p;
-  for (; q < T.length; q++) {
-    const l = lab(q);
-    if (l === "(") { depth++; continue; }
-    if (l === ")") { depth--; if (depth === 0) break; continue; }
-    if (depth === 1 && l === "name") params.push(val(q));
+  let q = fi;
+  if (lab(fi) === "name" && lab(fi + 1) === "=>") {
+    params.push(val(fi));            // bare single parameter
+    q = fi + 1;
+  } else {
+    let p = fi;
+    while (p < T.length && lab(p) !== "(") p++;
+    let depth = 0;
+    q = p;
+    for (; q < T.length; q++) {
+      const l = lab(q);
+      if (l === "(") { depth++; continue; }
+      if (l === ")") { depth--; if (depth === 0) break; continue; }
+      if (depth === 1 && l === "name") params.push(val(q));
+    }
   }
-  // Body: the `{` after the params, brace-matched.
+  // Body: the `{` after the params (skipping `=>` if present), brace-matched.
   let b = q + 1;
   while (b < T.length && lab(b) !== "{") b++;
   let bd = 0, end = b;
@@ -165,11 +217,38 @@ for (const { id, fi } of entries) {
   const startLine = T[fi].loc.start.line, endLine = T[end].loc.end.line;
 
   // webpack's module signature is (module, exports, __webpack_require__).
-  const modName = params[0] ?? null, reqName = params[2] ?? null;
+  // Turbopack's is (ctx) or (ctx, …), where ctx.i / ctx.r require by id and
+  // ctx.s declares this module's exports BY NAME — which webpack never does.
+  const isTurbo = containerKind === "TurbopackChunk";
+  const modName = isTurbo ? null : (params[0] ?? null);
+  const reqName = isTurbo ? null : (params[2] ?? null);
+  const ctxName = isTurbo ? (params[0] ?? null) : null;
   const requires = new Set();
   const exportNames = new Set();
   let exportsAssigned = 0;
   for (let k = b; k < end; k++) {
+    // --- Turbopack: ctx.i(id) / ctx.r(id) require; ctx.s([[name, …]], own) ---
+    if (ctxName && lab(k) === "name" && val(k) === ctxName && lab(k + 1) === "." && lab(k + 2) === "name") {
+      const method = val(k + 2);
+      if ((method === "i" || method === "r") && lab(k + 3) === "(" && lab(k + 4) === "num") {
+        requires.add(String(val(k + 4)));
+        continue;
+      }
+      if (method === "s" && lab(k + 3) === "(") {
+        // ⭐ Export names, given by the packer. Every string literal at any depth
+        // inside the call, up to its matching ")", is an exported name.
+        let d2 = 0;
+        for (let j = k + 3; j < end; j++) {
+          const l = lab(j);
+          if (OPEN.has(l)) d2++;
+          else if (CLOSE.has(l)) { d2--; if (d2 === 0) { k = j; break; } }
+          else if (d2 >= 1 && l === "string") exportNames.add(String(val(j)));
+        }
+        exportsAssigned++;
+        continue;
+      }
+    }
+
     // reqName(<anything>) — collect every literal inside the call that is a real
     // module id, at any depth.
     //
@@ -250,8 +329,14 @@ if (shadowed.length) {
 
 mods.sort((a, b) => b.lines - a.lines);
 const total = mods.reduce((t, m) => t + m.lines, 0);
-console.log(`=== webpack-map  ${path.relative(process.cwd(), IN)} ===`);
-console.log(`  container: ${containerKind === "ArrayExpression" ? "array" : "object"}   ${mods.length} module(s)   ${total} lines inside modules / ${code.split("\n").length} total`);
+console.log(`=== module-map  ${path.relative(process.cwd(), IN)} ===`);
+const fileLines = code.split("\n").length;
+console.log(`  container: ${containerKind === "TurbopackChunk" ? "turbopack chunk" : containerKind === "ArrayExpression" ? "webpack array" : "webpack object"}   ${mods.length} module(s)   ${total} lines inside modules / ${fileLines} total`);
+// ⚠ In a flat id/factory list the closing brace of one module and the opening
+// of the next share a line, so the per-module line counts overlap by one each.
+// Say so rather than letting "more lines inside modules than in the file" read
+// as a bug in the reader.
+if (total > fileLines) console.log(`  ⚠    module spans overlap by ${total - fileLines} line(s): in a flat list one line closes a module and opens the next`);
 console.log(`  tokenized by acorn@${ACORN_VERSION} (pinned, spawned — not imported)\n`);
 console.log(`  largest modules:`);
 for (const m of mods.slice(0, 12)) {
@@ -265,6 +350,40 @@ console.log(`\n  ${leaf} module(s) require nothing (leaves);  ${mods.length - le
 // slice-modules.mjs compare strings — it could never be selected, and nothing
 // would have said so. Same family as the truncated id that was silently
 // filtered out of a slice.
+// ⛔⛔ PLAUSIBILITY: does the container this reader found explain the file?
+//
+// The failure this exists for is not "found nothing" — that already FATALs. It
+// is "found a couple of unrelated `key: function` properties elsewhere in the
+// file and reported success". Measured: the webpack reader pointed at a
+// Turbopack chunk reported 2 modules for a file with 20 factories and 45
+// require calls, and printed a cheerful summary.
+//
+// Two cheap invariants, both about coverage of the file rather than the
+// container's internals:
+{
+  const reqCalls = (() => {
+    let n = 0;
+    for (let i = 0; i + 3 < T.length; i++) {
+      // <name>(<literal>) and <name>.<i|r>(<literal>) — the two require shapes
+      if (lab(i) === "name" && lab(i + 1) === "(" && (lab(i + 2) === "string" || lab(i + 2) === "num") && lab(i + 3) === ")") n++;
+      else if (lab(i) === "name" && lab(i + 1) === "." && lab(i + 2) === "name" && /^[ir]$/.test(String(val(i + 2))) && lab(i + 3) === "(" && lab(i + 4) === "num") n++;
+    }
+    return n;
+  })();
+  const edges = mods.reduce((t, m) => t + m.requires.length, 0);
+  const coverage = fileLines ? total / fileLines : 0;
+  const problems = [];
+  if (coverage < 0.5) problems.push(`the modules found cover only ${(coverage * 100).toFixed(0)}% of the file's lines`);
+  if (reqCalls > 8 && edges < reqCalls * 0.25) problems.push(`${reqCalls} require-shaped call(s) in the file but only ${edges} dependency edge(s) recorded`);
+  if (problems.length) {
+    console.error(`\nFATAL — the container this reader found does not explain the file:`);
+    for (const p of problems) console.error(`  • ${p}`);
+    console.error(`  This is what a WRONG container looks like: a few unrelated properties matched`);
+    console.error(`  and everything real was missed. Check the packer's shape before trusting a map.`);
+    process.exit(5);
+  }
+}
+
 const bad = mods.filter((m) => typeof m.id !== "string" || !m.id);
 if (bad.length) { console.error(`\nFATAL — ${bad.length} module(s) have a non-string id.`); process.exit(5); }
 console.log(`  ⭐ module boundaries are GIVEN here — no SCC/eval-order partition is needed,`);

@@ -12,14 +12,14 @@
  * ⚠ Which is also why the tools print full ids now. A diagnostic that truncates
  * an identifier invites it to be copied back in truncated.
  *
- *   node scripts/closure.mjs --seed <id>[,<id>...] [--map docs/webpack-map.json] [--out docs/slice-closure.json]
+ *   node scripts/closure.mjs --seed <id>[,<id>...] [--map docs/module-map.json] [--out docs/slice-closure.json]
  */
 import { readFile, writeFile, mkdir } from "node:fs/promises";
 import path from "node:path";
 
 const args = process.argv.slice(2);
 const flag = (n, d) => { const i = args.indexOf("--" + n); return i >= 0 && args[i + 1] !== undefined ? args[i + 1] : d; };
-const MAP = path.resolve(flag("map", "docs/webpack-map.json"));
+const MAP = path.resolve(flag("map", "docs/module-map.json"));
 const OUT = path.resolve(flag("out", "docs/slice-closure.json"));
 const seed = (flag("seed", "") || "").split(",").map((s) => s.trim()).filter(Boolean);
 if (!seed.length) { console.error("usage: closure.mjs --seed <id>[,<id>...]"); process.exit(2); }
@@ -62,7 +62,7 @@ console.log(`  ${mods.length} module(s) / ${lines} lines  (${(lines / total * 10
 if (missing.length) {
   console.log(`\n  FAIL ${missing.length} required id(s) are not in the map — the closure is NOT closed:`);
   for (const id of missing.slice(0, 10)) console.log(`         ${id}`);
-  console.log(`       Either webpack-map missed a require shape, or the map is stale.`);
+  console.log(`       Either module-map missed a require shape, or the map is stale.`);
   process.exit(1);
 }
 console.log(`  ok   closed — every require resolves inside the set`);

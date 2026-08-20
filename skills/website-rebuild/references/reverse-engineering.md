@@ -46,8 +46,30 @@ Step 0 依据"81 处 `requestAnimationFrame`、0 处 `gsap`"判为"自研命令�
 | 形态 | 识别 | 工具 | 单位 |
 |---|---|---|---|
 | **扁平拼接** | 几百个顶层 `class`/`const`/`function`，共享一个作用域 | `layer-map`（分层表） | 行号区间 |
-| **模块化打包**（webpack/rollup 运行时） | `!function(m){…}([…])` 或 `({…})`，**顶层声明数 = 0** | `scripts/webpack-map.mjs` | **模块** |
+| **模块化打包**（webpack/rollup/Turbopack 运行时） | `!function(m){…}([…])` 或 `({…})`，**顶层声明数 = 0** | `scripts/module-map.mjs` | **模块** |
 | **多 chunk** | 跨文件 import/export 重命名 | 分层表 + 跨 chunk 重命名表（§2.1） | 行号区间 + 别名表 |
+
+#### 0.5.1 ⛔ 两种模块容器语法，一个读错会**安静地**给你一张小得离谱的表【airpodspro】【v0-optimus】
+
+| 打包器 | 容器 | 模块签名 | 依赖 | 导出 |
+|---|---|---|---|---|
+| webpack 4 | `!function(m){…}({ "id": function(…) })` —— **对象属性** | `function(module, exports, require)` | `require("id")` | `module.exports = …` |
+| Turbopack | `(globalThis.TURBOPACK\|\|=[]).push([currentScript, id, factory, id, factory, …])` —— **扁平交替列表** | `ctx => {…}` 或 `(ctx, …) => {…}` | `ctx.i(id)` / `ctx.r(id)` | `ctx.s([[name, () => binding], …], ownId)` |
+
+⭐ **Turbopack 把导出名写在容器里**（`e.s(["HeroSection", …])`），所以在这种产物上，M(n+1) 的命名几乎每个模块都是 tier-1 证据——webpack 那边要从全局发布、自注册、消费方字段名里一点点推的东西，这里打包器直接给了。
+
+⛔ 三个必须处理的形状差异，漏掉任一条都产出错表：
+
+1. **工厂可能是箭头函数，且单参数时没有括号**（`e => {…}`）。按"找下一个 `(`"去取参数会一路走过箭头、跨进下一个模块，产出**一个巨大的假模块**。
+2. **相邻模块共用边界行**（`}, 12345, e => {` 一行既闭合上一个又开启下一个），所以逐模块行数之和会**超过文件总行数**。这不是 bug，但要说出来，否则读起来像读错了。
+3. ⛔⛔ **读错容器时工具会"成功"。** 实测：webpack 读取器指向一个 Turbopack chunk，找到两处不相干的 `key: function` 属性，报告 **2 个模块**并打印愉快的摘要——而该文件真实有 20 个工厂、45 处 require 调用。
+
+⭐ 因此**"认不出即 FATAL"不够，还要"认出来的东西必须解释得了这个文件"**。两条便宜的覆盖率判据（`module-map.mjs` 已内置，且**已被真实数据触发验证过**）：
+
+- 模块跨度覆盖的行数 **< 文件的 50%** → FATAL；
+- 文件里 require 形状的调用 > 8 处，而记录到的依赖边 **< 其 25%** → FATAL。
+
+实测在一个无容器的 vendor chunk 上：覆盖 7%、239 处 require 调用对 0 条边 → 正确 FATAL（exit 5）。
 
 ⭐ **模块化打包产物的模块边界与依赖边是给定的**——打包器已经写下了它们。实测一个 24,378 行的 bundle：**569 个不同模块**（容器里 597 条属性，28 条被同名键遮蔽），181 个叶子、416 个有依赖，最大 1,544 行，`requires` 直接可读。
 

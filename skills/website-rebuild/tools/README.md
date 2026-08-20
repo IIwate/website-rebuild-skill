@@ -5,7 +5,7 @@
 parser（`@babel/parser` / `@babel/traverse`）。这里放的就是那个阶段的工具。
 
 ⛔ 前面的阶段需要 parser 时，**外挂而不是 import**：spawn 一个钉死版本的 npx
-（见 `scripts/beautify-bundle.mjs`、`scripts/webpack-map.mjs`）。
+（见 `scripts/beautify-bundle.mjs`、`scripts/module-map.mjs`）。
 
 ⛔ **`scripts/` 里的任何门都不许 import 这里的任何文件**——检查者不能是生产者
 （`references/verification-gates.md` §2.1.2）。两条纪律都由 `scripts/verify-zerodep.mjs` 守。
