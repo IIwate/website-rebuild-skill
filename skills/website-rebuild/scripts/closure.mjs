@@ -12,7 +12,7 @@
  * ⚠ Which is also why the tools print full ids now. A diagnostic that truncates
  * an identifier invites it to be copied back in truncated.
  *
- *   node tools/closure.mjs --seed <id>[,<id>...] [--map docs/webpack-map.json] [--out docs/slice-closure.json]
+ *   node scripts/closure.mjs --seed <id>[,<id>...] [--map docs/webpack-map.json] [--out docs/slice-closure.json]
  */
 import { readFile, writeFile, mkdir } from "node:fs/promises";
 import path from "node:path";
