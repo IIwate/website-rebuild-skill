@@ -8,6 +8,7 @@
 //
 // ⛔ NO SIDE EFFECTS IN THIS FILE OR IN A PROJECT'S shell-config.mjs. The gate
 // imports both, and a gate must never import a module that produces what it
+import { rewriteFlight, hasFlight } from "./flight.mjs";
 // audits (§2.1.2).
 
 const esc = (s) => String(s).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
@@ -85,18 +86,29 @@ export function transformPage(html, cfg, { head = true } = {}) {
   // shape hurts most: nothing requests those URLs until the page happens to,
   // so a load-time probe reports zero outbound while ten latent ones sit in the
   // blob.
-  for (const host of cfg.originHosts || []) {
-    out = localizeShapes(out, host, "", (shape) => {
-      bump("T-LOCALIZE");
-      bumpSub(`origin.${shape}:${host}`);
-    });
-  }
-  for (const host of [...(cfg.stubExtHosts || []), ...(cfg.mirroredExtHosts || [])]) {
-    out = localizeShapes(out, host, `/ext/${host}`, (shape) => {
-      bump("T-LOCALIZE");
-      bumpSub(`ext.${shape}:${host}`);
-    });
-  }
+  const localizeAll = (text) => {
+    let o = text;
+    for (const host of cfg.originHosts || []) {
+      o = localizeShapes(o, host, "", (shape) => {
+        bump("T-LOCALIZE");
+        bumpSub(`origin.${shape}:${host}`);
+      });
+    }
+    for (const host of [...(cfg.stubExtHosts || []), ...(cfg.mirroredExtHosts || [])]) {
+      o = localizeShapes(o, host, `/ext/${host}`, (shape) => {
+        bump("T-LOCALIZE");
+        bumpSub(`ext.${shape}:${host}`);
+      });
+    }
+    return o;
+  };
+  // ⛔ Where the document carries a LENGTH-PREFIXED payload, the localisation
+  // must go through lib/flight.mjs — it rewrites each row's content on its own
+  // and re-declares the length. Applied blanket, the same six shapes shorten
+  // rows whose `T<hex>` still claims the old count, and the page dies inside
+  // React's parser with no 404 and no failed request to point at it. Measured
+  // here: 17 of 115 built pages, invisible to every other gate.
+  out = (hasFlight(out) ? rewriteFlight(out, localizeAll) : null) ?? localizeAll(out);
 
   // --- site-specific transforms ---------------------------------------------
   for (const t of cfg.transforms || []) {

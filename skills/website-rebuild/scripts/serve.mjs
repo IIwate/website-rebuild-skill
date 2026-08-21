@@ -57,6 +57,7 @@
 //      rewritten into /ext/ but deliberately not mirrored).
 
 import http from "node:http";
+import { rewriteFlight, hasFlight } from "./lib/flight.mjs";
 import fs from "node:fs";
 import fsp from "node:fs/promises";
 import path from "node:path";
@@ -391,6 +392,18 @@ const REWRITES = args
 function rewrite(text, ext) {
   // Rewritten bytes can no longer match SRI hashes; drop integrity attrs (HTML only).
   if (ext === ".html") text = text.replace(/ integrity="[^"]*"/g, "");
+  // ⛔ Length-prefixed payloads first, and out of band: rewriteFlight() hands
+  // each row's content to rewriteText() on its own and re-declares the length.
+  // If the blanket pass below reached those rows it would shorten them without
+  // touching the prefix, which is the corruption this exists to prevent.
+  if (ext === ".html" && hasFlight(text)) {
+    const done = rewriteFlight(text, (t) => rewriteText(t, ext));
+    if (done !== null) return done;
+  }
+  return rewriteText(text, ext);
+}
+
+function rewriteText(text, ext) {
   for (const h of ORIGIN_HOSTS) {
     text = text.replaceAll(`https://${h}/`, "/").replaceAll(`http://${h}/`, "/");
     // The NO-PATH form: `https://host` with nothing after it means the home
