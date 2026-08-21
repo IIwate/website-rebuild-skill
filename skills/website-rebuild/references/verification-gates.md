@@ -416,12 +416,31 @@ canvasStyleFromSource: (() => {
 
 **⚠ 别把本节的教训推广成"门出问题一定是断言面缺一格"**：本节全篇讲的是**覆盖**（该断的没断，失明时表现为绿）。同一个项目下一个里程碑的三次红灯**一条都不属于这一类**——断言面都对，错的是**期望值写法**（从源站源码手抄了引擎会重新序列化的字面量），失明时表现为**红**，且红在镜像侧。查门的时候三问要分开：**先问"这一条有没有被断言"（本节，失明时表现为绿），再问"这一条的期望值是怎么来的"（§0.1，单侧就会红），最后问"这个字段本身该不该进记录"（§4.10，单侧全绿、跨侧才红）**【objectarchive】。
 
+### 1.7 SPA 客户端交互导航与水合门（状态机与过渡断言）
+
+- **定义**：在真实无头浏览器中建立 CDP 独立会话，通过真实的 DOM 事件（点击导航菜单、交互抽屉、Preloader 按钮）驱动客户端 SPA 路由切换，并在持续的动画泵（`pumpRAF`）下断言过渡状态机、目标容器挂载、期望文案、过渡后 `opacity: 1` 稳定保持（>= 2s），同时全程拦截未捕获异常、console.error、HTTP 4xx/5xx 与非预期 `/error` 重定向。
+- **实例**：lights 项目 `verify-navigation.mjs` 覆盖多语言（`/en`, `/fr`）下从首页通过抽屉菜单进入 `/about`、`/work`，以及深链直开的 SSR 水合渲染；5 个用例全部通过并证明过渡无闪烁、无未捕获异常、无错误页重定向。
+- **适用条件**：Vue / React / Nuxt / Next 等前端框架驱动的客户端交互式 SPA。静态 HTML 路由门（§1.1）无法覆盖客户端路由拦截器、动态异步 Chunk 加载、过渡动画完成钩子与水合异常。
+- **通用模板**：`assets/templates/verify-spa-navigation.mjs` 与 `assets/templates/navigation.config.example.mjs`。
+- **核心断言机制**：
+  1. **独立 CDP Target 隔离**：每个导航用例独立 session，避免跨路由 WebGL 上下文、DOM 内存或全局定时器污染。
+  2. **持续 rAF 动画泵（`pumpRAF`）**：在无头或后台渲染时防止 requestAnimationFrame 节流停滞，保证 GSAP / CSS / 框架过渡状态机正常 tick。
+  3. **全流程异常拦截器**：持续监听 `Runtime.exceptionThrown`、`Runtime.consoleAPICalled (error)`、`Network.responseReceived (>=400)`，任何一处异常立刻判红。
+  4. **过渡完成与稳定性断言**：不仅轮询 `url` 包含目标路径、目标 DOM 挂载、归一化文案匹配，还要求 computed `opacity === '1'` 并持续稳定采样保持 >= 2s，彻底排除过渡中途闪退或延迟重定向至 `/error`。
+
 ## 2. 门型选择决策树
 
 ```
 站点有 SSR/静态 HTML 产物？
 ├─ 是 → 先建 SSR/DOM 字节门（§1.1），每 commit 回归、终身全绿
 └─ 否 → 至少建路由/契约门（重定向状态码、head 字段）
+
+站点含 SPA 客户端路由切换 / 交互式抽屉 / Preloader 过渡？
+├─ 是 → 建 SPA 交互导航门（§1.7）：CDP 真实点击 + 持续 rAF 动画泵
+│        + 全程未捕获异常/4xx/5xx/错误重定向拦截
+│        + 容器挂载、文案匹配与 opacity: 1 稳定保持断言（>=2s）
+│        （模板见 assets/templates/verify-spa-navigation.mjs）
+└─ 否 → 保持常规静态路由/探针门
 
 该画面/场景是否"静止且熵源可枚举"？（DOM 渲染为主，无不可冻随机源）
 ├─ 是 → 冻结协议 + 整页 byte-equal 门（§1.2）；冻不住的局部用

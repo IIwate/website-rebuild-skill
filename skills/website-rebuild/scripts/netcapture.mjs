@@ -193,7 +193,7 @@ const chrome = launchChrome({
   role: "netcapture",
   port: CDP_PORT,
   tool: "netcapture.mjs",
-  stdio: ["ignore", "ignore", "pipe"],
+  stdio: "ignore",
   args: [
     `--remote-debugging-port=${CDP_PORT}`,
     "--headless=new",
@@ -278,20 +278,20 @@ cdp.on((msg) => {
   }
 });
 
-const { targetId } = await cdp.send("Target.createTarget", { url: "about:blank" });
-const { sessionId } = await cdp.send("Target.attachToTarget", { targetId, flatten: true });
-const send = (m, p, timeoutMs) => cdp.send(m, p, sessionId, timeoutMs);
-
-await send("Network.enable");
-await send("Page.enable");
-await send("Runtime.enable");
-await send("Network.setCacheDisabled", { cacheDisabled: true });
-
 for (const [name, vp] of Object.entries(VIEWPORTS)) {
-  await send("Emulation.setDeviceMetricsOverride", { ...vp, screenWidth: vp.width, screenHeight: vp.height });
   for (const route of ROUTES) {
     process.stdout.write(`  ${name} ${route} ... `);
     const before = requests.size;
+    const { targetId } = await cdp.send("Target.createTarget", { url: "about:blank" });
+    const { sessionId } = await cdp.send("Target.attachToTarget", { targetId, flatten: true });
+    const send = (m, p, timeoutMs) => cdp.send(m, p, sessionId, timeoutMs);
+
+    await send("Network.enable");
+    await send("Page.enable");
+    await send("Runtime.enable");
+    await send("Network.setCacheDisabled", { cacheDisabled: true });
+    await send("Emulation.setDeviceMetricsOverride", { ...vp, screenWidth: vp.width, screenHeight: vp.height });
+
     await send("Page.navigate", { url: ORIGIN + route }).catch((e) => console.log(`[nav] ${e.message}`));
     await sleep(SETTLE);
     await send("Runtime.evaluate", {
@@ -305,13 +305,12 @@ for (const [name, vp] of Object.entries(VIEWPORTS)) {
         window.scrollTo(0, 0);
       })()`,
       awaitPromise: true,
-    }, STEPS * DWELL + 15000).catch((e) => console.log(`[scroll] ${e.message}`));
+    }, STEPS * DWELL + 45000).catch((e) => console.log(`[scroll] ${e.message}`));
     await sleep(4000);
+    await cdp.send("Target.closeTarget", { targetId }).catch(() => {});
     console.log(`+${requests.size - before} new`);
   }
 }
-
-await cdp.send("Target.closeTarget", { targetId });
 // Reap the whole process group (not just the browser process) and delete the
 // temp profile — the disk diff below can take a while and there is no reason to
 // hold 8 renderers open through it.

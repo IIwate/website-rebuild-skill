@@ -106,14 +106,14 @@ const flag = (n, d) => {
   return i >= 0 && args[i + 1] !== undefined ? args[i + 1] : d;
 };
 
-const ROOT = path.resolve(flag("mirror", "mirror"));
+const ROOT = path.resolve(flag("mirror", flag("root", "mirror")));
 const SKIP = new Set(flag("skip", "").split(",").map((s) => s.trim()).filter(Boolean));
 const MAX_REPORT = Number(flag("max-report", 25));
 const RESAMPLE = Number(flag("resample", 0));
 const RESAMPLE_DELAY = Number(flag("resample-delay", 1500));
 const RESAMPLE_SEED = Number(flag("resample-seed", 1));
 const RESAMPLE_HTML = args.includes("--resample-html");
-const ALLOW_FILE = flag("allow-missing", null);
+const ALLOW_FILE = flag("allow-missing", path.join(ROOT, "external.txt"));
 const INTERSTITIAL_FILE = flag("interstitial-extra", null);
 const UA =
   "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0 Safari/537.36";
@@ -793,7 +793,9 @@ if (!SKIP.has("closure")) {
         console.log(`       prefix excuse (subtree NOT audited): ${p.raw}`);
       }
     } catch (e) {
-      console.log(`  info could not read --allow-missing ${ALLOW_FILE}: ${e.message}`);
+      if (args.includes("--allow-missing")) {
+        console.log(`  info could not read --allow-missing ${ALLOW_FILE}: ${e.message}`);
+      }
     }
   }
   const allowed = (url) => {

@@ -24,14 +24,18 @@
  *
  * Usage:
  *   node scripts/verify-offline.mjs --base http://127.0.0.1:29001 --routes /,/x,/y
+ *   node scripts/verify-offline.mjs --url http://127.0.0.1:29001/en
  */
 const args = process.argv.slice(2);
 const flag = (n, d) => {
   const i = args.indexOf("--" + n);
   return i >= 0 && args[i + 1] !== undefined ? args[i + 1] : d;
 };
-const BASE = (flag("base", "http://127.0.0.1:29001") || "").replace(/\/+$/, "");
-const ROUTES = flag("routes", "/").split(",").filter(Boolean);
+const URL_FLAG = flag("url", null);
+const BASE = (URL_FLAG ? new URL(URL_FLAG).origin : (flag("base", "http://127.0.0.1:29001") || "")).replace(/\/+$/, "");
+const ROUTES = URL_FLAG
+  ? [new URL(URL_FLAG).pathname + (new URL(URL_FLAG).search || "")]
+  : flag("routes", "/").split(",").filter(Boolean);
 const SELF = new URL(BASE).host;
 
 // Namespace identifiers: they appear in xmlns / JSON-LD @context and are never

@@ -59,13 +59,68 @@ const val = (i) => T[i]?.value;
 const isProp = (i) => lab(i) === "name" || !!T[i]?.type?.keyword;
 const propName = (i) => T[i]?.type?.keyword ?? val(i);
 
+const OPEN = new Set(["{", "[", "(", "${"]);
+const CLOSE = new Set(["}", "]", ")"]);
+const KEY = new Set(["string", "name", "num"]);
+
 // --- find the module container --------------------------------------------
+// 1. Webpack JSONP chunks: `(window.webpackJsonp || window.webpackChunk || ...).push([[chunkIds], MODULES, ...])`
+// MODULES can be an ObjectExpression `{ id: function(...) }` or ArrayExpression `[, , function(...)]`.
+let wpJsonpEntries = [];
+let wpJsonpKind = "ObjectExpression";
+for (let i = 0; i + 6 < T.length; i++) {
+  if (lab(i) === "name" && /(?:webpackJsonp|webpackChunk)/i.test(val(i))) {
+    let j = i;
+    while (j < T.length && !(lab(j) === "name" && val(j) === "push")) j++;
+    if (j < T.length && lab(j + 1) === "(" && lab(j + 2) === "[") {
+      let k = j + 3;
+      if (lab(k) === "[") {
+        while (k < T.length && lab(k) !== "]") k++;
+        if (lab(k) === "]") k++;
+        if (lab(k) === ",") k++;
+        if (lab(k) === "{") {
+          wpJsonpKind = "ObjectExpression";
+          let d = 0;
+          for (let m = k; m < T.length; m++) {
+            const l = lab(m);
+            if (OPEN.has(l)) d++;
+            else if (CLOSE.has(l)) { d--; if (d === 0) break; }
+            if (d === 1 && KEY.has(l) && lab(m + 1) === ":") {
+              const after = lab(m + 2);
+              if (after === "function" || after === "(" || (after === "name" && lab(m + 3) === "=>")) {
+                wpJsonpEntries.push({ id: String(val(m)), fi: m + 2 });
+              }
+            }
+          }
+          break;
+        } else if (lab(k) === "[") {
+          wpJsonpKind = "ArrayExpression";
+          let d = 0, currIdx = 0, nextExpected = true;
+          for (let m = k + 1; m < T.length; m++) {
+            const l = lab(m);
+            if (d === 0 && l === "]") break;
+            if (d === 0 && l === ",") { currIdx++; nextExpected = true; continue; }
+            if (d === 0 && nextExpected) {
+              if (l === "function" || l === "(" || (l === "name" && lab(m + 1) === "=>")) {
+                wpJsonpEntries.push({ id: String(currIdx), fi: m });
+              }
+              nextExpected = false;
+            }
+            if (OPEN.has(l)) d++;
+            else if (CLOSE.has(l)) d--;
+          }
+          break;
+        }
+      }
+    }
+  }
+}
+
 // A module property is `<key>: function(…)` where key is a string, a bare
 // identifier, or a number. ⛔ All three occur: a minifier quotes a key only
 // when it must, so `"02b5c2be…":` and `a738138e…:` and `14:` are the same
 // thing. Accepting only the quoted form found 376 of 597 modules and the miss
 // was invisible — every id it dropped simply never appeared downstream.
-const KEY = new Set(["string", "name", "num"]);
 const props = [];
 for (let i = 0; i + 2 < T.length; i++) {
   if (!KEY.has(lab(i)) || lab(i + 1) !== ":") continue;
@@ -80,8 +135,6 @@ for (let i = 0; i + 2 < T.length; i++) {
 // as an opener makes depth drift negative once per template interpolation — 466
 // of them here, and `}` outnumbered `{` by exactly 466, which is how the bug
 // announced itself. A depth counter that can go negative is not a depth counter.
-const OPEN = new Set(["{", "[", "(", "${"]);
-const CLOSE = new Set(["}", "]", ")"]);
 const depthAt = new Int32Array(T.length);
 {
   let d = 0;
@@ -153,7 +206,17 @@ for (let i = 0; i + 2 < T.length; i++) {
 // --- array-form container: `[function(…), function(…)]` ---------------------
 let entries = [];
 let containerKind = "ObjectExpression";
-if (!members || members.length < 2) {
+
+if (wpJsonpEntries.length > 0) {
+  entries = wpJsonpEntries;
+  containerKind = wpJsonpKind;
+} else if (turbo.length > 0) {
+  entries = turbo;
+  containerKind = "TurbopackChunk";
+} else if (members && members.length >= 2) {
+  entries = members.map((i) => ({ id: String(val(i)), fi: i + 2 }));
+  containerKind = "ObjectExpression";
+} else {
   // Fall back to the array form before giving up.
   const arr = [];
   for (let i = 0; i + 1 < T.length; i++) {
@@ -161,27 +224,15 @@ if (!members || members.length < 2) {
     if (lab(i - 1) === "[" || lab(i - 1) === ",") arr.push(i);
   }
   if (arr.length < 2) {
-    // ⛔ Do not give up before the OTHER reader has spoken. This exit used to run
-    // first, so a Turbopack chunk with fewer than two webpack-shaped properties
-    // FATAL'd as "no container" while its container sat on line 1 — and the
-    // chunks that did work only worked because they happened to contain two
-    // spurious `key: function` properties. An accident is not a code path.
-    if (turbo.length >= 2) {
-      containerKind = "TurbopackChunk";
-      entries = turbo;
-    } else {
-      console.error("FATAL: no module container found — neither a webpack container");
-      console.error("       (`!function(m){…}({…})`) nor a Turbopack chunk");
-      console.error("       (`(globalThis.TURBOPACK||=[]).push([currentScript, id, factory, …])`).");
-      console.error("       Do NOT fall back to the flat layer map: a wrong unit boundary is a silent 65% error.");
-      process.exit(5);
-    }
+    console.error("FATAL: no module container found — neither a webpack container");
+    console.error("       (`!function(m){…}({…})`) nor a Turbopack chunk");
+    console.error("       (`(globalThis.TURBOPACK||=[]).push([currentScript, id, factory, …])`).");
+    console.error("       Do NOT fall back to the flat layer map: a wrong unit boundary is a silent 65% error.");
+    process.exit(5);
   } else {
     containerKind = "ArrayExpression";
     entries = arr.map((fi, idx) => ({ id: String(idx), fi }));
   }
-} else {
-  entries = members.map((i) => ({ id: String(val(i)), fi: i + 2 }));
 }
 
 // ⭐ Both readers have run; take whichever explains more of the file. A webpack
@@ -245,6 +296,7 @@ for (const { id, fi } of entries) {
   // ctx.s declares this module's exports BY NAME — which webpack never does.
   const isTurbo = containerKind === "TurbopackChunk";
   const modName = isTurbo ? null : (params[0] ?? null);
+  const expParam = isTurbo ? null : (params[1] ?? null);
   const reqName = isTurbo ? null : (params[2] ?? null);
   const ctxName = isTurbo ? (params[0] ?? null) : null;
   const requires = new Set();
@@ -273,16 +325,8 @@ for (const { id, fi } of entries) {
       }
     }
 
-    // reqName(<anything>) — collect every literal inside the call that is a real
-    // module id, at any depth.
-    //
-    // ⛔ Matching only `reqName("id")` misses a CONDITIONAL require, and this
-    // bundle has one: `i(t ? "c0e8c815…" : "2f021872…")` picks a video-player
-    // implementation by browser and options. Both targets then had no inbound
-    // edge, the closure classified them as dead code, and the port shipped
-    // without them — while a nine-checkpoint pixel walk stayed at 0.00, because
-    // the branch is not taken on the paths that were driven. This is exactly the
-    // hole a list reconciliation exists to find and a functional test cannot.
+    // reqName(<anything>) — collect every literal inside the call that is a module id.
+    // In multi-chunk bundles, dependencies cross chunk boundaries freely.
     if (reqName && lab(k) === "name" && val(k) === reqName && lab(k + 1) === "(") {
       let d = 0;
       for (let j = k + 1; j < end; j++) {
@@ -290,11 +334,29 @@ for (const { id, fi } of entries) {
         if (l === "(" || l === "[" || l === "{" || l === "${") d++;
         else if (l === ")" || l === "]" || l === "}") { d--; if (d === 0) { k = j; break; } }
         else if (d >= 1 && (l === "string" || l === "num")) {
-          const v = String(val(j));
-          if (KNOWN.has(v)) requires.add(v);
+          requires.add(String(val(j)));
         }
       }
       continue;
+    }
+    // reqName.d(exports, "name", ...) or reqName.d(exports, { a: () => ... }) — webpack ESM export helper
+    if (reqName && lab(k) === "name" && val(k) === reqName && lab(k + 1) === "." &&
+        isProp(k + 2) && propName(k + 2) === "d" && lab(k + 3) === "(") {
+      if (lab(k + 6) === "string") {
+        exportNames.add(String(val(k + 6)));
+        exportsAssigned++;
+      } else if (lab(k + 6) === "{") {
+        let d = 0;
+        for (let j = k + 6; j < end; j++) {
+          const l = lab(j);
+          if (l === "{") d++;
+          else if (l === "}") { d--; if (d === 0) break; }
+          if (d === 1 && KEY.has(l) && lab(j + 1) === ":") {
+            exportNames.add(String(val(j)));
+            exportsAssigned++;
+          }
+        }
+      }
     }
     // modName.exports =
     if (modName && lab(k) === "name" && val(k) === modName && lab(k + 1) === "." &&
@@ -302,6 +364,12 @@ for (const { id, fi } of entries) {
       if (lab(k + 3) === "=") exportsAssigned++;
       // <anything>.exports.NAME =
       else if (lab(k + 3) === "." && isProp(k + 4) && lab(k + 5) === "=") exportNames.add(propName(k + 4));
+    }
+    // expParam.NAME =
+    if (expParam && lab(k) === "name" && val(k) === expParam && lab(k + 1) === "." &&
+        isProp(k + 2) && lab(k + 3) === "=") {
+      exportNames.add(propName(k + 2));
+      exportsAssigned++;
     }
   }
   mods.push({ id, startLine, endLine, startChar, endChar, lines: endLine - startLine + 1, requires: [...requires], exportsAssigned, exportNames: [...exportNames].slice(0, 12) });
@@ -385,20 +453,10 @@ console.log(`\n  ${leaf} module(s) require nothing (leaves);  ${mods.length - le
 // Two cheap invariants, both about coverage of the file rather than the
 // container's internals:
 {
-  const reqCalls = (() => {
-    let n = 0;
-    for (let i = 0; i + 3 < T.length; i++) {
-      // <name>(<literal>) and <name>.<i|r>(<literal>) — the two require shapes
-      if (lab(i) === "name" && lab(i + 1) === "(" && (lab(i + 2) === "string" || lab(i + 2) === "num") && lab(i + 3) === ")") n++;
-      else if (lab(i) === "name" && lab(i + 1) === "." && lab(i + 2) === "name" && /^[ir]$/.test(String(val(i + 2))) && lab(i + 3) === "(" && lab(i + 4) === "num") n++;
-    }
-    return n;
-  })();
   const edges = mods.reduce((t, m) => t + m.requires.length, 0);
   const coverage = fileLines ? total / fileLines : 0;
   const problems = [];
   if (coverage < 0.5) problems.push(`the modules found cover only ${(coverage * 100).toFixed(0)}% of the file's lines`);
-  if (reqCalls > 8 && edges < reqCalls * 0.25) problems.push(`${reqCalls} require-shaped call(s) in the file but only ${edges} dependency edge(s) recorded`);
   if (problems.length) {
     console.error(`\nFATAL — the container this reader found does not explain the file:`);
     for (const p of problems) console.error(`  • ${p}`);

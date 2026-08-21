@@ -181,6 +181,19 @@ const STUB_EXT_HOSTS = [
 // File extensions whose responses are eligible for external-host rewriting.
 const TEXT_REWRITE = new Set([".html", ".css", ".js", ".mjs", ".json", ".svg"]);
 
+const isTextContentType = (ct) => {
+  if (!ct) return false;
+  const mime = ct.toLowerCase().split(";")[0].trim();
+  return (
+    mime.startsWith("text/") ||
+    mime === "application/json" ||
+    mime === "application/javascript" ||
+    mime === "application/xml" ||
+    mime.endsWith("+json") ||
+    mime.endsWith("+xml")
+  );
+};
+
 const MIME = {
   ".html": "text/html; charset=utf-8",
   ".js": "text/javascript; charset=utf-8",
@@ -566,7 +579,8 @@ const server = http.createServer(async (req, res) => {
 
     // 4. response-layer text transforms (ext-host rewrite + probe injection)
     const wantsProbe = ext === ".html" && url.searchParams.has("__probe") && PROBE_SHIM;
-    if ((TEXT_REWRITE.has(ext) && (EXT_HOSTS.length || ORIGIN_HOSTS.length)) || wantsProbe) {
+    const canRewrite = TEXT_REWRITE.has(ext) || (ext === "" && isTextContentType(headers["content-type"]));
+    if ((canRewrite && (EXT_HOSTS.length || ORIGIN_HOSTS.length)) || wantsProbe) {
       let text = await fsp.readFile(hit.file, "utf8");
       if (EXT_HOSTS.length || ORIGIN_HOSTS.length) text = rewrite(text, ext);
       if (wantsProbe) text = text.replace(/<head([^>]*)>/i, `<head$1><script>${PROBE_SHIM}</script>`);
