@@ -195,30 +195,75 @@
   // pumps still gets its records, because the first pump delivers the backlog.
   var NativeIO = window.IntersectionObserver;
   var observers = [];
-  if (NativeIO) {
+  // ⛔⛔ THIS TAKEOVER NORMALISES IO SEMANTICS, and the normalisation can itself
+  // manufacture a cross-side false green. deliverIntersections measures against
+  // the viewport with isIntersecting = (ratio > 0), discarding root, rootMargin
+  // and threshold entirely. Both sides run the same shim, so:
+  //   * a reveal configured at threshold 0.5 fires at 1% visible;
+  //   * an observer rooted on a scroll container (Lenis / Locomotive / an
+  //     overflow div) is measured against the wrong box completely;
+  //   * a rebuild and a mirror that genuinely DISAGREE on these options get
+  //     flattened onto the same frame and pass — a real porting difference
+  //     erased by the instrument, which is the failure this skill keeps warning
+  //     about.
+  // ⭐ The trade is still worth taking by default: on a CSS/IO-driven target the
+  // measured self-comparison bandwidth goes 0.31 -> 0.04. So keep it on, but
+  // leave ?__probe&__noio as the way out, and SAY which options were discarded
+  // whenever an observer actually used them. A normalised measurement that goes
+  // undisclosed is not a measurement.
+  // ⚠ Revisit once deliverIntersections honours root/rootMargin/threshold: the
+  // warning goes away then, though the opt-out is still worth keeping as a
+  // control run.
+  var IO_SHIM = String(location.search).indexOf("__noio") < 0;
+  if (NativeIO && IO_SHIM) {
     window.IntersectionObserver = function (cb, opts) {
+      if (opts && (opts.root || opts.rootMargin || opts.threshold)) {
+        console.warn("[__pump/io] normalised away:", JSON.stringify({
+          root: opts.root ? (opts.root.tagName || "node") : null,
+          rootMargin: opts.rootMargin || null,
+          threshold: opts.threshold === undefined ? null : opts.threshold,
+        }), "— this observer fires at ratio>0 against the viewport instead. Re-run with &__noio to compare.");
+      }
       var targets = [];
       var self = this;
       var rec = { cb: cb, opts: opts || {}, targets: targets, seen: new Map() };
       observers.push(rec);
       this.observe = function (el) { if (targets.indexOf(el) < 0) targets.push(el); };
       this.unobserve = function (el) { var i = targets.indexOf(el); if (i >= 0) targets.splice(i, 1); };
-      this.disconnect = function () { targets.length = 0; };
+      // ⛔ disconnect must REMOVE the record, not just empty its targets. Left in
+      // place it is still walked on every pump, costing a forced layout per frame,
+      // and still holds its element references — a real leak on an SPA that mounts
+      // and unmounts the same components repeatedly.
+      this.disconnect = function () {
+        targets.length = 0;
+        rec.seen.clear();
+        var i = observers.indexOf(rec);
+        if (i >= 0) observers.splice(i, 1);
+      };
       this.takeRecords = function () { return []; };
       this.root = (opts && opts.root) || null;
       this.rootMargin = (opts && opts.rootMargin) || "0px 0px 0px 0px";
       this.thresholds = [].concat((opts && opts.threshold) || 0);
       void self;
     };
-    window.IntersectionObserver.prototype = {};
+    // ⚠ The prototype is no longer flattened to {}. instanceof and class-extends
+    // both work either way, so flattening only cost the constructor - leave the
+    // default prototype so a library probing for one at least finds it.
   }
 
   // Compute intersection against the viewport the way the real IO would, and
   // deliver only on CHANGE — an observer that fires every frame is a different
   // observer, and would keep re-triggering one-shot reveals.
   function deliverIntersections() {
-    for (var o = 0; o < observers.length; o++) {
-      var rec = observers[o];
+    // ⛔ Walk a SNAPSHOT, not the live array. The standard one-shot reveal calls
+    // observer.disconnect() from inside its own callback, which now splices the
+    // record out; walking by index would let the next observer shift into the
+    // current slot and be skipped by o++, losing a delivery for that frame.
+    // An observer created during the walk is delivered next frame, as natively.
+    var snapshot = observers.slice();
+    for (var o = 0; o < snapshot.length; o++) {
+      var rec = snapshot[o];
+      if (observers.indexOf(rec) < 0) continue;   // disconnected earlier this frame
       var entries = [];
       for (var t = 0; t < rec.targets.length; t++) {
         var el = rec.targets[t];

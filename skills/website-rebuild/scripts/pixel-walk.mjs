@@ -39,8 +39,34 @@ const FMT = flag("format", "jpeg"), Q = flag("quality", "92");
 // replaces setTimeout with a pumped queue, so this lands after the page's own
 // init has run rather than at some wall-clock moment.
 const RESCROLL_MS = Number(flag("rescroll-ms", "1500"));
-if (!A || !B) { console.error("usage: pixel-walk.mjs --a <rebuild-url> --b <mirror-url> [--steps N] [--pump dt,frames] [--max-mean N] [--self]"); process.exit(2); }
+if (!A || !B) { console.error("usage: pixel-walk.mjs --a <rebuild-url> --b <mirror-url> [--steps N] [--pump dt,frames] [--max-mean N] [--rescroll-ms N] [--self]"); process.exit(2); }
 if (STEPS < 2) { console.error("FATAL — --steps must be >= 2. One checkpoint is the problem this tool exists to fix."); process.exit(2); }
+
+// ⛔ The re-issued scroll runs on VIRTUAL PUMP TIME, not the wall clock. Once
+// RESCROLL_MS reaches the pump budget dt x frames, its setTimeout is never
+// pumped: the re-issue disappears, the walk silently reverts to one scroll at
+// load — the very bug the block below exists to fix — and nothing in the output
+// says so. Raising --rescroll-ms for a long-hydrating SPA therefore REQUIRES
+// raising --pump frames too, so refuse the combination instead of degrading
+// quietly. An instrument that fails silently costs more than no instrument.
+// ⚠ Revisit if the re-issue is ever moved onto a real clock.
+const [PUMP_DT, PUMP_FRAMES] = PUMP.split(",").map((n) => Number(n.trim()));
+if (!(PUMP_DT > 0) || !(PUMP_FRAMES > 0)) {
+  console.error(`FATAL — --pump "${PUMP}" does not parse as dt,frames (both must be > 0).`);
+  process.exit(2);
+}
+const PUMP_BUDGET = PUMP_DT * PUMP_FRAMES;
+if (!(RESCROLL_MS >= 0)) {
+  console.error(`FATAL — --rescroll-ms "${flag("rescroll-ms", "1500")}" is not a number.`);
+  process.exit(2);
+}
+if (RESCROLL_MS >= PUMP_BUDGET) {
+  console.error(`FATAL — --rescroll-ms ${RESCROLL_MS} >= the pump budget ${PUMP_BUDGET}ms (${PUMP_DT} x ${PUMP_FRAMES} frames).`);
+  console.error(`        The re-issued scroll would never be pumped, so this walk would silently`);
+  console.error(`        run with ONE scroll at load — the exact defect the re-issue exists to fix.`);
+  console.error(`        Raise --pump frames above ${Math.ceil((RESCROLL_MS * 1.25) / PUMP_DT)}, or lower --rescroll-ms.`);
+  process.exit(2);
+}
 
 // ⛔ Scroll TWICE: at load, and again after the page's own init has run.
 //

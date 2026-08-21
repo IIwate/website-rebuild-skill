@@ -63,6 +63,9 @@ const KNOWN = new Set(all.map((m) => String(m.id)));
 // `continue` and the loop found nothing to look at. A check that examined
 // nothing must SAY SO — reporting ok is the most expensive thing it can do.
 let examined = 0;
+// Counted apart from `examined`: a factory with no require binding WAS looked at,
+// but it must not pad the number that claims require call sites were scanned.
+let noReqCount = 0;
 const TURBO = MAP.container === "TurbopackChunk";
 for (const m of all) {
   const body = SRC.slice(m.startLine - 1, m.endLine).join("\n");
@@ -82,15 +85,39 @@ for (const m of all) {
     console.error(`        The map and the source disagree; regenerate the map.`);
     process.exit(5);
   }
-  let R = null, viaCtx = false;
-  const wsig = head.match(/function\s*\(\s*(\w+)\s*,\s*(\w+)\s*,\s*(\w+)\s*\)/);
-  if (wsig) R = wsig[3];
-  else {
-    const tsig = head.match(/(?:^|[,[]\s*)(?:\(\s*(\w+)[^)]*\)|(\w+))\s*=>/);
+  // ⛔ THE CONTAINER DECIDES THE PACKER, not the shape of the factory. The
+  // version above computed TURBO and then never used it, so the rule degraded to
+  // "an arrow factory means Turbopack" — and webpack 5 emits
+  // `(module, exports, require) => {…}` on modern targets, which in Next.js
+  // output is literally `(e,t,r)=>{`. Guessing wrong fails two different ways:
+  //   1. the first parameter is taken for a ctx and searched for `e.i(`, which
+  //      matches nothing while STILL counting as examined — a silent miss under
+  //      a green coverage figure, the exact thing this check exists to prevent;
+  //   2. the `(?:^|[,[])` prefix that guess required is never satisfied by the
+  //      indented head js-beautify emits (`        4567: (e, t, r) => {`), so
+  //      every module falls through and coverage reads 0% on a valid bundle.
+  // Verified against six head shapes: webpack object/array/function containers
+  // and Turbopack keyed/bare/multi-parameter factories.
+  // ⚠ Revisit when a third container appears, or when a packer stops putting the
+  // require in the third parameter.
+  let R = null, viaCtx = false, noReq = false;
+  if (TURBO) {
+    const tsig = head.match(/(?:\(\s*(\w+)[^)]*\)|(\b\w+))\s*=>/);
     if (tsig) { R = tsig[1] || tsig[2]; viaCtx = true; }
+  } else {
+    // webpack: the require is the THIRD parameter, in both the `function` and
+    // the arrow spelling.
+    const wsig = head.match(/(?:function\s*)?\(\s*(\w+)\s*,\s*(\w+)\s*,\s*(\w+)\s*\)\s*(?:=>|\{)/);
+    if (wsig) R = wsig[3];
+    // A 0/1/2-parameter factory has no require binding at all, so it cannot hold
+    // a computed require. Count it as examined rather than skipping it — skipping
+    // deflates coverage into a false FAIL — but tally it separately, so "nothing
+    // to look at" never reads as "looked and found nothing".
+    else if (/(?:function\s*)?\(\s*\w*\s*(?:,\s*\w+\s*)?\)\s*(?:=>|\{)/.test(head)) noReq = true;
   }
-  if (!R) continue;
+  if (!R && !noReq) continue;
   examined++;
+  if (noReq) { noReqCount++; continue; }
   // For Turbopack the call shape is `ctx.i(` / `ctx.r(`, not `ctx(`.
   const re = viaCtx ? new RegExp(`\\b${R}\\.[ir]\\s*\\(`, "g") : new RegExp(`\\b${R}\\s*\\(`, "g");
   for (const hit of body.matchAll(re)) {
@@ -144,24 +171,39 @@ if (resolved.length) {
 }
 const review = [...dynamic];
 dynamic = [];   // question 2 does not decide the exit code; see the header
+// ⛔⛔ COVERAGE IS ITS OWN VERDICT, independent of whether anything was found.
+// Written as an `else if` on the review branch, it was skipped entirely whenever
+// a single call site looked suspicious: examine 1 of 20 modules, hit one
+// candidate, print the review, leave `dynamic` empty, exit 0 green. That is the
+// same failure the comment below was written to close, surviving on the other
+// branch. A gate hanging off an `else` is not a gate.
+// ⚠ Revisit 0.8 only after reading noReqCount. If a packer legitimately emits
+// many factories with no require binding, the question is whether there was
+// anything to look at — not whether the threshold is too strict.
+const coverage = all.length > 0 ? examined / all.length : 1;
+const underCovered = coverage < 0.8;
+const tally = `${examined}/${all.length} module(s) examined`
+  + (noReqCount ? `, ${noReqCount} of them have no require binding` : "");
 if (review.length) {
-  console.log(`  ⚠    ${review.length} call site(s) LOOK like a require with a computed id (${examined}/${all.length} module(s) examined). Read each one:`);
+  console.log(`  ⚠    ${review.length} call site(s) LOOK like a require with a computed id (${tally}). Read each one:`);
   for (const d of review.slice(0, 12)) console.log(`         ${d.id}  L${d.line}  ${d.snippet}`);
   if (review.length > 12) console.log(`         … ${review.length - 12} more`);
   console.log(`       Most are the require parameter SHADOWED by an inner function's parameter of`);
   console.log(`       the same name. A genuine one means the static closure under-approximates:`);
   console.log(`       resolve what it can reach and add those ids to the closure seeds.`);
-} else if (examined < all.length * 0.8) {
-  // ⛔ "Did it examine ANYTHING" is the wrong threshold. A version guarding only
-  // on zero reported `ok` after examining 1 of 20 modules — as blind as zero,
-  // and now wearing a green tick. What a check has to state is COVERAGE, and a
-  // check that reached under four fifths of its subjects has not looked.
+} else if (!underCovered) {
+  console.log(`  ok   no call site resembles a require with a computed id (${tally})`);
+}
+// ⛔ "Did it examine ANYTHING" is the wrong threshold. A version guarding only
+// on zero reported `ok` after examining 1 of 20 modules — as blind as zero,
+// and now wearing a green tick. What a check has to state is COVERAGE, and a
+// check that reached under four fifths of its subjects has not looked.
+// ⛔ Evaluated unconditionally, attached to no `else` — that is the whole point.
+if (underCovered) {
   console.log(`  FAIL the computed-require check examined only ${examined} of ${all.length} module(s) — it could`);
   console.log(`       not recognise this packer's factory signature on the rest, so its silence`);
-  console.log(`       covers ${Math.round((examined / all.length) * 100)}% of the bundle and means nothing about the other ${all.length - examined}.`);
+  console.log(`       covers ${Math.round(coverage * 100)}% of the bundle and means nothing about the other ${all.length - examined}.`);
   dynamic.push({ id: "-", line: 0, snippet: `check examined ${examined}/${all.length}` });
-} else {
-  console.log(`  ok   no call site resembles a require with a computed id (${examined}/${all.length} module(s) examined)`);
 }
 
 // --- 2. account for the leftovers ------------------------------------------
