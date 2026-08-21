@@ -59,6 +59,7 @@
 //      knows the assets/<host>/ layout).
 
 import fs from "node:fs/promises";
+import { createHash } from "node:crypto";
 import path from "node:path";
 import { assertOwnBrowser, chromeSentinel, resolvePort } from "./lib/ports.mjs";
 import { launchChrome, preflightChrome } from "./lib/chrome.mjs";
@@ -401,14 +402,19 @@ if (malformed.size) {
   for (const [u, n] of malformed) console.log(`  x${n}  ${JSON.stringify(u).slice(0, 300)}`);
 }
 
+const fetched = [];
 if (DO_FETCH && missing.length) {
-  // NOTE --fetch writes bytes but NOT ledger rows, so what it lands is off the
-  // books: verify-mirror.mjs reports every one of these as an orphan ("a file
-  // nobody can name a URL for"), and inventory.tsv will never describe it. Use
-  // it to eyeball a gap quickly; to actually close one, write the URLs to a file
-  // and re-run mirror-site.mjs --seeds so gap-filling goes through the one
-  // downloader and lands in the one ledger.
-  console.log("\nfetching gaps... (bytes only — no ledger rows; prefer mirror-site.mjs --seeds)");
+  // ⭐ ONE MIRROR, ONE LEDGER. This used to write bytes and no ledger row, with
+  // a note recommending mirror-site.mjs --seeds instead. The note was correct
+  // and it did not help: a run of --fetch left files that verify-mirror reports
+  // forever as "nobody can name a URL for", and a second ledger that records
+  // URLs without the PATHS they were written to cannot be reconciled against
+  // disk at all. Measured on eightdesign: 324 files, every one of them fetched
+  // deliberately, none of them blessable by any gate.
+  //
+  // ⛔ A tool that can leave the artefact in a state no gate accepts is a
+  // footgun with a comment on it. Appending the row is fifteen lines.
+  console.log("\nfetching gaps... (bytes AND ledger rows)");
   for (const m of missing) {
     // m.path is an absolute URL (records are keyed by host + path).
     const res = await fetch(m.path, {
@@ -418,9 +424,31 @@ if (DO_FETCH && missing.length) {
       console.log(`  FAIL ${res.status} ${m.path}`);
       continue;
     }
-    const out = path.join(ROOT, localPathFor(m.path));
+    const rel = localPathFor(m.path);
+    const out = path.join(ROOT, rel);
+    const body = Buffer.from(await res.arrayBuffer());
     await fs.mkdir(path.dirname(out), { recursive: true });
-    await fs.writeFile(out, Buffer.from(await res.arrayBuffer()));
+    await fs.writeFile(out, body);
+    fetched.push({ rel, url: m.path, bytes: body.length, sha: createHash("sha256").update(body).digest("hex") });
     console.log(`  OK ${m.path}`);
   }
+  await appendLedger(fetched);
+}
+
+/**
+ * Append what --fetch landed to the mirror's ONE ledger, in its format
+ * (SHA256 / BYTES / PATH / URL), skipping paths already recorded.
+ */
+async function appendLedger(rows) {
+  if (!rows.length) return;
+  const inv = path.join(ROOT, "inventory.tsv");
+  let text = await fs.readFile(inv, "utf8").catch(() => "");
+  if (!text) text = "SHA256\tBYTES\tPATH\tURL\n";
+  const known = new Set(text.trim().split("\n").slice(1).map((l) => l.split("\t")[2]));
+  const add = rows.filter((r) => !known.has(r.rel));
+  if (!add.length) return void console.log(`  ledger — all ${rows.length} path(s) already recorded`);
+  if (!text.endsWith("\n")) text += "\n";
+  text += add.map((r) => `${r.sha}\t${r.bytes}\t${r.rel}\t${r.url}`).join("\n") + "\n";
+  await fs.writeFile(inv, text);
+  console.log(`  ledger — ${add.length} row(s) appended to ${path.relative(process.cwd(), inv)}`);
 }

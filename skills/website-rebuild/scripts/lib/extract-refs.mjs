@@ -286,6 +286,26 @@ const MAYBE_ENCODED = /\\+[/"']|\\+u00[23]|&(?:#[0-9a-fA-F]|amp|quot|apos|sol|co
  *
  * Returns `(text, baseUrl) => Set<absolute url>`.
  */
+/**
+ * Concatenate a document's streamed flight payload into the one string the
+ * client actually parses, so a scanner never sees a push boundary. Returns null
+ * when the document has no such payload.
+ *
+ * ⚠ The pushes are REPLACED, not appended: appending would leave the truncated
+ * spellings in the text and the phantoms would survive alongside the real URLs.
+ */
+export function joinFlightPushes(text) {
+  const PUSH = /self\.__next_f\.push\(\[1,("(?:[^"\\]|\\.)*")\]\)/g;
+  let m, stream = "", first = -1, last = -1;
+  while ((m = PUSH.exec(text))) {
+    if (first < 0) first = m.index;
+    last = m.index + m[0].length;
+    try { stream += JSON.parse(m[1]); } catch { return null; }
+  }
+  if (first < 0) return null;
+  return text.slice(0, first) + stream + text.slice(last);
+}
+
 export function createRefExtractor({ origin, originHost, assetHosts, onOffHost }) {
   const hosts = assetHosts instanceof Set ? assetHosts : new Set(assetHosts || []);
   // Every reference to a host NOT on the list is reported through onOffHost so
@@ -375,14 +395,36 @@ export function createRefExtractor({ origin, originHost, assetHosts, onOffHost }
 
   return function extractAssetUrls(text, baseUrl) {
     const urls = new Set();
-    scan(text, baseUrl, urls);
+    // ⛔ A STREAMED PAYLOAD IS CUT AT ARBITRARY POINTS, INCLUDING MID-URL.
+    // Next.js delivers its flight payload as a run of
+    // `self.__next_f.push([1,"…"])` calls, and the split lands wherever the
+    // encoder's buffer ended — routinely inside a URL. Scanning the raw HTML
+    // therefore reads FRAGMENTS, and a fragment is not a miss: it is an
+    // INVENTED reference. Measured here:
+    //
+    //   .../media/1f9dadf367424346-s.p.04        (tail cut off)
+    //   https://host/static/media/9010da…        ("/_next" was in the push before)
+    //   https://host/9dc1a6fb114b646f-s.p…       (the whole path prefix was)
+    //
+    // The crawler then fetches those, gets 404, and writes 17 failed rows that
+    // look exactly like real missing assets — permanent gaps in the ledger for
+    // URLs that never existed. ⭐ Reassemble first: the client concatenates
+    // before parsing, so push boundaries carry no meaning and removing them
+    // loses nothing.
+    // ⛔ REPLACES the raw scan, never joins it. Scanning both would re-add every
+    // truncated spelling alongside the whole one, which is the phantom this
+    // exists to remove — and the reassembled text keeps everything outside the
+    // pushes verbatim, so nothing is lost by scanning it alone.
+    const joined = joinFlightPushes(text);
+    const view = joined === null ? text : joined;
+    scan(view, baseUrl, urls);
     // Second pass over the decoded view. Guarded, so files with no escaping at
     // all pay one regex test; unioned, so the raw pass can never LOSE a
     // reference to the decoding (that would be the same bug pointing the other
     // way).
-    if (MAYBE_ENCODED.test(text)) {
-      const decoded = decodeUrlEscapes(decodeEntities(text));
-      if (decoded !== text) scan(decoded, baseUrl, urls);
+    if (MAYBE_ENCODED.test(view)) {
+      const decoded = decodeUrlEscapes(decodeEntities(view));
+      if (decoded !== view) scan(decoded, baseUrl, urls);
     }
     return urls;
   };
