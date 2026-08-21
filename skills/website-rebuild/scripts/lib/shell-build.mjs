@@ -47,7 +47,39 @@ export function localizeShapes(text, host, to, onHit = () => {}) {
   // trailing-slash form) while the build produced `href=""`, so the two
   // localisation implementations disagreed AND one of them was wrong.
   const bare = to || "/";
-  return text
+
+  // ⛔ A URL IN A TEXT POSITION IS CONTENT, NOT AN ADDRESS. Localisation is
+  // about where the browser goes; it must not change what the page SAYS.
+  //
+  // Measured on eightdesign, on exactly one of 115 routes — an article about the
+  // site's own relaunch, which prints the address it is talking about:
+  //
+  //     <a href="https://host/">https://host/</a>
+  //
+  // The href must be localised. The anchor TEXT must not: rewriting it made the
+  // page read "こちら /" instead of naming the site. Both sides were stable and
+  // differed by 25 characters, which is how a whole-site sweep earns its cost —
+  // a blanket transform that is right 114 times changes meaning on the 115th.
+  //
+  // ⚠ Narrow on purpose. Only the two spellings where a text position is
+  // UNAMBIGUOUS are protected: an HTML text node (`>URL<`) and a serialised
+  // payload's children field (`"children":"URL"`). Anything less certain is
+  // left to the transform, because a guard that guesses is worse than none.
+  const GUARDS = [
+    new RegExp(`>\\s*https?://${h}[^<]*<`, "g"),
+    new RegExp(`"children":"https?://${h}[^"]*"`, "g"),
+    new RegExp(`\\\\"children\\\\":\\\\"https?://${h}[^\\\\"]*\\\\"`, "g"),
+  ];
+  const held = [];
+  for (const re of GUARDS) {
+    text = text.replace(re, (m) => {
+      held.push(m);
+      return `\u0000TEXTURL${held.length - 1}\u0000`;
+    });
+  }
+  const restore = (out) => out.replace(/\u0000TEXTURL(\d+)\u0000/g, (_, i) => held[Number(i)]);
+
+  return restore(text
     .replace(new RegExp(`https?://${h}(?=/)`, "g"), hit("absolute", to))
     .replace(new RegExp(`https?://${h}(?!/)`, "g"), hit("absolute-bare", bare))
     .replace(new RegExp(`https?:\\\\/\\\\/${h}`, "g"), hit("escaped-absolute", toEsc))
@@ -55,7 +87,7 @@ export function localizeShapes(text, host, to, onHit = () => {}) {
     .replace(new RegExp(`https?:${U_RE}${U_RE}${h}(?!${U_RE})`, "gi"), hit("unicode-absolute-bare", toU || U))
     .replace(new RegExp(`(?<!:)\\\\/\\\\/${h}`, "g"), hit("escaped-protocol-relative", toEsc))
     .replace(new RegExp(`(?<!:)${U_RE}${U_RE}${h}`, "gi"), hit("unicode-protocol-relative", toU))
-    .replace(new RegExp(`(?<!:)//${h}`, "g"), hit("protocol-relative", to));
+    .replace(new RegExp(`(?<!:)//${h}`, "g"), hit("protocol-relative", to)));
 }
 
 /** The bytes T-NOINDEX inserts. Exported because verify-shell sees that hunk as
@@ -111,12 +143,27 @@ export function transformPage(html, cfg, { head = true } = {}) {
   out = (hasFlight(out) ? rewriteFlight(out, localizeAll) : null) ?? localizeAll(out);
 
   // --- site-specific transforms ---------------------------------------------
-  for (const t of cfg.transforms || []) {
-    out = t.apply(out, {
-      bump: (n = 1) => bump(t.id, n),
-      sub: (k, n = 1) => bumpSub(`${t.id}:${k}`, n),
-    });
-  }
+  // ⛔ THESE GO THROUGH THE LENGTH-AWARE PATH TOO. It is not only localisation
+  // that edits a length-prefixed payload: the thing that had to be deleted here
+  // was a `<link rel="preload" href="https://www.googletagmanager.com/…">`
+  // sitting INSIDE a flight row, and deleting it blanket-style shortens the row
+  // exactly the way a URL rewrite does. Any edit is an edit.
+  //
+  // ⚠ Each transform therefore sees the document one REGION at a time (the gaps
+  // between pushes, and each row's content). A transform that needs to count
+  // across the whole document must do its own accounting; registering the count
+  // floor per transform id already works that way.
+  const applyTransforms = (text) => {
+    let o = text;
+    for (const t of cfg.transforms || []) {
+      o = t.apply(o, {
+        bump: (n = 1) => bump(t.id, n),
+        sub: (k, n = 1) => bumpSub(`${t.id}:${k}`, n),
+      });
+    }
+    return o;
+  };
+  out = (hasFlight(out) ? rewriteFlight(out, applyTransforms) : null) ?? applyTransforms(out);
 
   // --- T-NOINDEX -------------------------------------------------------------
   if (head && cfg.notice) {
