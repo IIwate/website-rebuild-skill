@@ -26,6 +26,20 @@ const OUT = path.resolve(flag("out", "src"));
 // deliverable: shipping the thing you replaced next to its replacement makes
 // "which one is running" a question the reader has to answer by experiment.
 const REPLACED = flag("replaced", "");
+// Paths this project PRODUCES rather than mirrors — the port's build output, and
+// anything else the shell config lists under `extras`. They are not expected in
+// the mirror and must not be reported as missing.
+// ⚠ Pass the same values the transform table writes. If the two drift apart,
+// this tool reports the port's own bundle as a hole in the deliverable.
+const OWN = flag("own", "").split(",").map((x) => x.trim()).filter(Boolean);
+// Where the deliverable's own build lands INSIDE public/, and what esbuild must
+// leave unresolved. Both are per-project facts; defaults suit a project whose
+// port is served at /app.js.
+const BUILD_OUT = flag("build-out", OWN[0] || "/app.js");
+const EXTERNALS = flag("externals", "").split(",").map((x) => x.trim()).filter(Boolean);
+const SERVE_PORT = flag("serve-port", "6190");
+// The deliverable's own name: the project directory unless told otherwise.
+const NAME = flag("name", path.basename(process.cwd()).replace(/-rebuild$/, "") + "-src");
 const PUBLIC = path.join(OUT, "public");
 
 let html = await readFile(SHELL, "utf8");
@@ -74,7 +88,12 @@ for (const rel of ledger) {
 
 let missing = [];
 for (const ref of refs) {
-  if (ref.startsWith("/assets/js/")) continue;           // the port's own build
+  // ⛔ NOT a hardcoded path. The first version skipped `/assets/js/` because that
+  // is where one project happened to put its build; on the next project, whose
+  // build lands in `/_next/static/chunks/`, the port's own output was reported
+  // as a missing ASSET — as a hole in the deliverable. It IS the deliverable.
+  // Anything this project emits is declared with --own.
+  if (OWN.some((o) => ref === o || ref.startsWith(o.endsWith("/") ? o : o + "/"))) continue;
   // ⚠ A directory-style URL is a PAGE, not a missing file. `/at/airpods-pro/`
   // resolves to that directory's index.html the way the crawler stored it, and
   // treating it as absent reported 185 "missing" references that were mostly
@@ -96,17 +115,26 @@ html = html.replace(/(<script\b[^>]*\bsrc=")\/assets\/js\/app\.js(")/, "$1./app.
 await writeFile(path.join(PUBLIC, "index.html"), html);
 
 await writeFile(path.join(OUT, "package.json"), JSON.stringify({
-  name: "airpodspro-src",
+  // ⛔ Derived, not carried over. A generated file that hardcodes the previous
+  // project's name is how a deliverable ends up introducing itself as something
+  // else — third instance of this in one stage, after the own-build path and the
+  // build script's outfile/externals.
+  name: NAME,
   private: true,
   version: "1.0.0",
   type: "module",
   description: "Readable source for an unofficial study rebuild. Private, noindex, never deployed.",
   scripts: {
-    build: "esbuild index.js --bundle --format=iife --outfile=public/app.js --external:@marcom/ac-analytics",
+    // ⛔ The output path and externals are THIS project's, not the last one's.
+    // A generated package.json carrying the first project's `public/app.js` and
+    // its `--external:@marcom/…` is a hardcoded value wearing the costume of a
+    // generated one — the same mistake as a hardcoded own-build path.
+    build: `esbuild index.js --bundle --format=iife --outfile=public${BUILD_OUT}` +
+      EXTERNALS.map((e) => ` --external:${e}`).join(""),
     // ⭐ The deliverable ships its own server. readable-source.md §2.4: without a
     // verification hook travelling with it, "it builds" is the whole of what can
     // be said about a copy — and building is not running.
-    serve: "node serve.mjs --root public --port 6190",
+    serve: `node serve.mjs --root public --port ${SERVE_PORT}`,
   },
   devDependencies: { esbuild: "^0.25.0" },
 }, null, 2) + "\n");
@@ -122,6 +150,7 @@ await cp(path.resolve("scripts/lib"), path.join(OUT, "lib"), { recursive: true }
 
 console.log(`=== make-standalone ===`);
 console.log(`  ${copied} file(s) copied into ${path.relative(process.cwd(), PUBLIC)}  (${(bytes / 1048576).toFixed(1)} MB)`);
+if (OWN.length) console.log(`  own build path(s), excluded from the mirror check: ${OWN.join(", ")}`);
 console.log(`  ${skipped} ledger row(s) skipped: forensic material${REPLACED ? " + the replaced origin bundle" : ""}`);
 // ⛔ One undifferentiated "missing" list is unusable. The classes have different
 // meanings and only one of them is a defect:

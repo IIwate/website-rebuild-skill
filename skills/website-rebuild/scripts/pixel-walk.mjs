@@ -39,17 +39,30 @@ const FMT = flag("format", "jpeg"), Q = flag("quality", "92");
 // replaces setTimeout with a pumped queue, so this lands after the page's own
 // init has run rather than at some wall-clock moment.
 const RESCROLL_MS = Number(flag("rescroll-ms", "1500"));
-if (!A || !B) { console.error("usage: pixel-walk.mjs --a <rebuild-url> --b <mirror-url> [--steps N] [--pump dt,frames] [--max-mean N] [--rescroll-ms N] [--self]"); process.exit(2); }
+// ⚠ Passed straight through to pixelcompare. A site whose readiness has no cheap
+// observable needs a wall-clock settle, and that is a deviation from
+// "settle must be a page state" (§2.2) that has to be stated, not hidden in a
+// default: measured on one target, the states available before a renderable
+// frame (canvas sized, preloader removed) are all TOO EARLY.
+const SETTLE = flag("settle", null);
+const READY = flag("ready", null);
+if (!A || !B) { console.error("usage: pixel-walk.mjs --a <rebuild-url> --b <mirror-url> [--steps N] [--pump dt,frames] [--max-mean N] [--rescroll-ms N] [--settle ms] [--ready expr] [--self]"); process.exit(2); }
 if (STEPS < 2) { console.error("FATAL — --steps must be >= 2. One checkpoint is the problem this tool exists to fix."); process.exit(2); }
 
 // ⛔ The re-issued scroll runs on VIRTUAL PUMP TIME, not the wall clock. Once
 // RESCROLL_MS reaches the pump budget dt x frames, its setTimeout is never
-// pumped: the re-issue disappears, the walk silently reverts to one scroll at
-// load — the very bug the block below exists to fix — and nothing in the output
-// says so. Raising --rescroll-ms for a long-hydrating SPA therefore REQUIRES
-// raising --pump frames too, so refuse the combination instead of degrading
-// quietly. An instrument that fails silently costs more than no instrument.
-// ⚠ Revisit if the re-issue is ever moved onto a real clock.
+// pumped and the re-issue silently disappears.
+//
+// ⚠ Since --drive moved the driving INSIDE the pump loop, losing the re-issue no
+// longer degrades the walk to one scroll at load — the driver re-applies after
+// every pump chunk regardless. So this guard no longer protects against that
+// defect. It stays because the combination is still a CONFIGURATION THAT LIES:
+// the caller asked for a second scroll at T and gets none, with nothing in the
+// output saying so. Silently dropping what was explicitly requested costs more
+// than refusing it. Raising --rescroll-ms for a long-hydrating SPA therefore
+// REQUIRES raising --pump frames too.
+// ⚠ Revisit if the seed's re-issue is ever removed in favour of --drive alone,
+// at which point this flag and this guard both go.
 const [PUMP_DT, PUMP_FRAMES] = PUMP.split(",").map((n) => Number(n.trim()));
 if (!(PUMP_DT > 0) || !(PUMP_FRAMES > 0)) {
   console.error(`FATAL — --pump "${PUMP}" does not parse as dt,frames (both must be > 0).`);
@@ -62,8 +75,10 @@ if (!(RESCROLL_MS >= 0)) {
 }
 if (RESCROLL_MS >= PUMP_BUDGET) {
   console.error(`FATAL — --rescroll-ms ${RESCROLL_MS} >= the pump budget ${PUMP_BUDGET}ms (${PUMP_DT} x ${PUMP_FRAMES} frames).`);
-  console.error(`        The re-issued scroll would never be pumped, so this walk would silently`);
-  console.error(`        run with ONE scroll at load — the exact defect the re-issue exists to fix.`);
+  console.error(`        The re-issued scroll would never be pumped: you asked for a second scroll`);
+  console.error(`        at ${RESCROLL_MS}ms and would silently get none. (--drive still drives every`);
+  console.error(`        pump chunk, so the walk would not collapse to one position — but a request`);
+  console.error(`        dropped without a word is not something this tool passes through.)`);
   console.error(`        Raise --pump frames above ${Math.ceil((RESCROLL_MS * 1.25) / PUMP_DT)}, or lower --rescroll-ms.`);
   process.exit(2);
 }
@@ -82,13 +97,75 @@ if (RESCROLL_MS >= PUMP_BUDGET) {
 // init on a frozen page.
 const seedFor = (f) =>
   `window.addEventListener("load", () => {
+     // ⛔ FIND THE SCROLLER. The document is not always what scrolls. A site
+     // using a smooth-scroll library often scrolls an inner
+     // \`overflow-y: auto\` container, and there
+     // \`documentElement.scrollHeight - innerHeight\` is ZERO — so a seed that
+     // scrolls the document computes 0 * f = 0 for EVERY checkpoint and drives
+     // nothing. Measured: five checkpoints, five captures, one position, and
+     // meanAbsDiff inside the band at all of them. Only the duplicate-frame
+     // report showed it.
+     var pick = function () {
+       var doc = document.scrollingElement || document.documentElement;
+       if (doc.scrollHeight - doc.clientHeight > 200) return doc;
+       var best = null, gap = 200;
+       var all = document.querySelectorAll("*");
+       for (var i = 0; i < all.length; i++) {
+         var e = all[i], g = e.scrollHeight - e.clientHeight;
+         if (g <= gap) continue;
+         var ov = getComputedStyle(e).overflowY;
+         if (ov === "auto" || ov === "scroll") { best = e; gap = g; }
+       }
+       return best || doc;
+     };
      var go = function () {
-       var m = document.documentElement.scrollHeight - innerHeight;
-       window.scrollTo(0, Math.round(m * ${f}));
+       var el = pick();
+       var m = el.scrollHeight - el.clientHeight;
+       // ⛔ Nothing to scroll is a FACT the gate must see, not a silent 0.
+       var target = Math.round(m * ${f});
+       if (m > 0) {
+         if (el === document.scrollingElement || el === document.documentElement) window.scrollTo(0, target);
+         else el.scrollTop = target;
+       }
+       // ⛔ RECORD WHERE IT ACTUALLY LANDED. A smooth-scroll library owns the
+       // scroll value and re-asserts it, so setting scrollTop is a REQUEST, not
+       // a result — and the two sides then settle at different positions while
+       // the gate compares their pixels as if they matched. Measured: the same
+       // checkpoint gave meanAbsDiff 115 because one side was elsewhere.
+       // ⭐ A driver that quietly reports the wrong position costs far more than
+       // one that throws (verification-gates.md §2.1.1).
+       var landed = (el === document.scrollingElement || el === document.documentElement)
+         ? Math.round(window.scrollY) : Math.round(el.scrollTop);
+       window.__walkScroll = { tag: el.tagName, max: m, target: target, landed: landed };
      };
      go();
      setTimeout(go, ${RESCROLL_MS});
    });`;
+
+// Re-applied after every pump chunk, so it takes effect as soon as the scroller
+// exists. ⚠ Idempotent by construction: it recomputes the target each time.
+const driveFor = (f) => `
+  var doc = document.scrollingElement || document.documentElement;
+  var el = null;
+  if (doc.scrollHeight - doc.clientHeight > 200) el = doc;
+  else {
+    var best = null, gap = 200, all = document.querySelectorAll("*");
+    for (var i = 0; i < all.length; i++) {
+      var e = all[i], g = e.scrollHeight - e.clientHeight;
+      if (g <= gap) continue;
+      var ov = getComputedStyle(e).overflowY;
+      if (ov === "auto" || ov === "scroll") { best = e; gap = g; }
+    }
+    el = best;
+  }
+  if (el) {
+    var m = el.scrollHeight - el.clientHeight;
+    var t = Math.round(m * ${f});
+    if (el === doc) window.scrollTo(0, t); else el.scrollTop = t;
+    window.__walkScroll = { tag: el.tagName, max: m, target: t,
+      landed: (el === doc) ? Math.round(window.scrollY) : Math.round(el.scrollTop) };
+  }
+`;
 
 const run = (a) =>
   new Promise((res) => {
@@ -109,8 +186,15 @@ for (let i = 0; i < STEPS; i++) {
   const f = i / (STEPS - 1);
   const name = `walk-${String(Math.round(f * 100)).padStart(3, "0")}`;
   const a = ["--a", A, "--b", B, "--name", name, "--pump", PUMP, "--seed", seedFor(f), "--out", OUT, "--format", FMT, "--quality", Q];
+  // ⭐ Drive INSIDE the pump loop, not from a load-time seed: on a site whose
+  // scroll container appears only after its preloader, a seed fires too early
+  // and every checkpoint lands at 0.
+  a.push("--drive", driveFor(f));
+  if (SETTLE) a.push("--settle", SETTLE);
+  if (READY) a.push("--ready", READY);
   if (SELF) a.push("--self");
   const { code, out } = await run(a);
+  // Landing positions, reported by the seed on each side.
   const m = out.match(/\{"meanAbsDiff":[^}]+\}/);
   const census = out.match(/REBUILD: (\d+) colours/);
   if (!m) {

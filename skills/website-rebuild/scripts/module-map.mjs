@@ -179,7 +179,17 @@ const [, members] = [...byOwner].sort((a, b) => b[1].length - a[1].length)[0] ||
 // unrelated `key: function` properties elsewhere in the file and reports
 // success. See the plausibility check at the end: a container that explains
 // almost none of the require calls in the file is not the container.
+// ⛔ The container has a PROLOGUE. After currentScript come bare numeric ids
+// with no factory — the chunk's declared dependencies, ids it needs another
+// chunk to have provided. They are not modules, and dropping them from a
+// re-emitted chunk breaks LOAD ORDER: the runtime evaluates a module whose
+// dependency has not registered yet and throws
+// "module N ... the module factory is not available", from a stack that points
+// at the port and says nothing about a missing header.
+const turboDeps = [];
 const turbo = [];
+// Ids seen since the last factory — candidates for an alias run.
+const pending = new Set();
 for (let i = 0; i + 2 < T.length; i++) {
   if (lab(i) !== "name" || val(i) !== "TURBOPACK") continue;
   // Walk to the `push(` that follows and take its array literal.
@@ -194,9 +204,33 @@ for (let i = 0; i + 2 < T.length; i++) {
     else if (CLOSE.has(l)) { d--; if (d === 0) break; }
     // At depth 1, a number immediately followed by a comma and an arrow
     // function or `function` is `<id>, <factory>`.
-    if (d === 1 && lab(k) === "num" && lab(k + 1) === ",") {
+    // ⚠ A candidate element must START an element: preceded by `,` or the
+    // opening `[`. Without this the `0` in `void 0` (the currentScript
+    // expression) is read as an id, and every chunk's first module comes out
+    // "also answering to 0".
+    const startsElement = lab(k - 1) === "," || lab(k - 1) === "[";
+    if (d === 1 && startsElement && lab(k) === "num" && lab(k + 1) === ",") {
       const after = lab(k + 2);
-      if (after === "(" || after === "name" || after === "function") turbo.push({ id: String(val(k)), fi: k + 2 });
+      if (after === "(" || after === "name" || after === "function") {
+        // ⛔ ONE OR MORE ids share ONE factory. The container is not a strict
+        // id/factory alternation: `}, 73692, 24109, 34281, …, 77117, e => {`
+        // gives seven ids the SAME module body — the packer deduplicating
+        // identical modules behind several ids. Taking only the id adjacent to
+        // the factory silently drops the rest, and the failure surfaces far
+        // away as "module 73692 … the module factory is not available", from a
+        // chunk that looks complete and slices byte-identically.
+        const alias = [];
+        let j = k - 2;
+        while (j >= 0 && lab(j) === "num" && lab(j + 1) === "," && pending.has(j)) { alias.unshift(String(val(j))); pending.delete(j); j -= 2; }
+        turbo.push({ id: String(val(k)), aliases: alias, fi: k + 2 });
+        pending.clear();
+      } else if (after === "num") {
+        // An id followed by another id: either a prologue dependency (before the
+        // first module) or an alias in a run (resolved above when the factory
+        // appears).
+        if (turbo.length === 0 && String(val(k)).length >= 3) turboDeps.push(String(val(k)));
+        else pending.add(k);
+      }
     }
   }
   break;
@@ -252,7 +286,7 @@ if (turbo.length > entries.length) {
 const KNOWN = new Set(entries.map((e) => String(e.id)));
 
 const mods = [];
-for (const { id, fi } of entries) {
+for (const { id, fi, aliases = [] } of entries) {
   // ⛔ Three factory shapes, not one. webpack emits `function (m, e, r) {…}`;
   // Turbopack emits `(e, t, r) => {…}` and, for a single parameter, the bare
   // `e => {…}` with no parentheses at all. Assuming the parenthesised form
@@ -372,7 +406,13 @@ for (const { id, fi } of entries) {
       exportsAssigned++;
     }
   }
-  mods.push({ id, startLine, endLine, startChar, endChar, lines: endLine - startLine + 1, requires: [...requires], exportsAssigned, exportNames: [...exportNames].slice(0, 12) });
+  // ⛔ Carry `aliases` from THIS entry, not from a lookup by id. A container can
+  // define the same id more than once (see the shadowing report below), so
+  // `entries.find(e => e.id === id)` returns the FIRST definition's aliases and
+  // can hang them on a shadowed body — which makes slice-modules emit an alias
+  // pointing at the wrong factory. Same failure text as the bug aliases exist to
+  // fix ("the module factory is not available"), one level harder to trace.
+  mods.push({ id, aliases, startLine, endLine, startChar, endChar, lines: endLine - startLine + 1, requires: [...requires], exportsAssigned, exportNames: [...exportNames].slice(0, 12) });
 }
 
 // ⛔ A container can define the same id more than once, and this one does: 597
@@ -429,7 +469,19 @@ console.log(`  container: ${containerKind === "TurbopackChunk" ? "turbopack chun
 // Say so rather than letting "more lines inside modules than in the file" read
 // as a bug in the reader.
 if (total > fileLines) console.log(`  ⚠    module spans overlap by ${total - fileLines} line(s): in a flat list one line closes a module and opens the next`);
-console.log(`  tokenized by acorn@${ACORN_VERSION} (pinned, spawned — not imported)\n`);
+console.log(`  tokenized by acorn@${ACORN_VERSION} (pinned, spawned — not imported)`);
+{
+  const aliased = mods.filter((m) => (m.aliases || []).length);
+  if (aliased.length) {
+    const n = aliased.reduce((t, m) => t + m.aliases.length, 0);
+    console.log(`  ${aliased.length} module(s) are reachable under ${n} additional id(s) — the packer deduplicated them`);
+  }
+}
+if (containerKind === "TurbopackChunk" && turboDeps.length) {
+  console.log(`  chunk declares ${turboDeps.length} cross-chunk dependency id(s): ${turboDeps.join(", ")}`);
+  console.log(`  ⚠ these are the container's PROLOGUE — a re-emitted chunk must carry them or load order breaks`);
+}
+console.log("");
 console.log(`  largest modules:`);
 for (const m of mods.slice(0, 12)) {
   console.log(`    ${String(m.lines).padStart(5)} lines  id=${String(m.id).padEnd(4)} L${String(m.startLine).padStart(5)}-${String(m.endLine).padEnd(5)}  requires ${m.requires.length}  ${m.exportNames.slice(0, 4).join(", ")}`);
@@ -453,10 +505,34 @@ console.log(`\n  ${leaf} module(s) require nothing (leaves);  ${mods.length - le
 // Two cheap invariants, both about coverage of the file rather than the
 // container's internals:
 {
-  const edges = mods.reduce((t, m) => t + m.requires.length, 0);
+  const reqCallIdx = [];
+  for (let i = 0; i + 3 < T.length; i++) {
+    // <name>(<literal>) and <name>.<i|r>(<literal>) — the two require shapes
+    if (lab(i) === "name" && lab(i + 1) === "(" && (lab(i + 2) === "string" || lab(i + 2) === "num") && lab(i + 3) === ")") reqCallIdx.push(i);
+    else if (lab(i) === "name" && lab(i + 1) === "." && lab(i + 2) === "name" && /^[ir]$/.test(String(val(i + 2))) && lab(i + 3) === "(" && lab(i + 4) === "num") reqCallIdx.push(i);
+  }
+  // ⛔ Compare LIKE WITH LIKE. The first version counted "require-shaped calls"
+  // with a loose pattern (`name(literal)`) and compared that against recorded
+  // edges — but `h("words")` matches that shape and is not a require. On one
+  // real chunk it counted 79 against 18 real requires and FATAL'd a perfectly
+  // correct read at 23%, just under the threshold. ⚠ A guard that blocks a
+  // correct read is the dangerous kind: it teaches you to bypass the guard.
+  //
+  // ⭐ The sound question is not "how many require-ish calls exist" but "how
+  // many of them fall OUTSIDE the container we found". Same shape on both
+  // sides, so the ratio means something.
+  const insideModule = (tokenIdx) => mods.some((m) => {
+    const t = T[tokenIdx];
+    return t && t.loc.start.line >= m.startLine && t.loc.end.line <= m.endLine;
+  });
+  let outside = 0;
+  for (const idx of reqCallIdx) if (!insideModule(idx)) outside++;
   const coverage = fileLines ? total / fileLines : 0;
   const problems = [];
   if (coverage < 0.5) problems.push(`the modules found cover only ${(coverage * 100).toFixed(0)}% of the file's lines`);
+  if (reqCallIdx.length > 8 && outside > reqCallIdx.length * 0.5) {
+    problems.push(`${outside} of ${reqCallIdx.length} require-shaped call(s) fall OUTSIDE every module this reader found`);
+  }
   if (problems.length) {
     console.error(`\nFATAL — the container this reader found does not explain the file:`);
     for (const p of problems) console.error(`  • ${p}`);
@@ -476,6 +552,7 @@ await writeFile(OUT, JSON.stringify({
   source: path.relative(process.cwd(), IN),
   container: containerKind,
   properties: entries.length,
+  chunkDeps: containerKind === "TurbopackChunk" ? turboDeps : [],
   shadowedDivergent: [...new Set(divergent.map((m) => m.id))],
   modules: mods,
 }, null, 2) + "\n");

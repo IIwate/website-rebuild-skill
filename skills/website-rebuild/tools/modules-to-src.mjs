@@ -199,7 +199,12 @@ ${reg}
 };
 `);
 
-await writeFile(path.join(OUT, "runtime.js"),
+// ⛔ Only emit a runtime when one is actually needed. A Turbopack port registers
+// into the packer's own runtime and re-implements nothing — shipping a
+// `runtime.js` there is dead code that also LIES: its header announces a
+// registered deviation for a re-implementation that does not exist, and the
+// whole point of that port shape is that there is none.
+if (!TURBO) await writeFile(path.join(OUT, "runtime.js"),
 `// runtime.js — the packer's module contract, re-implemented.
 //
 // ⚠ REGISTERED DEVIATION: the original runtime is one closure wrapping the whole
