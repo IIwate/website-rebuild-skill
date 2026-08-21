@@ -3,7 +3,7 @@ name: website-rebuild
 description: 1:1 rebuild of award-winning creative websites (WebGL / scroll-animation / portfolio sites). Evidence-driven pipeline - mirror-first forensics, line-number-traceable reverse engineering of minified bundles, verbatim porting, quantitative verification gates. Use when user asks to "复刻网站", "重建网站", "1:1 rebuild", "clone this site", or provides a URL of a creative/award site to reproduce.
 compatibility: Requires Node 22+ (bundled scripts use built-in WebSocket to talk to CDP), npx, and a local Chrome/Chromium for headless comparison. POSIX shell optional - the Step 0 probe protocol has a zero-dependency Node equivalent (scripts/fingerprint.mjs) for shells without curl/cmp/tr/perl (e.g. Windows PowerShell). Agent-agnostic - works in any Agent Skills-compatible runtime.
 metadata:
-  version: "0.1.67"
+  version: "0.1.68"
 ---
 
 # Website Rebuild（获奖创意站 1:1 复刻）
@@ -148,6 +148,7 @@ Step 0 → M(n) 全程不装任何东西；**复刻项目要到 M(n+1) 才获得
 | `scripts/verify-shell.mjs` | **外壳字节门**：逐文档 patience diff，每个差异块必须能被变换表**重放**解释。⛔ 不 import `build-site.mjs`——门不许生产它所审计之物（`verification-gates.md` §2.1.2） | M2+（策略 A） |
 | `scripts/verify-payload.mjs` | **SSG payload 门**：把内联序列化数据块（Nuxt2 `window.__NUXT__` / Nuxt3 `__NUXT_DATA__` / **React flight `self.__next_f`**）**求值展开**再按结构对拍。字节门在这里不够用——payload 是一段"输出数据的程序"（参数去重、`\u002F` 转义），两份可以字节不同而语义相同，也可以字节相近而语义不同；且服务层要**改写它内部**的 URL。实测：它抓到两侧本地化实现不一致（一侧留 `href="http://host"`、另一侧写出 `href=""`），而外壳字节门全绿 | M0.5 起（有 SSG payload 时） |
 | `scripts/verify-lenprefix.mjs` | **自带长度的载荷门**：走 React flight 流（Next.js App Router 每页内联的 `self.__next_f.push`），逐行按声明的 `T<十六进制>` 字节数前进，确认落点仍是一个行首。⭐ **长度前缀行没有终止符**——下一行的行首就贴在声明的末尾，长度本身即分隔符。因此任何**改变字节数的文本改写**（本地化外链）都会让读取者把下一行的行首吞成正文。实测 eightdesign：115 条路由里 2 条只渲染出 70 字（对侧 2,440），**零 404、零请求失败、HTML 字节数一致、其它门全绿**；定位它的是拿 `python3 -m http.server` 伺服同一个目录——两条路由完美渲染，于是错处在服务器而不在字节。⛔ 这道门要**先拿源站校准**：第一版断言"行末必须是换行"，把包括源站自身字节在内的每份文档都判为损坏 | M0.5 起（有 flight 载荷时） |
+| `scripts/verify-refs-served.mjs` | **引用可达门**:把产出字节里的每一条资源引用**逐条问服务器**(一次 GET,不开浏览器)。⭐ 关键在于**问服务器,而不是再实现一遍它的解析**——一个自己走镜像的离线检查就是第二份 url→path 实现,而第二份实现就是一次等着被报成窟窿的分歧(实测它把 28 张在场的图报成缺失,只因不知道服务器的查询变体回退)。⚠ 它看不见运行时拼出来的 URL,那是资源级探针的活(§1.6 class 4) | M2+ 起每 commit |
 | `scripts/verify-offline.mjs` | **零外联门的静态一半**：枚举产出字节里每个外部绝对 URL 并逐条裁决（§1.6 的四类断言面里，资源级探针看不见的那三类） | M0.5 起每 commit |
 | `scripts/beautify-bundle.mjs` | js-beautify@1.15.1 钉死展开 bundle 到 `_pretty/` 并生成再生成说明。⛔ **撞名响亮告警 + 单射断言**——两个不同目录下的 `main.built.js` 曾静默互相覆盖，而 `_pretty/` 是全项目唯一溯源坐标系，覆盖之后每个行号都指向错误的文件 | M1 |
 | `scripts/module-map.mjs` | **模块化 bundle 的分层表**：spawn 钉死的 `acorn --tokenize`（零依赖），逐模块给出行区间、`requires`、导出名。**认两种容器**：webpack 对象容器与 **Turbopack 扁平列表**（后者把导出名直接写在容器里，M(n+1) 命名因此几乎全是 tier-1 证据）。⛔ 认不出容器即 FATAL；⛔⛔ **认出来的还必须解释得了这个文件**——行覆盖率 <50%、或依赖边不足 require 调用数的 25%，一律 FATAL：读错容器时工具会「成功」（实测对一个真有 20 个工厂的 chunk 报了 2 个模块）。⛔ **容器可以重复定义同一个 id**——实测 597 条属性只有 569 个不同模块，且其中 4 条被遮蔽的定义**实现不同**；语义是**对象字面量后者胜出**，工具必须去重并报告，否则每份文档记的模块数都是错的，而下游拿到哪一份取决于迭代顺序 | M1（模块化打包产物） |

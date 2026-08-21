@@ -391,6 +391,35 @@ export function createRefExtractor({ origin, originHost, assetHosts, onOffHost }
         else if (ref.startsWith("/")) addIfAsset(ORIGIN + ref, urls);
       }
     }
+    // 4b. A REFERENCE NESTED IN ANOTHER URL'S QUERY. An image-optimisation
+    // endpoint names its subject in a parameter:
+    //
+    //     /_next/image?url=%2F_next%2Fstatic%2Fmedia%2Fpic_3.0w8q….png&w=2048&q=75
+    //
+    // ⛔ An extractor that treats a URL as atomic sees ONE reference here — the
+    // endpoint — and never asks for the image. Measured on eightdesign: 8
+    // source images referenced only this way, absent from the mirror, and the
+    // closure gate green throughout because nothing ever named them. They
+    // surfaced only when the built site's references were replayed against the
+    // server.
+    //
+    // ⭐ The parameter names are the ones endpoints actually use; a value that
+    // does not look like a reference is skipped by addIfAsset anyway.
+    for (const m of text.matchAll(/[?&](?:url|src|image|file|path|href|u)=([^&"'\s<>\\]+)/gi)) {
+      // ⚠ ")" is ALLOWED in the value and trimmed only when UNBALANCED. The
+      // first version excluded it outright and truncated six references whose
+      // filename really contains "(1).jpg" — manufacturing exactly the kind of
+      // phantom this file exists to stop, in the shape added to stop another
+      // one. A "(" ... ")" that balances belongs to the name; a lone trailing
+      // ")" is the CSS url(...) closing delimiter.
+      let raw = m[1];
+      while (raw.endsWith(")") && (raw.match(/\(/g) || []).length < (raw.match(/\)/g) || []).length) raw = raw.slice(0, -1);
+      let inner = raw;
+      try { inner = decodeURIComponent(inner); } catch {}
+      if (/^https?:\/\//i.test(inner)) addIfAsset(inner, urls);
+      else if (inner.startsWith("/") && /\.[a-z0-9]{2,5}$/i.test(inner.split("?")[0])) addIfAsset(ORIGIN + inner, urls);
+    }
+
     // 5. relative url(...) inside CSS
     if (baseUrl && /\.css($|\?)/i.test(baseUrl)) {
       for (const m of text.matchAll(/url\(\s*['"]?(?!data:|https?:|\/\/)([^'")]+)['"]?\s*\)/gi)) {

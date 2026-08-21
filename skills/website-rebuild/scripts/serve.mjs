@@ -480,7 +480,107 @@ async function resolveFile(pathname, search = "") {
     const hit = await resolveOne(cand);
     if (hit) return hit;
   }
+  // ⭐ AN IMAGE-OPTIMISATION ENDPOINT IS A SERVER-SIDE INTERFACE, NOT A FILE.
+  // Next.js asks for `/_next/image?url=<src>&w=<width>&q=<quality>`, where the
+  // width is whatever the component decided from the viewport. A static mirror
+  // can hold the widths a capture pass happened to request and NOTHING MORE —
+  // the set is unbounded, so "capture them all" is not a plan, it is a loop
+  // that never converges. Measured here: 73 of 115 routes still 404ed on this
+  // endpoint after two capture passes, and a third would have taken nine hours.
+  //
+  // ⛔ REGISTER THIS AS A DEVIATION. The bytes served are the ORIGINAL image,
+  // not the origin's resized-and-recompressed one, so they are larger and
+  // sharper than what the live site sends. That is a real difference and it is
+  // declared; the alternative was a permanent 404 on most routes, which is a
+  // bigger one. The original is genuinely in the mirror — this resolves the
+  // interface, it does not invent an asset.
+  // ⭐ THE OTHER HALF OF THE BARE FALLBACK. serveCandidates() handles
+  // "request HAS a query, file has none" — a cache buster the mirror ignored.
+  // The reverse also happens: the document references `/x.svg` while the mirror
+  // stored `x@@dpl=….svg`, because the URL it was FETCHED by carried the
+  // origin's deployment id. Measured on the built site: several such
+  // references, all present on disk, all 404ing.
+  //
+  // ⛔ Only when the variant is UNAMBIGUOUS. Two variants of one path are two
+  // resources (`?width=320` vs `?width=1200`), and answering either from a bare
+  // request is exactly the collapse verify-mirror's injectivity gate exists to
+  // catch. One variant, serve it; more than one, 404 and let the gate speak.
+  if (!search) {
+    const only = await resolveSoleQueryVariant(pathname);
+    if (only) return only;
+  }
+
+  const opt = imageEndpointSource(pathname, search);
+  if (opt) {
+    const hit = await resolveFile(opt.pathname, opt.search);
+    if (hit) { IMAGE_ENDPOINT_HITS++; return hit; }
+    // ⚠ The endpoint's `url=` parameter carries the path WITHOUT the query the
+    // origin serves that file under. The mirror stored it query-suffixed
+    // (`x@@dpl=…​.png`) because that is the URL it was fetched by, so an exact
+    // match cannot succeed and the asset looks absent while sitting right
+    // there. Measured: 28 source images across the built site.
+    const any = await resolveAnyQueryVariant(opt.pathname);
+    if (any) { IMAGE_ENDPOINT_HITS++; return any; }
+  }
   return null;
+}
+
+/** Every stored variant of a path, whatever query suffix it was mirrored under. */
+async function queryVariantsOf(pathname) {
+  const clean = path.normalize(decodeURIComponent(pathname));
+  if (clean.split(/[/\\]/).some((seg) => seg === "..")) return [];
+  const ext = path.extname(clean);
+  const base = clean.slice(0, clean.length - ext.length).replace(/^\//, "");
+  const out = [];
+  for (const root of ROOTS) {
+    const dir = path.join(root, path.dirname(base));
+    let names;
+    try { names = await fsp.readdir(dir); } catch { continue; }
+    const stem = path.basename(base) + "@@";
+    for (const n of names) if (n.startsWith(stem) && n.endsWith(ext)) out.push(path.join(dir, n));
+  }
+  return out;
+}
+
+/** Serve a bare request from its ONE stored variant; refuse when ambiguous. */
+async function resolveSoleQueryVariant(pathname) {
+  const v = await queryVariantsOf(pathname);
+  if (v.length !== 1) return null;
+  return statFile(v[0]);
+}
+
+/**
+ * Last resort for the image endpoint: any stored variant will do, because the
+ * endpoint is resolving an INTERFACE and the caller already accepted that the
+ * bytes are the original rather than the origin's resized ones.
+ */
+async function resolveAnyQueryVariant(pathname) {
+  const v = await queryVariantsOf(pathname);
+  return v.length ? statFile(v[0]) : null;
+}
+
+let IMAGE_ENDPOINT_HITS = 0;
+
+/**
+ * Map an image-optimisation request onto the source it names.
+ * Returns null when this is not one, so the ordinary 404 stands.
+ */
+function imageEndpointSource(pathname, search) {
+  if (!/\/_next\/image$|\/_next\/image\/$/.test(pathname)) return null;
+  const q = new URLSearchParams(search.replace(/^\?/, ""));
+  const src = q.get("url");
+  if (!src) return null;
+  // `url` may be same-origin (`/_next/static/media/x.png`) or an absolute URL on
+  // a mirrored host, which localises the same way every other reference does.
+  if (/^https?:\/\//i.test(src)) {
+    try {
+      const u = new URL(src);
+      const local = EXT_HOSTS.includes(u.hostname) ? `/ext/${u.hostname}${u.pathname}` : u.pathname;
+      return { pathname: local, search: u.search };
+    } catch { return null; }
+  }
+  const at = src.indexOf("?");
+  return at < 0 ? { pathname: src, search: "" } : { pathname: src.slice(0, at), search: src.slice(at) };
 }
 
 async function resolveOne(pathname) {
