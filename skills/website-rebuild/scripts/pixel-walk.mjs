@@ -35,13 +35,34 @@ const OUT = flag("out", "docs/pixelcompare");
 const MAX_MEAN = flag("max-mean", null);
 const SELF = args.includes("--self");
 const FMT = flag("format", "jpeg"), Q = flag("quality", "92");
+// How long after load to RE-ISSUE the scroll. Virtual milliseconds: the shim
+// replaces setTimeout with a pumped queue, so this lands after the page's own
+// init has run rather than at some wall-clock moment.
+const RESCROLL_MS = Number(flag("rescroll-ms", "1500"));
 if (!A || !B) { console.error("usage: pixel-walk.mjs --a <rebuild-url> --b <mirror-url> [--steps N] [--pump dt,frames] [--max-mean N] [--self]"); process.exit(2); }
 if (STEPS < 2) { console.error("FATAL — --steps must be >= 2. One checkpoint is the problem this tool exists to fix."); process.exit(2); }
 
-// ⛔ Scroll at load, before the pump budget is spent, so the engine sees the
-// position for the whole frame sequence rather than jumping at the end.
+// ⛔ Scroll TWICE: at load, and again after the page's own init has run.
+//
+// One scroll at load looks sufficient and is not. A page whose init resets the
+// scroll position — restoring a saved offset, mounting a scroll controller,
+// calling scrollTo(0,0) itself — SWALLOWS the one issued at load, and every
+// checkpoint then photographs the top of the page. Measured on a target where
+// eight desktop checkpoints across two pages were all the same frame while the
+// gate reported them as passes: the two sides agreed because both were showing
+// the same wrong thing.
+//
+// ⚠ The re-issue rides the pump, not the wall clock, so it still lands after
+// init on a frozen page.
 const seedFor = (f) =>
-  `window.addEventListener("load", () => { const m = document.documentElement.scrollHeight - innerHeight; window.scrollTo(0, Math.round(m * ${f})); });`;
+  `window.addEventListener("load", () => {
+     var go = function () {
+       var m = document.documentElement.scrollHeight - innerHeight;
+       window.scrollTo(0, Math.round(m * ${f}));
+     };
+     go();
+     setTimeout(go, ${RESCROLL_MS});
+   });`;
 
 const run = (a) =>
   new Promise((res) => {
@@ -82,21 +103,42 @@ for (let i = 0; i < STEPS; i++) {
 
 // ⛔ Checkpoints that all photograph the same frame are one checkpoint repeated.
 // The colour census is the cheapest evidence that the page actually moved.
-const distinct = new Set(rows.filter((r) => r.colours != null).map((r) => r.colours));
+const withFrames = rows.filter((r) => r.colours != null);
+const distinct = new Set(withFrames.map((r) => r.colours));
 console.log("");
-// ⛔ Zero counts as "did not move" too. Guarding only on `=== 1` let a run where
-// every checkpoint FAILED print "the walk moved the page" underneath a column of
-// failures — a reassuring sentence in the middle of a total failure.
 if (distinct.size === 0) {
   console.log(`FATAL — no checkpoint produced a frame at all. Nothing below is a measurement.`);
   process.exit(5);
 }
-if (distinct.size === 1 && rows.length > 1) {
-  console.log(`FATAL — every checkpoint captured a frame with the same colour count (${[...distinct][0]}).`);
-  console.log(`        The scroll driving did not move the page, so this is one checkpoint run ${rows.length} times.`);
+
+// ⛔ "Some checkpoints differ" is not "every checkpoint is its own state". A
+// GLOBAL distinct count passes while a SUBSET is stuck: nine checkpoints, three
+// of them the same frame, still reports "7 distinct" and a reassuring sentence.
+// The duplicates are the ones that matter — each cost a full capture and
+// measured a state that was already measured.
+//
+// ⚠ Equal colour counts are strong evidence of an identical frame, not proof.
+// So report them as duplicates to explain, and FAIL only when they dominate: a
+// page really can look the same at two positions (a tall flat footer), but half
+// the walk collapsing is the signature of scroll never landing.
+const byColour = new Map();
+for (const r of withFrames) byColour.set(r.colours, (byColour.get(r.colours) || []).concat(r.name));
+const dupeGroups = [...byColour.values()].filter((g) => g.length > 1);
+const dupeCheckpoints = dupeGroups.reduce((t, g) => t + g.length - 1, 0);
+
+console.log(`  ${distinct.size} distinct frame(s) across ${withFrames.length} checkpoint(s)`);
+if (dupeGroups.length) {
+  console.log(`  ⚠    ${dupeCheckpoints} checkpoint(s) repeat a frame already captured:`);
+  for (const g of dupeGroups) console.log(`         ${g.join(" = ")}`);
+  console.log(`       Either the page really is identical there, or the scroll did not land —`);
+  console.log(`       a page that resets scroll in its own init swallows the one issued at load.`);
+  console.log(`       ⛔ Until each is explained, this walk covers ${distinct.size} states, not ${withFrames.length}.`);
+}
+if (withFrames.length > 1 && distinct.size <= Math.ceil(withFrames.length / 2)) {
+  console.log(`\nFATAL — ${distinct.size} distinct frame(s) out of ${withFrames.length} checkpoint(s): at most half`);
+  console.log(`        the walk moved the page. Re-check the driving before reading any number above.`);
   process.exit(5);
 }
-console.log(`  ${distinct.size} distinct frame(s) across ${rows.length} checkpoint(s) — the walk moved the page.`);
 
 const means = rows.filter((r) => r.meanAbsDiff != null).map((r) => r.meanAbsDiff);
 if (means.length) {
