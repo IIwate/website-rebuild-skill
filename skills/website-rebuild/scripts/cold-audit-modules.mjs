@@ -173,10 +173,17 @@ const review = [...dynamic];
 dynamic = [];   // question 2 does not decide the exit code; see the header
 // ⛔⛔ COVERAGE IS ITS OWN VERDICT, independent of whether anything was found.
 // Written as an `else if` on the review branch, it was skipped entirely whenever
-// a single call site looked suspicious: examine 1 of 20 modules, hit one
-// candidate, print the review, leave `dynamic` empty, exit 0 green. That is the
-// same failure the comment below was written to close, surviving on the other
-// branch. A gate hanging off an `else` is not a gate.
+// any call site looked suspicious. Measured on a real chunk (lights,
+// module-map-b30f9f2, 65 modules): 48 examined = 73.8%, well under the gate,
+// four review candidates printed, `dynamic` left empty, exit 0 PASS.
+//
+// ⚠ And the four candidates that switched the gate off were all FALSE POSITIVES
+// — `n(r)`, `n(new Error("http status code: " + f.statusCode))` and friends, a
+// node-style error-first callback that survives the arity and `new` heuristics
+// below. So the gate was not traded away for a finding; it was traded away for
+// noise. That is the whole argument for keeping the two verdicts independent:
+// the advisory branch must never be able to decide the exit code, not even by
+// accident. A gate hanging off an `else` is not a gate.
 // ⚠ Revisit 0.8 only after reading noReqCount. If a packer legitimately emits
 // many factories with no require binding, the question is whether there was
 // anything to look at — not whether the threshold is too strict.
