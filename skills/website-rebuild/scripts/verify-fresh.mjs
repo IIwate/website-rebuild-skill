@@ -22,21 +22,40 @@
 import { readFile, mkdtemp, rm } from "node:fs/promises";
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
+import { existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 
+// ⛔ NOT hardcoded. These three paths named one project's shape for several
+// releases, which is how a gate ends up FATAL on a port that is merely built
+// differently. A whole-site port has NO bundle step at all: it ships the
+// packer's own chunks verbatim, and this gate's whole subject is absent.
+const args = process.argv.slice(2);
+const flag = (n, d) => { const i = args.indexOf("--" + n); return i >= 0 && args[i + 1] !== undefined ? args[i + 1] : d; };
 const sha = (b) => createHash("sha256").update(b).digest("hex");
-const DIST = path.resolve("dist/site.js");
-const SERVED = path.resolve("site/_next/static/chunks/site.port.js");
+const ENTRY = path.resolve(flag("entry", "src/index.js"));
+const DIST = path.resolve(flag("dist", "dist/site.js"));
+const SERVED = path.resolve(flag("served", "site/_next/static/chunks/site.port.js"));
 
 let fail = 0;
 console.log("=== verify-fresh ===");
 
+// ⭐ A gate that examined nothing must SAY it examined nothing. Exiting 0 in
+// silence and exiting 0 after checking everything look identical from the
+// outside, and only one of them means anything.
+if (!existsSync(ENTRY)) {
+  console.log(`  note — ${path.relative(process.cwd(), ENTRY)} does not exist, so this port has no bundle step`);
+  console.log(`         and nothing for this gate to regenerate. The equivalent coverage for a`);
+  console.log(`         verbatim-chunk port is slice-modules --check plus build-site --check.`);
+  console.log(`\nSKIPPED — no bundle step in this port. Pass --entry to point at one.`);
+  process.exit(0);
+}
+
 const tmp = await mkdtemp(path.join(tmpdir(), "fresh-"));
-const rebuilt = path.join(tmp, "site.js");
-const r = spawnSync("npx", ["esbuild", "src/index.js", "--bundle", "--format=iife", `--outfile=${rebuilt}`], { encoding: "utf8" });
+const rebuilt = path.join(tmp, path.basename(DIST));
+const r = spawnSync("npx", ["esbuild", ENTRY, "--bundle", "--format=iife", `--outfile=${rebuilt}`], { encoding: "utf8" });
 if (r.status !== 0) {
-  console.error(`FATAL — rebuilding src/ failed:\n${(r.stderr || "").split("\n").slice(0, 12).join("\n")}`);
+  console.error(`FATAL — rebuilding ${path.relative(process.cwd(), ENTRY)} failed:\n${(r.stderr || "").split("\n").slice(0, 12).join("\n")}`);
   process.exit(5);
 }
 
