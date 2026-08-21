@@ -63,13 +63,75 @@ if (STEPS < 2) { console.error("FATAL — --steps must be >= 2. One checkpoint i
 // init on a frozen page.
 const seedFor = (f) =>
   `window.addEventListener("load", () => {
+     // ⛔ FIND THE SCROLLER. The document is not always what scrolls. A site
+     // using a smooth-scroll library often scrolls an inner
+     // \`overflow-y: auto\` container, and there
+     // \`documentElement.scrollHeight - innerHeight\` is ZERO — so a seed that
+     // scrolls the document computes 0 * f = 0 for EVERY checkpoint and drives
+     // nothing. Measured: five checkpoints, five captures, one position, and
+     // meanAbsDiff inside the band at all of them. Only the duplicate-frame
+     // report showed it.
+     var pick = function () {
+       var doc = document.scrollingElement || document.documentElement;
+       if (doc.scrollHeight - doc.clientHeight > 200) return doc;
+       var best = null, gap = 200;
+       var all = document.querySelectorAll("*");
+       for (var i = 0; i < all.length; i++) {
+         var e = all[i], g = e.scrollHeight - e.clientHeight;
+         if (g <= gap) continue;
+         var ov = getComputedStyle(e).overflowY;
+         if (ov === "auto" || ov === "scroll") { best = e; gap = g; }
+       }
+       return best || doc;
+     };
      var go = function () {
-       var m = document.documentElement.scrollHeight - innerHeight;
-       window.scrollTo(0, Math.round(m * ${f}));
+       var el = pick();
+       var m = el.scrollHeight - el.clientHeight;
+       // ⛔ Nothing to scroll is a FACT the gate must see, not a silent 0.
+       var target = Math.round(m * ${f});
+       if (m > 0) {
+         if (el === document.scrollingElement || el === document.documentElement) window.scrollTo(0, target);
+         else el.scrollTop = target;
+       }
+       // ⛔ RECORD WHERE IT ACTUALLY LANDED. A smooth-scroll library owns the
+       // scroll value and re-asserts it, so setting scrollTop is a REQUEST, not
+       // a result — and the two sides then settle at different positions while
+       // the gate compares their pixels as if they matched. Measured: the same
+       // checkpoint gave meanAbsDiff 115 because one side was elsewhere.
+       // ⭐ A driver that quietly reports the wrong position costs far more than
+       // one that throws (verification-gates.md §2.1.1).
+       var landed = (el === document.scrollingElement || el === document.documentElement)
+         ? Math.round(window.scrollY) : Math.round(el.scrollTop);
+       window.__walkScroll = { tag: el.tagName, max: m, target: target, landed: landed };
      };
      go();
      setTimeout(go, ${RESCROLL_MS});
    });`;
+
+// Re-applied after every pump chunk, so it takes effect as soon as the scroller
+// exists. ⚠ Idempotent by construction: it recomputes the target each time.
+const driveFor = (f) => `
+  var doc = document.scrollingElement || document.documentElement;
+  var el = null;
+  if (doc.scrollHeight - doc.clientHeight > 200) el = doc;
+  else {
+    var best = null, gap = 200, all = document.querySelectorAll("*");
+    for (var i = 0; i < all.length; i++) {
+      var e = all[i], g = e.scrollHeight - e.clientHeight;
+      if (g <= gap) continue;
+      var ov = getComputedStyle(e).overflowY;
+      if (ov === "auto" || ov === "scroll") { best = e; gap = g; }
+    }
+    el = best;
+  }
+  if (el) {
+    var m = el.scrollHeight - el.clientHeight;
+    var t = Math.round(m * ${f});
+    if (el === doc) window.scrollTo(0, t); else el.scrollTop = t;
+    window.__walkScroll = { tag: el.tagName, max: m, target: t,
+      landed: (el === doc) ? Math.round(window.scrollY) : Math.round(el.scrollTop) };
+  }
+`;
 
 const run = (a) =>
   new Promise((res) => {
@@ -90,10 +152,15 @@ for (let i = 0; i < STEPS; i++) {
   const f = i / (STEPS - 1);
   const name = `walk-${String(Math.round(f * 100)).padStart(3, "0")}`;
   const a = ["--a", A, "--b", B, "--name", name, "--pump", PUMP, "--seed", seedFor(f), "--out", OUT, "--format", FMT, "--quality", Q];
+  // ⭐ Drive INSIDE the pump loop, not from a load-time seed: on a site whose
+  // scroll container appears only after its preloader, a seed fires too early
+  // and every checkpoint lands at 0.
+  a.push("--drive", driveFor(f));
   if (SETTLE) a.push("--settle", SETTLE);
   if (READY) a.push("--ready", READY);
   if (SELF) a.push("--self");
   const { code, out } = await run(a);
+  // Landing positions, reported by the seed on each side.
   const m = out.match(/\{"meanAbsDiff":[^}]+\}/);
   const census = out.match(/REBUILD: (\d+) colours/);
   if (!m) {

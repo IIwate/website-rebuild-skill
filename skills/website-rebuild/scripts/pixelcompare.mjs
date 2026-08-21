@@ -111,6 +111,15 @@ if (FORMAT !== 'png' && (!Number.isInteger(QUALITY) || QUALITY < 1 || QUALITY > 
 const EXT = FORMAT === 'jpeg' ? 'jpg' : FORMAT;
 const SETTLE = Number(flag('settle', 6000));
 const READY = flag('ready', null);
+// ⛔ A LOAD-TIME SEED CANNOT DRIVE A PAGE WHOSE TARGET DOES NOT EXIST YET.
+// Measured: a site whose scroll container is created only after its preloader
+// finishes. The seed ran at `load`, found `scrollHeight - clientHeight === 0`,
+// and scrolled to 0 — at every checkpoint. Driving and readiness co-evolve, so
+// the driver has to live in the same interleaved loop as the pump.
+//
+// --drive is an expression re-evaluated after EVERY pump chunk. Write it
+// idempotently: it will run many times.
+const DRIVE = flag('drive', null);
 // --pump "dt,frames": drive the determinism shim from here instead of smuggling
 // a call into --ready. probe-shim.js's header says "from a CDP probe call
 // window.__pump(dt, frames)" and this script had no way to do it, so the frozen
@@ -320,6 +329,7 @@ function shotFatal(label, err) {
   process.exit(4);
 }
 
+let landA = null, landB = null;
 async function capture(url, label) {
   await cdp('Page.navigate', { url });
   // ⛔ --ready is NOT a pre-pump wait. Checking it before the pump can only ever
@@ -377,6 +387,7 @@ async function capture(url, label) {
     let readyAt = null;
     for (let done = 0; done < total; done += chunk) {
       await evalJs(`(window.__pump(${dt || 16.7}, ${Math.min(chunk, total - done)}), true)`);
+      if (DRIVE) await evalJs(`(function(){ try { ${DRIVE} } catch (e) { return "ERR:" + e; } return true; })()`);
       if (READY && readyAt === null) {
         const r = await evalJs(READY);
         if (r === true || r === 'true') {
@@ -397,6 +408,14 @@ async function capture(url, label) {
       process.exit(6);
     }  } else {
     await new Promise((resolve) => setTimeout(resolve, SETTLE)); // settle: transitions + fade-ins
+  }
+  // Where the scroll actually settled on this side, as recorded by the seed.
+  {
+    const raw = await evalJs(`JSON.stringify(window.__walkScroll || null)`).catch(() => null);
+    try {
+      const v = typeof raw === 'string' ? JSON.parse(raw) : null;
+      if (v) { if (label === LABEL_A) landA = v; else landB = v; }
+    } catch {}
   }
   let data;
   try {
@@ -475,7 +494,19 @@ const census = await evalJs(`(async () => {
 })()`);
 {
   const { a, b } = JSON.parse(census);
-  console.log(`[pixel] frame census — ${LABEL_A}: ${a.colours} colours, dominant ${a.dominantPct}%  |  ${LABEL_B}: ${b.colours} colours, dominant ${b.dominantPct}%`);
+  // ⛔ Both sides must have landed at the SAME scroll position. The seed records
+// where the scroll actually settled; a smooth-scroll library can drag it
+// elsewhere, and then this gate compares two different parts of the page and
+// reports the difference as a porting defect.
+if (landA && landB && Math.abs(landA.landed - landB.landed) > 4) {
+  console.error(`[pixel] FATAL: the two sides settled at different scroll positions —`);
+  console.error(`        A landed ${landA.landed} of ${landA.max}, B landed ${landB.landed} of ${landB.max} (target ${landA.target}).`);
+  console.error(`        Comparing them measures the page, not the port. Drive through whatever owns`);
+  console.error(`        scrolling on this site and assert the landing before capturing.`);
+  chrome.reap();
+  process.exit(6);
+}
+console.log(`[pixel] frame census — ${LABEL_A}: ${a.colours} colours, dominant ${a.dominantPct}%  |  ${LABEL_B}: ${b.colours} colours, dominant ${b.dominantPct}%`);
   const blank = (x) => x.colours < 64 || x.dominantPct > 97;
   if (blank(a) || blank(b)) {
     console.error(
