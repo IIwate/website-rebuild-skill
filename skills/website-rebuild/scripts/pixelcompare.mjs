@@ -494,7 +494,23 @@ const census = await evalJs(`(async () => {
 })()`);
 {
   const { a, b } = JSON.parse(census);
-  // ⛔ Both sides must have landed at the SAME scroll position. The seed records
+  // ⭐ SAY WHERE THIS WAS MEASURED. A gate that reports a number without saying
+// what state produced it invites the reader to assume the intended state. And an
+// assertion whose inputs are missing is silently inert — printing them is how
+// you find out it never ran, rather than believing it passed.
+if (DRIVE || landA || landB) {
+  const fmt = (l) => (l ? `${l.tag} ${l.landed}/${l.max} (target ${l.target})` : "NOT RECORDED");
+  console.log(`[pixel] measured at — A: ${fmt(landA)}   B: ${fmt(landB)}`);
+  if (DRIVE && (!landA || !landB)) {
+    console.error(`[pixel] FATAL: --drive was given but at least one side recorded no landing.`);
+    console.error(`        The driver never ran, or never found anything to drive. Any number below`);
+    console.error(`        is a comparison of two states nobody chose.`);
+    chrome.reap();
+    process.exit(6);
+  }
+}
+
+// ⛔ Both sides must have landed at the SAME scroll position. The seed records
 // where the scroll actually settled; a smooth-scroll library can drag it
 // elsewhere, and then this gate compares two different parts of the page and
 // reports the difference as a porting defect.
