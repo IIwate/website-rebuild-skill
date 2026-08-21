@@ -322,7 +322,17 @@ function shotFatal(label, err) {
 
 async function capture(url, label) {
   await cdp('Page.navigate', { url });
-  if (READY) await waitFor(() => evalJs(READY), 120000, label + ' ready');
+  // ⛔ --ready is NOT a pre-pump wait. Checking it before the pump can only ever
+  // express "ready without any driving", and on a frozen page the states worth
+  // waiting for are exactly the ones the pump has to produce: a preloader that
+  // finishes, a WebGL canvas that gets sized. Waiting first simply hangs — 120 s
+  // for a condition whose precondition has not run yet.
+  //
+  // ⭐ So --ready is the PUMP LOOP'S EXIT CONDITION (below): pump until the page
+  // reaches the state, capped by the frame budget. Fast when the state arrives
+  // early, and honest when it never does. Without --pump it keeps its old
+  // meaning, because then there is nothing to drive.
+  if (READY && !PUMP) await waitFor(() => evalJs(READY), 120000, label + ' ready');
   if (PUMP) {
     // ⭐ INTERLEAVED WITH REAL TIME, not one burst after the settle.
     //
@@ -364,11 +374,28 @@ async function capture(url, label) {
     const total = frames || 60;
     const chunk = Math.max(1, Math.ceil(total / 40));
     const gap = Math.max(20, Math.floor(SETTLE / Math.ceil(total / chunk)));
+    let readyAt = null;
     for (let done = 0; done < total; done += chunk) {
       await evalJs(`(window.__pump(${dt || 16.7}, ${Math.min(chunk, total - done)}), true)`);
+      if (READY && readyAt === null) {
+        const r = await evalJs(READY);
+        if (r === true || r === 'true') {
+          readyAt = done + chunk;
+          console.log(`[pixel]   ${label}: ready after ${readyAt} pumped frame(s) — stopping early`);
+          break;
+        }
+      }
       await new Promise((r) => setTimeout(r, gap));
     }
-  } else {
+
+    if (READY && readyAt === null) {
+      // ⚠ Say it. A capture taken before the page reached its state is a capture
+      // of the loading screen, and two of those agree perfectly.
+      console.error(`[pixel] FATAL: ${label} never satisfied --ready within ${total} pumped frame(s).`);
+      console.error(`        Raise --pump frames or --settle, or fix the predicate — do NOT compare this frame.`);
+      chrome.reap();
+      process.exit(6);
+    }  } else {
     await new Promise((resolve) => setTimeout(resolve, SETTLE)); // settle: transitions + fade-ins
   }
   let data;

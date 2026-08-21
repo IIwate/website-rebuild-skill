@@ -94,7 +94,7 @@ for (const m of mods) {
   const text = (m.startChar != null && m.endChar != null)
     ? src.slice(m.startChar, m.endChar)
     : lines.slice(m.startLine - 1, m.endLine).join("\n");
-  parts.push({ id: m.id, from: m.startLine, to: m.endLine, lines: m.lines, text });
+  parts.push({ id: m.id, aliases: m.aliases || [], from: m.startLine, to: m.endLine, lines: m.lines, text });
 }
 
 const header = [
@@ -204,9 +204,16 @@ if (packer === "turbopack") {
   // ⛔ Each entry is `<id>, <factory>` — the container is a flat alternating
   // list, so emitting only the factories produces a chunk the runtime reads as
   // ids and drops on the floor.
-  const tBody = parts.map((p) =>
-    `\n// ===== ${path.relative(process.cwd(), IN)} L${p.from}-L${p.to}  (${p.lines} lines) =====\n${p.id}, ${p.text}`
-  ).join(",\n");
+  // ⛔ Emit EVERY id the module answers to. A Turbopack entry can be
+  // `id, id, …, id, factory` — several ids sharing one body. Emitting only the
+  // canonical one leaves the others unregistered, and the runtime throws
+  // "module <alias> … the module factory is not available" from a chunk that
+  // otherwise slices byte-identically.
+  const tBody = parts.map((p) => {
+    const ids = [...(p.aliases || []), p.id].join(", ");
+    const note = (p.aliases || []).length ? `  (also answers to ${p.aliases.join(", ")})` : "";
+    return `\n// ===== ${path.relative(process.cwd(), IN)} L${p.from}-L${p.to}  (${p.lines} lines)${note} =====\n${ids}, ${p.text}`;
+  }).join(",\n");
   out = tHeader + tBody + "\n]);\n";
 } else {
   out = FORMAT === "classic"

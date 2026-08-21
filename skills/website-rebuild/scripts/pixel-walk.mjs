@@ -39,6 +39,13 @@ const FMT = flag("format", "jpeg"), Q = flag("quality", "92");
 // replaces setTimeout with a pumped queue, so this lands after the page's own
 // init has run rather than at some wall-clock moment.
 const RESCROLL_MS = Number(flag("rescroll-ms", "1500"));
+// ⚠ Passed straight through to pixelcompare. A site whose readiness has no cheap
+// observable needs a wall-clock settle, and that is a deviation from
+// "settle must be a page state" (§2.2) that has to be stated, not hidden in a
+// default: measured on one target, the states available before a renderable
+// frame (canvas sized, preloader removed) are all TOO EARLY.
+const SETTLE = flag("settle", null);
+const READY = flag("ready", null);
 if (!A || !B) { console.error("usage: pixel-walk.mjs --a <rebuild-url> --b <mirror-url> [--steps N] [--pump dt,frames] [--max-mean N] [--self]"); process.exit(2); }
 if (STEPS < 2) { console.error("FATAL — --steps must be >= 2. One checkpoint is the problem this tool exists to fix."); process.exit(2); }
 
@@ -83,6 +90,8 @@ for (let i = 0; i < STEPS; i++) {
   const f = i / (STEPS - 1);
   const name = `walk-${String(Math.round(f * 100)).padStart(3, "0")}`;
   const a = ["--a", A, "--b", B, "--name", name, "--pump", PUMP, "--seed", seedFor(f), "--out", OUT, "--format", FMT, "--quality", Q];
+  if (SETTLE) a.push("--settle", SETTLE);
+  if (READY) a.push("--ready", READY);
   if (SELF) a.push("--self");
   const { code, out } = await run(a);
   const m = out.match(/\{"meanAbsDiff":[^}]+\}/);
