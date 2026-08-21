@@ -42,6 +42,9 @@ const OWN = flag("own", "").split(",").map((x) => x.trim()).filter(Boolean);
 const BUILD_OUT = flag("build-out", OWN[0] || "/app.js");
 const EXTERNALS = flag("externals", "").split(",").map((x) => x.trim()).filter(Boolean);
 const SERVE_PORT = flag("serve-port", "6190");
+const STUB_HOSTS = flag("stub-ext-hosts", "").split(",").map((x) => x.trim()).filter(Boolean);
+const EXT_HOSTS_FLAG = flag("ext-hosts", "").split(",").map((x) => x.trim()).filter(Boolean);
+const ORIGIN_HOST_FLAG = flag("origin-host", "");
 // The deliverable's own name: the project directory unless told otherwise.
 const NAME = flag("name", path.basename(process.cwd()).replace(/-rebuild$/, "") + "-src");
 const PUBLIC = path.join(OUT, "public");
@@ -231,7 +234,16 @@ await writeFile(path.join(OUT, "package.json"), JSON.stringify({
     // ⭐ The deliverable ships its own server. readable-source.md §2.4: without a
     // verification hook travelling with it, "it builds" is the whole of what can
     // be said about a copy — and building is not running.
-    serve: `node serve.mjs --root public --port ${SERVE_PORT}`,
+    // ⛔ THE COPY'S SERVER MUST BE CONFIGURED LIKE THE PROJECT'S. serve.mjs is
+    // not a plain static server: --stub-ext-hosts is what answers a stubbed
+    // third-party script with an empty body instead of letting the page fetch
+    // it. Shipping the server without the flag produces a deliverable that
+    // makes outbound calls the in-repo copy does not — the same failure shape
+    // as shipping serve.mjs without probe-shim.js, one layer over.
+    serve: `node serve.mjs --root public --port ${SERVE_PORT}` +
+      (EXT_HOSTS_FLAG.length ? ` --ext-hosts ${EXT_HOSTS_FLAG.join(",")}` : "") +
+      (STUB_HOSTS.length ? ` --stub-ext-hosts ${STUB_HOSTS.join(",")}` : "") +
+      (ORIGIN_HOST_FLAG ? ` --origin-host ${ORIGIN_HOST_FLAG}` : ""),
   },
   ...(OWN.length ? { devDependencies: { esbuild: "^0.25.0" } } : {}),
 }, null, 2) + "\n");

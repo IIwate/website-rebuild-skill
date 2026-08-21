@@ -319,6 +319,14 @@ export function createRefExtractor({ origin, originHost, assetHosts, onOffHost }
   const ORIGIN = String(origin || "").replace(/\/+$/, "");
 
   const addIfAsset = (rawUrl, urls) => {
+    // ⛔ A TEMPLATE PREFIX IS NOT AN ADDRESS. A URL assembled at runtime —
+    //     `https://cdn.jsdelivr.net/npm/${pkg}@${ver}/dist/x.wasm`
+    // scans statically as everything up to the first `${`, and that fragment is
+    // an INVENTED reference in exactly the way a push-boundary truncation is:
+    // it 404s, and the ledger keeps a hole for a URL that never existed.
+    // ⭐ The real one is only visible to a capture pass, which is where this
+    // asset was in fact found.
+    if (/\$\{|\$$/.test(rawUrl)) return;
     try {
       const u = new URL(rawUrl);
       if (!hosts.has(u.hostname)) return void offHost(u.hostname, u.href);
