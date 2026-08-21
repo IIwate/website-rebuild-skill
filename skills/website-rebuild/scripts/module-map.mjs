@@ -126,6 +126,14 @@ const [, members] = [...byOwner].sort((a, b) => b[1].length - a[1].length)[0] ||
 // unrelated `key: function` properties elsewhere in the file and reports
 // success. See the plausibility check at the end: a container that explains
 // almost none of the require calls in the file is not the container.
+// ⛔ The container has a PROLOGUE. After currentScript come bare numeric ids
+// with no factory — the chunk's declared dependencies, ids it needs another
+// chunk to have provided. They are not modules, and dropping them from a
+// re-emitted chunk breaks LOAD ORDER: the runtime evaluates a module whose
+// dependency has not registered yet and throws
+// "module N ... the module factory is not available", from a stack that points
+// at the port and says nothing about a missing header.
+const turboDeps = [];
 const turbo = [];
 for (let i = 0; i + 2 < T.length; i++) {
   if (lab(i) !== "name" || val(i) !== "TURBOPACK") continue;
@@ -144,6 +152,11 @@ for (let i = 0; i + 2 < T.length; i++) {
     if (d === 1 && lab(k) === "num" && lab(k + 1) === ",") {
       const after = lab(k + 2);
       if (after === "(" || after === "name" || after === "function") turbo.push({ id: String(val(k)), fi: k + 2 });
+      // A bare id whose next element is another id is a dependency, not a
+      // module. ⚠ Only before the first module: `void 0` in the currentScript
+      // expression also lexes as a num, and ids inside a factory body are at
+      // greater depth so they never reach here.
+      else if (after === "num" && turbo.length === 0 && String(val(k)).length >= 3) turboDeps.push(String(val(k)));
     }
   }
   break;
@@ -361,7 +374,12 @@ console.log(`  container: ${containerKind === "TurbopackChunk" ? "turbopack chun
 // Say so rather than letting "more lines inside modules than in the file" read
 // as a bug in the reader.
 if (total > fileLines) console.log(`  ⚠    module spans overlap by ${total - fileLines} line(s): in a flat list one line closes a module and opens the next`);
-console.log(`  tokenized by acorn@${ACORN_VERSION} (pinned, spawned — not imported)\n`);
+console.log(`  tokenized by acorn@${ACORN_VERSION} (pinned, spawned — not imported)`);
+if (containerKind === "TurbopackChunk" && turboDeps.length) {
+  console.log(`  chunk declares ${turboDeps.length} cross-chunk dependency id(s): ${turboDeps.join(", ")}`);
+  console.log(`  ⚠ these are the container's PROLOGUE — a re-emitted chunk must carry them or load order breaks`);
+}
+console.log("");
 console.log(`  largest modules:`);
 for (const m of mods.slice(0, 12)) {
   console.log(`    ${String(m.lines).padStart(5)} lines  id=${String(m.id).padEnd(4)} L${String(m.startLine).padStart(5)}-${String(m.endLine).padEnd(5)}  requires ${m.requires.length}  ${m.exportNames.slice(0, 4).join(", ")}`);
@@ -418,6 +436,7 @@ await writeFile(OUT, JSON.stringify({
   source: path.relative(process.cwd(), IN),
   container: containerKind,
   properties: entries.length,
+  chunkDeps: containerKind === "TurbopackChunk" ? turboDeps : [],
   shadowedDivergent: [...new Set(divergent.map((m) => m.id))],
   modules: mods,
 }, null, 2) + "\n");

@@ -472,8 +472,16 @@ async function resolveFile(pathname, search = "") {
 
 async function resolveOne(pathname) {
   // Reject traversal before touching the filesystem.
-  const clean = path.normalize(decodeURIComponent(pathname)).replace(/^(\.\.[/\\])+/, "");
-  if (clean.includes("..")) return null;
+  //
+  // ⛔ Traversal is a path SEGMENT equal to `..`, not the two-character
+  // substring. A `includes("..")` guard also rejects perfectly legal filenames:
+  // Next.js content hashes produce names like
+  // `5053fba55258321d-s.p.10w.ec_utoj...woff2`, and this server answered 404 for
+  // three real fonts that were sitting on disk. ⚠ The symptom arrives far from
+  // the cause — as missing fonts, then as "GSAP target not found" for elements
+  // that never got laid out.
+  const clean = path.normalize(decodeURIComponent(pathname));
+  if (clean.split(/[/\\]/).some((seg) => seg === "..")) return null;
 
   for (const root of ROOTS) {
     if (clean.startsWith("/ext/")) {

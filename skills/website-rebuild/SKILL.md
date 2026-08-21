@@ -3,7 +3,7 @@ name: website-rebuild
 description: 1:1 rebuild of award-winning creative websites (WebGL / scroll-animation / portfolio sites). Evidence-driven pipeline - mirror-first forensics, line-number-traceable reverse engineering of minified bundles, verbatim porting, quantitative verification gates. Use when user asks to "复刻网站", "重建网站", "1:1 rebuild", "clone this site", or provides a URL of a creative/award site to reproduce.
 compatibility: Requires Node 22+ (bundled scripts use built-in WebSocket to talk to CDP), npx, and a local Chrome/Chromium for headless comparison. POSIX shell optional - the Step 0 probe protocol has a zero-dependency Node equivalent (scripts/fingerprint.mjs) for shells without curl/cmp/tr/perl (e.g. Windows PowerShell). Agent-agnostic - works in any Agent Skills-compatible runtime.
 metadata:
-  version: "0.1.53"
+  version: "0.1.54"
 ---
 
 # Website Rebuild（获奖创意站 1:1 复刻）
@@ -34,7 +34,8 @@ metadata:
 **有条件支持（B 类）**：管线成立但需要额外场景处理（Shopify 平台层剥离、第三方存储桶资产、运行时 API 快照、SSG payload 展开）。v0.1 提供的指南覆盖部分 B 类场景，遇到未覆盖的要向用户明示风险。
 
 **明确拒绝（C/D 类）**：
-- **C**：签名行为存放在声明式组件树里（React RSC flight 流、R3F + Theatre.js、重度 Vue/Nuxt 编译产物且客户端 chunk 不含行为源）——本 skill 的"转写式移植"对其失效，需要另一套"重构式逆向"方法论（未实现）。
+- **C1（仍然拒绝）**：组件源**根本不下发**——React RSC 服务端组件只下发 flight 序列化结果，客户端没有可转写的目标物。
+- **C2（可做，按 A 类跑）**：⭐ 写法是声明式但**源码下发**（R3F / Theatre / Vue SFC 编译产物）。实测一个 R3F 站：`useFrame` 回调里就是 `MathUtils.damp(x, y, 7, t)` 这样的普通命令式代码，逐字切片 18 个模块换进页面后 **CLEAN、8 个 canvas 齐全、跨侧 99.5%**。**切片器不关心范式——它切的是字节。** 渲染器当平台层从镜像伺服。⛔ 判别器不是库名，是「客户端是否持有行为源」（`scope-and-fingerprint.md` §4.0.1）。
 - **D**：行为主体在服务端（CMS 内容站、电商 cart/库存、A/B 实验分桶、个性化注水）——客户端没有可移植的目标物，且确定性验收无基准。
 
 **X 类**：原站已消失（域名易主 / 平台回收 / 路径移除 / 原地被替换）。引导用户提供 Wayback 快照或换目标。历年获奖站实测消失率约 29%——这也是"第一时间镜像"是本 skill 第一纪律的原因。

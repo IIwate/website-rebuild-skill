@@ -73,6 +73,22 @@ Step 0 依据"81 处 `requestAnimationFrame`、0 处 `gsap`"判为"自研命令�
 
 ⛔ **两个读取器必须都跑完再裁决，不能让第一个先 exit。** 第一版把 Turbopack 探测放在 webpack 分支之后，而 webpack 分支找不到容器时直接 `process.exit`——于是一个 Turbopack chunk 因为"webpack 形状的属性不足两处"被判成无容器，而它的容器就在第 1 行。⚠ 更糟的是：**其余 chunk 之所以能通过，只是因为它们恰好含有两处不相干的 `key: function`**——那是巧合，不是代码路径。
 
+⛔⛔ **Turbopack 容器有一段前言，必须原样带走。** `currentScript` 之后、第一个 id/工厂对之前，是一串**裸 id 没有工厂**——这个 chunk 声明的跨 chunk 依赖：
+
+```js
+push([currentScript, 66256, 68812, 48737, 20852, e => { … }, …])
+//                   ~~~~~~~~~~~~~~~~~~~  前言：依赖 id
+```
+
+⚠ 它们不是模块（读取器正确地跳过了），但**切片器把它们丢掉就会破坏加载时序**：运行时在依赖尚未注册时就求值某个模块，抛
+
+```
+Module 66256 was instantiated because it was required from module 42195,
+but the module factory is not available.
+```
+
+⛔ **报错的栈指着移植产物，一个字都不会提"少了个头"**——而且它**不在加载时失败，在求值时才失败**，所以静态门全绿。判别方式：容器数组里，`num` 后面跟着另一个 `num` 的是依赖，后面跟着函数的才是模块。
+
 ⭐ 副产品：**Turbopack 只给站点自有模块写导出名，vendor 模块没有。** 实测 192 个模块里 18 个有导出名，而这 18 个恰好就是站点自己的组件（`HeroSection` / `Navigation` / `PricingSection` …）。这比任何"按体积/按目录"的启发式都干净——**分层证据由打包器直接给出**。
 
 ⭐ **模块化打包产物的模块边界与依赖边是给定的**——打包器已经写下了它们。实测一个 24,378 行的 bundle：**569 个不同模块**（容器里 597 条属性，28 条被同名键遮蔽），181 个叶子、416 个有依赖，最大 1,544 行，`requires` 直接可读。
