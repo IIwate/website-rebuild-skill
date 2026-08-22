@@ -57,7 +57,7 @@
 //      rewritten into /ext/ but deliberately not mirrored).
 
 import http from "node:http";
-import { rewriteFlight, hasFlight } from "./lib/flight.mjs";
+import { rewriteFlight, repairFlightRows, hasFlight } from "./lib/flight.mjs";
 import fs from "node:fs";
 import fsp from "node:fs/promises";
 import path from "node:path";
@@ -181,6 +181,11 @@ const STUB_EXT_HOSTS = [
 
 // File extensions whose responses are eligible for external-host rewriting.
 const TEXT_REWRITE = new Set([".html", ".css", ".js", ".mjs", ".json", ".svg"]);
+
+// A length-prefixed flight row at a line start, in a payload with no push
+// wrapper to spot. Narrow on purpose: no `T<hex>` header means no declared
+// length, and the blanket rewrite is safe there.
+const RAW_FLIGHT_ROW = /(^|\n)[0-9a-f]+:T[0-9a-f]+,/;
 
 const isTextContentType = (ct) => {
   if (!ct) return false;
@@ -409,10 +414,18 @@ function rewrite(text, ext) {
   // each row's content to rewriteText() on its own and re-declares the length.
   // If the blanket pass below reached those rows it would shorten them without
   // touching the prefix, which is the corruption this exists to prevent.
-  if (ext === ".html" && hasFlight(text)) {
+  // ⛔ KEYED ON THE CONTENT, NOT THE EXTENSION. This fork also rewrites
+  // extension-less responses whose Content-Type says text, and a mirror stores
+  // a route as an extension-less file routinely — so an `ext === ".html"` guard
+  // leaves exactly the documents it exists to protect on the blanket path.
+  if (hasFlight(text)) {
     const done = rewriteFlight(text, (t) => rewriteText(t, ext));
     if (done !== null) return done;
   }
+  // ⭐ The SAME payload arrives UNWRAPPED as well: an RSC response is the bare
+  // row stream with no push literals to find, and it is mirrored extension-less
+  // (`text/x-component`). The rows carry their own length either way.
+  if (RAW_FLIGHT_ROW.test(text)) return repairFlightRows(text, (t) => rewriteText(t, ext)).text;
   return rewriteText(text, ext);
 }
 

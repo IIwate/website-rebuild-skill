@@ -2,7 +2,7 @@
 
 ## Differences from Upstream
 
-This package is a fork of [boyang-hu/website-rebuild-skill](https://github.com/boyang-hu/website-rebuild-skill), merged up to and including upstream v0.1.60. It records only what differs from upstream; for what the skill is and how to run it, read `skills/website-rebuild/SKILL.md`.
+This package is a fork of [boyang-hu/website-rebuild-skill](https://github.com/boyang-hu/website-rebuild-skill), merged up to and including upstream v0.1.68. It records only what differs from upstream; for what the skill is and how to run it, read `skills/website-rebuild/SKILL.md`.
 
 ### Engineering additions
 
@@ -15,7 +15,7 @@ Capability this fork adds for real deployment environments (WSL2, Docker, Linux 
 - expands `scripts/module-map.mjs` with Webpack 4/5 JSONP chunk container parsing (`/(?:webpackJsonp|webpackChunk)/i`), ESM export helpers (`__webpack_require__.d`), and second-parameter CommonJS export extraction;
 - enhances CLI ergonomy for `verify-mirror.mjs` (`--root` alias, default `external.txt` excuses) and `verify-offline.mjs` (`--url` single-URL shortcut);
 - provides generic SPA interactive navigation and hydration gate templates (`assets/templates/verify-spa-navigation.mjs` and `navigation.config.example.mjs`) with continuous rAF animation pumping and opacity stability verification;
-- refactors `scripts/serve.mjs` text rewriting to check Content-Type headers for extension-less files, eliminating binary corruption risks for extension-less WASM and data slices;
+- refactors `scripts/serve.mjs` text rewriting to check Content-Type headers for extension-less files, eliminating binary corruption risks for extension-less WASM and data slices — and, because that widening carries the rewrite into a class upstream never rewrites, re-keys upstream's v0.1.61 length-prefix guard from `ext === ".html"` onto the content itself (`hasFlight(text)`) and adds a `repairFlightRows` path for the bare, push-less RSC row stream, which is mirrored extension-less under `text/x-component`. Left as upstream wrote it, the guard would have missed exactly the documents it exists to protect: a route stored without an extension is the ordinary case, and the failure it prevents shows zero 404s, zero request failures and an identical byte count;
 - adds `?__probe&__noio` to `scripts/probe-shim.js`, leaving `IntersectionObserver` native while the rest of the determinism shim still applies, so a run can be compared against itself with and without the IO takeover.
 
 ### Upstream defect corrections
