@@ -286,6 +286,26 @@ const MAYBE_ENCODED = /\\+[/"']|\\+u00[23]|&(?:#[0-9a-fA-F]|amp|quot|apos|sol|co
  *
  * Returns `(text, baseUrl) => Set<absolute url>`.
  */
+/**
+ * Concatenate a document's streamed flight payload into the one string the
+ * client actually parses, so a scanner never sees a push boundary. Returns null
+ * when the document has no such payload.
+ *
+ * ⚠ The pushes are REPLACED, not appended: appending would leave the truncated
+ * spellings in the text and the phantoms would survive alongside the real URLs.
+ */
+export function joinFlightPushes(text) {
+  const PUSH = /self\.__next_f\.push\(\[1,("(?:[^"\\]|\\.)*")\]\)/g;
+  let m, stream = "", first = -1, last = -1;
+  while ((m = PUSH.exec(text))) {
+    if (first < 0) first = m.index;
+    last = m.index + m[0].length;
+    try { stream += JSON.parse(m[1]); } catch { return null; }
+  }
+  if (first < 0) return null;
+  return text.slice(0, first) + stream + text.slice(last);
+}
+
 export function createRefExtractor({ origin, originHost, assetHosts, onOffHost }) {
   const hosts = assetHosts instanceof Set ? assetHosts : new Set(assetHosts || []);
   // Every reference to a host NOT on the list is reported through onOffHost so
@@ -299,6 +319,14 @@ export function createRefExtractor({ origin, originHost, assetHosts, onOffHost }
   const ORIGIN = String(origin || "").replace(/\/+$/, "");
 
   const addIfAsset = (rawUrl, urls) => {
+    // ⛔ A TEMPLATE PREFIX IS NOT AN ADDRESS. A URL assembled at runtime —
+    //     `https://cdn.jsdelivr.net/npm/${pkg}@${ver}/dist/x.wasm`
+    // scans statically as everything up to the first `${`, and that fragment is
+    // an INVENTED reference in exactly the way a push-boundary truncation is:
+    // it 404s, and the ledger keeps a hole for a URL that never existed.
+    // ⭐ The real one is only visible to a capture pass, which is where this
+    // asset was in fact found.
+    if (/\$\{|\$$/.test(rawUrl)) return;
     try {
       const u = new URL(rawUrl);
       if (!hosts.has(u.hostname)) return void offHost(u.hostname, u.href);
@@ -363,6 +391,35 @@ export function createRefExtractor({ origin, originHost, assetHosts, onOffHost }
         else if (ref.startsWith("/")) addIfAsset(ORIGIN + ref, urls);
       }
     }
+    // 4b. A REFERENCE NESTED IN ANOTHER URL'S QUERY. An image-optimisation
+    // endpoint names its subject in a parameter:
+    //
+    //     /_next/image?url=%2F_next%2Fstatic%2Fmedia%2Fpic_3.0w8q….png&w=2048&q=75
+    //
+    // ⛔ An extractor that treats a URL as atomic sees ONE reference here — the
+    // endpoint — and never asks for the image. Measured on eightdesign: 8
+    // source images referenced only this way, absent from the mirror, and the
+    // closure gate green throughout because nothing ever named them. They
+    // surfaced only when the built site's references were replayed against the
+    // server.
+    //
+    // ⭐ The parameter names are the ones endpoints actually use; a value that
+    // does not look like a reference is skipped by addIfAsset anyway.
+    for (const m of text.matchAll(/[?&](?:url|src|image|file|path|href|u)=([^&"'\s<>\\]+)/gi)) {
+      // ⚠ ")" is ALLOWED in the value and trimmed only when UNBALANCED. The
+      // first version excluded it outright and truncated six references whose
+      // filename really contains "(1).jpg" — manufacturing exactly the kind of
+      // phantom this file exists to stop, in the shape added to stop another
+      // one. A "(" ... ")" that balances belongs to the name; a lone trailing
+      // ")" is the CSS url(...) closing delimiter.
+      let raw = m[1];
+      while (raw.endsWith(")") && (raw.match(/\(/g) || []).length < (raw.match(/\)/g) || []).length) raw = raw.slice(0, -1);
+      let inner = raw;
+      try { inner = decodeURIComponent(inner); } catch {}
+      if (/^https?:\/\//i.test(inner)) addIfAsset(inner, urls);
+      else if (inner.startsWith("/") && /\.[a-z0-9]{2,5}$/i.test(inner.split("?")[0])) addIfAsset(ORIGIN + inner, urls);
+    }
+
     // 5. relative url(...) inside CSS
     if (baseUrl && /\.css($|\?)/i.test(baseUrl)) {
       for (const m of text.matchAll(/url\(\s*['"]?(?!data:|https?:|\/\/)([^'")]+)['"]?\s*\)/gi)) {
@@ -375,14 +432,36 @@ export function createRefExtractor({ origin, originHost, assetHosts, onOffHost }
 
   return function extractAssetUrls(text, baseUrl) {
     const urls = new Set();
-    scan(text, baseUrl, urls);
+    // ⛔ A STREAMED PAYLOAD IS CUT AT ARBITRARY POINTS, INCLUDING MID-URL.
+    // Next.js delivers its flight payload as a run of
+    // `self.__next_f.push([1,"…"])` calls, and the split lands wherever the
+    // encoder's buffer ended — routinely inside a URL. Scanning the raw HTML
+    // therefore reads FRAGMENTS, and a fragment is not a miss: it is an
+    // INVENTED reference. Measured here:
+    //
+    //   .../media/1f9dadf367424346-s.p.04        (tail cut off)
+    //   https://host/static/media/9010da…        ("/_next" was in the push before)
+    //   https://host/9dc1a6fb114b646f-s.p…       (the whole path prefix was)
+    //
+    // The crawler then fetches those, gets 404, and writes 17 failed rows that
+    // look exactly like real missing assets — permanent gaps in the ledger for
+    // URLs that never existed. ⭐ Reassemble first: the client concatenates
+    // before parsing, so push boundaries carry no meaning and removing them
+    // loses nothing.
+    // ⛔ REPLACES the raw scan, never joins it. Scanning both would re-add every
+    // truncated spelling alongside the whole one, which is the phantom this
+    // exists to remove — and the reassembled text keeps everything outside the
+    // pushes verbatim, so nothing is lost by scanning it alone.
+    const joined = joinFlightPushes(text);
+    const view = joined === null ? text : joined;
+    scan(view, baseUrl, urls);
     // Second pass over the decoded view. Guarded, so files with no escaping at
     // all pay one regex test; unioned, so the raw pass can never LOSE a
     // reference to the decoding (that would be the same bug pointing the other
     // way).
-    if (MAYBE_ENCODED.test(text)) {
-      const decoded = decodeUrlEscapes(decodeEntities(text));
-      if (decoded !== text) scan(decoded, baseUrl, urls);
+    if (MAYBE_ENCODED.test(view)) {
+      const decoded = decodeUrlEscapes(decodeEntities(view));
+      if (decoded !== view) scan(decoded, baseUrl, urls);
     }
     return urls;
   };

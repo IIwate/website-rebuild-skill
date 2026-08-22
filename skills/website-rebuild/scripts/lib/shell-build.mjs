@@ -8,6 +8,7 @@
 //
 // ⛔ NO SIDE EFFECTS IN THIS FILE OR IN A PROJECT'S shell-config.mjs. The gate
 // imports both, and a gate must never import a module that produces what it
+import { rewriteFlight, hasFlight } from "./flight.mjs";
 // audits (§2.1.2).
 
 const esc = (s) => String(s).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
@@ -46,7 +47,39 @@ export function localizeShapes(text, host, to, onHit = () => {}) {
   // trailing-slash form) while the build produced `href=""`, so the two
   // localisation implementations disagreed AND one of them was wrong.
   const bare = to || "/";
-  return text
+
+  // ⛔ A URL IN A TEXT POSITION IS CONTENT, NOT AN ADDRESS. Localisation is
+  // about where the browser goes; it must not change what the page SAYS.
+  //
+  // Measured on eightdesign, on exactly one of 115 routes — an article about the
+  // site's own relaunch, which prints the address it is talking about:
+  //
+  //     <a href="https://host/">https://host/</a>
+  //
+  // The href must be localised. The anchor TEXT must not: rewriting it made the
+  // page read "こちら /" instead of naming the site. Both sides were stable and
+  // differed by 25 characters, which is how a whole-site sweep earns its cost —
+  // a blanket transform that is right 114 times changes meaning on the 115th.
+  //
+  // ⚠ Narrow on purpose. Only the two spellings where a text position is
+  // UNAMBIGUOUS are protected: an HTML text node (`>URL<`) and a serialised
+  // payload's children field (`"children":"URL"`). Anything less certain is
+  // left to the transform, because a guard that guesses is worse than none.
+  const GUARDS = [
+    new RegExp(`>\\s*https?://${h}[^<]*<`, "g"),
+    new RegExp(`"children":"https?://${h}[^"]*"`, "g"),
+    new RegExp(`\\\\"children\\\\":\\\\"https?://${h}[^\\\\"]*\\\\"`, "g"),
+  ];
+  const held = [];
+  for (const re of GUARDS) {
+    text = text.replace(re, (m) => {
+      held.push(m);
+      return `\u0000TEXTURL${held.length - 1}\u0000`;
+    });
+  }
+  const restore = (out) => out.replace(/\u0000TEXTURL(\d+)\u0000/g, (_, i) => held[Number(i)]);
+
+  return restore(text
     .replace(new RegExp(`https?://${h}(?=/)`, "g"), hit("absolute", to))
     .replace(new RegExp(`https?://${h}(?!/)`, "g"), hit("absolute-bare", bare))
     .replace(new RegExp(`https?:\\\\/\\\\/${h}`, "g"), hit("escaped-absolute", toEsc))
@@ -54,7 +87,7 @@ export function localizeShapes(text, host, to, onHit = () => {}) {
     .replace(new RegExp(`https?:${U_RE}${U_RE}${h}(?!${U_RE})`, "gi"), hit("unicode-absolute-bare", toU || U))
     .replace(new RegExp(`(?<!:)\\\\/\\\\/${h}`, "g"), hit("escaped-protocol-relative", toEsc))
     .replace(new RegExp(`(?<!:)${U_RE}${U_RE}${h}`, "gi"), hit("unicode-protocol-relative", toU))
-    .replace(new RegExp(`(?<!:)//${h}`, "g"), hit("protocol-relative", to));
+    .replace(new RegExp(`(?<!:)//${h}`, "g"), hit("protocol-relative", to)));
 }
 
 /** The bytes T-NOINDEX inserts. Exported because verify-shell sees that hunk as
@@ -85,26 +118,52 @@ export function transformPage(html, cfg, { head = true } = {}) {
   // shape hurts most: nothing requests those URLs until the page happens to,
   // so a load-time probe reports zero outbound while ten latent ones sit in the
   // blob.
-  for (const host of cfg.originHosts || []) {
-    out = localizeShapes(out, host, "", (shape) => {
-      bump("T-LOCALIZE");
-      bumpSub(`origin.${shape}:${host}`);
-    });
-  }
-  for (const host of [...(cfg.stubExtHosts || []), ...(cfg.mirroredExtHosts || [])]) {
-    out = localizeShapes(out, host, `/ext/${host}`, (shape) => {
-      bump("T-LOCALIZE");
-      bumpSub(`ext.${shape}:${host}`);
-    });
-  }
+  const localizeAll = (text) => {
+    let o = text;
+    for (const host of cfg.originHosts || []) {
+      o = localizeShapes(o, host, "", (shape) => {
+        bump("T-LOCALIZE");
+        bumpSub(`origin.${shape}:${host}`);
+      });
+    }
+    for (const host of [...(cfg.stubExtHosts || []), ...(cfg.mirroredExtHosts || [])]) {
+      o = localizeShapes(o, host, `/ext/${host}`, (shape) => {
+        bump("T-LOCALIZE");
+        bumpSub(`ext.${shape}:${host}`);
+      });
+    }
+    return o;
+  };
+  // ⛔ Where the document carries a LENGTH-PREFIXED payload, the localisation
+  // must go through lib/flight.mjs — it rewrites each row's content on its own
+  // and re-declares the length. Applied blanket, the same six shapes shorten
+  // rows whose `T<hex>` still claims the old count, and the page dies inside
+  // React's parser with no 404 and no failed request to point at it. Measured
+  // here: 17 of 115 built pages, invisible to every other gate.
+  out = (hasFlight(out) ? rewriteFlight(out, localizeAll) : null) ?? localizeAll(out);
 
   // --- site-specific transforms ---------------------------------------------
-  for (const t of cfg.transforms || []) {
-    out = t.apply(out, {
-      bump: (n = 1) => bump(t.id, n),
-      sub: (k, n = 1) => bumpSub(`${t.id}:${k}`, n),
-    });
-  }
+  // ⛔ THESE GO THROUGH THE LENGTH-AWARE PATH TOO. It is not only localisation
+  // that edits a length-prefixed payload: the thing that had to be deleted here
+  // was a `<link rel="preload" href="https://www.googletagmanager.com/…">`
+  // sitting INSIDE a flight row, and deleting it blanket-style shortens the row
+  // exactly the way a URL rewrite does. Any edit is an edit.
+  //
+  // ⚠ Each transform therefore sees the document one REGION at a time (the gaps
+  // between pushes, and each row's content). A transform that needs to count
+  // across the whole document must do its own accounting; registering the count
+  // floor per transform id already works that way.
+  const applyTransforms = (text) => {
+    let o = text;
+    for (const t of cfg.transforms || []) {
+      o = t.apply(o, {
+        bump: (n = 1) => bump(t.id, n),
+        sub: (k, n = 1) => bumpSub(`${t.id}:${k}`, n),
+      });
+    }
+    return o;
+  };
+  out = (hasFlight(out) ? rewriteFlight(out, applyTransforms) : null) ?? applyTransforms(out);
 
   // --- T-NOINDEX -------------------------------------------------------------
   if (head && cfg.notice) {

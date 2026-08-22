@@ -30,6 +30,7 @@
  *   node tools/name-modules.mjs [--closure docs/slice-closure.json] [--out docs/module-names.json]
  */
 import fs from "node:fs";
+import path from "node:path";
 import { parse } from "@babel/parser";
 import _traverse from "@babel/traverse";
 const traverse = _traverse.default ?? _traverse;
@@ -398,6 +399,10 @@ for (const r of results) {
     : "no evidence — keeps its id (readable-source.md: never invent a name)";
 }
 
+// ⛔ The output directory may not exist yet. A tool whose FIRST run cannot
+// succeed is a tool nobody can start using — and the crash names the output
+// path, which reads like a missing input.
+fs.mkdirSync(path.dirname(path.resolve(OUT)), { recursive: true });
 fs.writeFileSync(OUT, JSON.stringify({ source: MAP.source, seed: CLO.seed, modules: results }, null, 2) + "\n");
 
 const byTier = new Map();

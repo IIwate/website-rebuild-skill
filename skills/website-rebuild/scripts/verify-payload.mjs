@@ -61,15 +61,73 @@ const SHAPES = [
   { name: "nuxt3", re: /<script[^>]*id="__NUXT_DATA__"[^>]*>([\s\S]*?)<\/script>/ },
 ];
 
+// The push shape every Next.js App Router page streams its payload through.
+const FLIGHT_PUSH = /self\.__next_f\.push\(\[1,("(?:[^"\\]|\\.)*")\]\)/g;
+
 function extract(html) {
   for (const s of SHAPES) {
     const m = html.match(s.re);
     if (m) return { shape: s.name, src: m[1].trim() };
   }
+  // ⭐ React flight — what every Next.js App Router page ships, and the most
+  // common serialised-payload shape in the wild. This gate exists to compare a
+  // payload's MEANING across sides, and it did not recognise the payload most
+  // targets have: the two Nuxt shapes were the whole of its vocabulary.
+  FLIGHT_PUSH.lastIndex = 0;
+  let m, stream = "", pushes = 0;
+  while ((m = FLIGHT_PUSH.exec(html))) {
+    pushes++;
+    try { stream += JSON.parse(m[1]); } catch { return null; }
+  }
+  if (pushes) return { shape: `flight(${pushes} pushes)`, src: stream };
   return null;
 }
 
+/**
+ * Expand a flight stream into `{"<id>:<tag>": value}`.
+ *
+ * ⭐ Flight is not a JS expression, so it cannot be evaluated the way Nuxt's
+ * payload is — but each ROW's content is JSON, so expanding row-wise puts it in
+ * exactly the shape paths() already understands. A difference is then reported
+ * as a row and a path, not as "these two 230 KB strings differ".
+ *
+ * ⛔ Length-prefixed rows are walked BY THEIR DECLARED LENGTH. Splitting on
+ * newlines instead reads a T row's own newlines as row boundaries — the text is
+ * length-delimited precisely because it may contain them.
+ */
+function expandFlight(stream) {
+  const buf = Buffer.from(stream, "utf8");
+  const out = {};
+  let i = 0, n = 0;
+  const put = (key, val) => { out[key in out ? `${key}#${n}` : key] = val; };
+  while (i < buf.length) {
+    const nl = buf.indexOf(0x0a, i);
+    const comma = buf.indexOf(0x2c, i);
+    const lineEnd = nl < 0 ? buf.length : nl;
+    if (comma >= 0 && comma < lineEnd) {
+      const m2 = /^([0-9a-f]*):T([0-9a-f]+)$/i.exec(buf.subarray(i, comma).toString("utf8"));
+      if (m2) {
+        const stop = Math.min(comma + 1 + parseInt(m2[2], 16), buf.length);
+        put(`${m2[1]}:T`, buf.subarray(comma + 1, stop).toString("utf8"));
+        n++; i = stop;
+        continue;
+      }
+    }
+    const line = buf.subarray(i, lineEnd).toString("utf8");
+    i = lineEnd + 1;
+    if (!line) continue;
+    const m3 = /^([0-9a-f]*):([A-Z]?)([\s\S]*)$/.exec(line);
+    if (!m3) { put(`raw:${n}`, line); n++; continue; }
+    let val = m3[3];
+    if (/^[[{"]/.test(m3[3])) { try { val = JSON.parse(m3[3]); } catch {} }
+    put(`${m3[1]}:${m3[2]}`, val);
+    n++;
+  }
+  return out;
+}
+
 function expand(found) {
+  if (found.shape.startsWith("flight")) return expandFlight(found.src);
   if (found.shape === "nuxt3") return JSON.parse(found.src);
   // nuxt2: an IIFE that returns the object. Evaluated, not re-implemented.
   return new Function(`return (${found.src})`)();
@@ -151,12 +209,53 @@ for (const route of ROUTES) {
 
   const onlyA = [...pA.keys()].filter((k) => !pB.has(k));
   const onlyB = [...pB.keys()].filter((k) => !pA.has(k));
-  const diff = [...pA.keys()].filter((k) => pB.has(k) && pA.get(k) !== pB.get(k));
+  const allDiff = [...pA.keys()].filter((k) => pB.has(k) && pA.get(k) !== pB.get(k));
+
+  // ⭐ CLASSIFY the mismatches instead of accepting or rejecting them wholesale.
+  // A port legitimately changes URLs and asset paths — localisation, and one
+  // transform per chunk. It does NOT legitimately change what the payload SAYS.
+  // Blanking every URL-shaped span on both sides separates the two, and does it
+  // WITHOUT the transform table: a gate that replayed the table would be
+  // agreeing with the builder rather than checking it (§2.1.2).
+  // ⛔ ONE placeholder for both spellings. The first version used \0URL\0 for an
+  // absolute URL and \0PATH\0 for a root-relative one — so LOCALISATION ITSELF,
+  // the transform this gate is meant to tolerate, came out as a content
+  // difference. Two placeholders is two classes; there is only one thing here.
+  // Two steps, in this order:
+  //   1. strip scheme+host, so an absolute URL and its localised form become the
+  //      SAME path — including the extensionless ones (`/eight-journal/x`),
+  //      which a path-with-extension pattern never matches and which made 52 of
+  //      115 routes look like content changes;
+  //   2. blank any path that carries an extension, so a chunk substitution
+  //      (`x.js` -> `x.port.js`) reads as the same reference.
+  //
+  // ⚠ This gate cannot tell a URL that is an ADDRESS from a URL that is
+  // CONTENT — an anchor whose visible text is the address it links to
+  // normalises to the same thing either way. That distinction belongs to the
+  // render comparison, which is where it was actually found
+  // (verification-gates.md §4.10). Here it would pass, and saying so is part of
+  // knowing what this PASS is worth.
+  const blankPaths = (v) =>
+    String(v)
+      .replace(/https?:\/\/[^\s"'/]+/g, "")
+      // `/ext/<host>/…` is the serving convention for a mirrored or stubbed
+      // external host. It is the same reference wearing the local spelling, and
+      // a classifier that does not know it reports every one as content.
+      .replace(/\/ext\/[^\s"'/]+/g, "")
+      .replace(/\/[\w./~@%+-]*\.[a-z0-9]{2,5}(?:\?[^\s"']*)?/gi, "\u0000REF\u0000");
+  const pathOnly = [], contentDiff = [];
+  for (const k of allDiff) (blankPaths(pA.get(k)) === blankPaths(pB.get(k)) ? pathOnly : contentDiff).push(k);
+  if (pathOnly.length) {
+    console.log(`  ok   ${pathOnly.length} value(s) differ ONLY inside a URL or asset path — e.g. ${pathOnly[0]}`);
+    console.log(`         A: ${String(pA.get(pathOnly[0])).slice(0, 78)}`);
+    console.log(`         B: ${String(pB.get(pathOnly[0])).slice(0, 78)}`);
+  }
+  const diff = contentDiff;
   if (onlyA.length || onlyB.length || diff.length) {
-    fail(`${route} — payload structures differ: ${onlyA.length} only-in-A, ${onlyB.length} only-in-B, ${diff.length} value mismatch(es)`);
+    fail(`${route} — payload structures differ: ${onlyA.length} only-in-A, ${onlyB.length} only-in-B, ${diff.length} value mismatch(es) OUTSIDE any URL`);
     for (const k of [...onlyA.slice(0, 3), ...onlyB.slice(0, 3)]) console.log(`         path only on one side: ${k}`);
     for (const k of diff.slice(0, 5)) console.log(`         ${k}\n           A: ${String(pA.get(k)).slice(0, 80)}\n           B: ${String(pB.get(k)).slice(0, 80)}`);
-  } else ok(`${route} — payload identical across sides (${pA.size} leaf paths)`);
+  } else ok(`${route} — payload agrees across sides (${pA.size} leaf paths; every difference is a URL or asset path)`);
 }
 
 console.log(failures ? `\nFAIL — ${failures} payload problem(s).` : `\nPASS — 0 payload problem(s).`);
