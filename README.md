@@ -2,7 +2,7 @@
 
 ## Differences from Upstream
 
-This package is a fork of [boyang-hu/website-rebuild-skill](https://github.com/boyang-hu/website-rebuild-skill), merged up to and including upstream v0.1.60. It records only what differs from upstream; for what the skill is and how to run it, read `skills/website-rebuild/SKILL.md`.
+This package is a fork of [boyang-hu/website-rebuild-skill](https://github.com/boyang-hu/website-rebuild-skill), merged up to and including upstream v0.1.68. It records only what differs from upstream; for what the skill is and how to run it, read `skills/website-rebuild/SKILL.md`.
 
 ### Engineering additions
 
@@ -15,7 +15,7 @@ Capability this fork adds for real deployment environments (WSL2, Docker, Linux 
 - expands `scripts/module-map.mjs` with Webpack 4/5 JSONP chunk container parsing (`/(?:webpackJsonp|webpackChunk)/i`), ESM export helpers (`__webpack_require__.d`), and second-parameter CommonJS export extraction;
 - enhances CLI ergonomy for `verify-mirror.mjs` (`--root` alias, default `external.txt` excuses) and `verify-offline.mjs` (`--url` single-URL shortcut);
 - provides generic SPA interactive navigation and hydration gate templates (`assets/templates/verify-spa-navigation.mjs` and `navigation.config.example.mjs`) with continuous rAF animation pumping and opacity stability verification;
-- refactors `scripts/serve.mjs` text rewriting to check Content-Type headers for extension-less files, eliminating binary corruption risks for extension-less WASM and data slices;
+- extends `scripts/serve.mjs` text rewriting to extension-less files, whose type is decided by **sniffing the bytes** rather than by a header: a mirror stores no response headers — `inventory.tsv` is SHA256/BYTES/PATH/URL — so the bytes are the only evidence there is. The sniff is `sniffTextBytes` **imported from `lib/extract-refs.mjs`**, the same predicate `verify-mirror` uses to decide which files to scan for references; a private copy here (the first version was one, stricter: fatal UTF-8 decode) disagrees on text that is not valid UTF-8, and the disagreement reads as the ledger claiming a reference is localised while the bytes going out still carry the absolute URL. ⚠ The first version of this asked the response's own `content-type`, which is computed as `MIME[ext] || "application/octet-stream"` and is therefore a **constant** for the one case it was consulted for; it answered "not text" every time and the branch never executed. **A check whose input is derived from its own condition is not a check**, and it failed silently — the files went out unrewritten exactly as before, and no gate looks at a mirrored API cache. Because this widening carries the rewrite into a class upstream never rewrites, it also re-keys upstream's v0.1.61 length-prefix guard from `ext === ".html"` onto the content itself (`hasFlight(text)`) and adds a `repairFlightRows` path for the bare, push-less RSC row stream, which is mirrored extension-less. Left as upstream wrote it, the guard would miss exactly the documents it exists to protect: the failure it prevents shows zero 404s, zero request failures and an identical byte count;
 - adds `?__probe&__noio` to `scripts/probe-shim.js`, leaving `IntersectionObserver` native while the rest of the determinism shim still applies, so a run can be compared against itself with and without the IO takeover.
 
 ### Upstream defect corrections

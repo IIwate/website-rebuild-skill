@@ -57,7 +57,8 @@
 //      rewritten into /ext/ but deliberately not mirrored).
 
 import http from "node:http";
-import { rewriteFlight, hasFlight } from "./lib/flight.mjs";
+import { rewriteFlight, repairFlightRows, hasFlight } from "./lib/flight.mjs";
+import { sniffTextBytes } from "./lib/extract-refs.mjs";
 import fs from "node:fs";
 import fsp from "node:fs/promises";
 import path from "node:path";
@@ -182,18 +183,44 @@ const STUB_EXT_HOSTS = [
 // File extensions whose responses are eligible for external-host rewriting.
 const TEXT_REWRITE = new Set([".html", ".css", ".js", ".mjs", ".json", ".svg"]);
 
-const isTextContentType = (ct) => {
-  if (!ct) return false;
-  const mime = ct.toLowerCase().split(";")[0].trim();
-  return (
-    mime.startsWith("text/") ||
-    mime === "application/json" ||
-    mime === "application/javascript" ||
-    mime === "application/xml" ||
-    mime.endsWith("+json") ||
-    mime.endsWith("+xml")
-  );
-};
+// A length-prefixed flight row at a line start, in a payload with no push
+// wrapper to spot. Narrow on purpose: no `T<hex>` header means no declared
+// length, and the blanket rewrite is safe there.
+const RAW_FLIGHT_ROW = /(^|\n)[0-9a-f]+:T[0-9a-f]+,/;
+
+// ⛔ AN EXTENSION-LESS FILE'S TYPE IS DECIDED BY ITS BYTES, NOT BY ITS HEADER.
+// This test used to read the response's own content-type, which is computed one
+// line above it as `MIME[ext] || "application/octet-stream"` — so for the only
+// case it was ever consulted for (`ext === ""`) it was asking about a constant,
+// answered "not text" every time, and the whole extension-less branch never ran
+// once. ⚠ A CHECK WHOSE INPUT IS DERIVED FROM ITS OWN CONDITION IS NOT A CHECK.
+// It cost nothing visible: the files went out unrewritten, exactly as they did
+// before the branch was added, and no gate looks at a mirrored API cache.
+//
+// ⭐ The mirror stores no response headers (inventory.tsv is SHA256/BYTES/PATH/
+// URL), so sniffing the bytes is the only evidence available — and the sniff
+// is IMPORTED, not written here. lib/extract-refs.mjs owns this predicate for
+// the reason lib/flight.mjs owns localisation: verify-mirror decides with it
+// which files to scan for references, and a server that answered the question
+// differently would leave the ledger claiming a reference is localised while
+// the bytes going out still carry the absolute URL. The first version of this
+// was a private stricter copy (fatal UTF-8 decode), which disagreed with the
+// shared one on exactly that class: text that is not valid UTF-8.
+const SNIFF_BYTES = 4096;
+
+async function looksTextual(file) {
+  let fh;
+  try {
+    fh = await fsp.open(file, "r");
+    const buf = Buffer.alloc(SNIFF_BYTES);
+    const { bytesRead } = await fh.read(buf, 0, SNIFF_BYTES, 0);
+    return sniffTextBytes(buf.subarray(0, bytesRead));
+  } catch {
+    return false;
+  } finally {
+    await fh?.close();
+  }
+}
 
 const MIME = {
   ".html": "text/html; charset=utf-8",
@@ -409,10 +436,18 @@ function rewrite(text, ext) {
   // each row's content to rewriteText() on its own and re-declares the length.
   // If the blanket pass below reached those rows it would shorten them without
   // touching the prefix, which is the corruption this exists to prevent.
-  if (ext === ".html" && hasFlight(text)) {
+  // ⛔ KEYED ON THE CONTENT, NOT THE EXTENSION. This fork also rewrites
+  // extension-less responses whose Content-Type says text, and a mirror stores
+  // a route as an extension-less file routinely — so an `ext === ".html"` guard
+  // leaves exactly the documents it exists to protect on the blanket path.
+  if (hasFlight(text)) {
     const done = rewriteFlight(text, (t) => rewriteText(t, ext));
     if (done !== null) return done;
   }
+  // ⭐ The SAME payload arrives UNWRAPPED as well: an RSC response is the bare
+  // row stream with no push literals to find, and it is mirrored extension-less
+  // (`text/x-component`). The rows carry their own length either way.
+  if (RAW_FLIGHT_ROW.test(text)) return repairFlightRows(text, (t) => rewriteText(t, ext)).text;
   return rewriteText(text, ext);
 }
 
@@ -700,7 +735,7 @@ const server = http.createServer(async (req, res) => {
 
     // 4. response-layer text transforms (ext-host rewrite + probe injection)
     const wantsProbe = ext === ".html" && url.searchParams.has("__probe") && PROBE_SHIM;
-    const canRewrite = TEXT_REWRITE.has(ext) || (ext === "" && isTextContentType(headers["content-type"]));
+    const canRewrite = TEXT_REWRITE.has(ext) || (ext === "" && await looksTextual(hit.file));
     if ((canRewrite && (EXT_HOSTS.length || ORIGIN_HOSTS.length)) || wantsProbe) {
       let text = await fsp.readFile(hit.file, "utf8");
       if (EXT_HOSTS.length || ORIGIN_HOSTS.length) text = rewrite(text, ext);
