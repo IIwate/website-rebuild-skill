@@ -15,7 +15,7 @@
  */
 import { readdir, readFile } from "node:fs/promises";
 import path from "node:path";
-import { joinFlightPushes } from "./lib/extract-refs.mjs";
+import { joinFlightPushes, decodeEntities, decodeUrlEscapes } from "./lib/extract-refs.mjs";
 
 const args = process.argv.slice(2);
 const flag = (n, d) => { const i = args.indexOf("--" + n); return i >= 0 ? args[i + 1] : d; };
@@ -34,17 +34,26 @@ const refs = new Set();
 for (const f of files) {
   let t = await readFile(f, "utf8");
   t = joinFlightPushes(t) ?? t;
-  const dec = t.replace(/\\u002[fF]/g, "/").replace(/&amp;/g, "&").replace(/\\"/g, '"');
+  const dec = decodeUrlEscapes(decodeEntities(t));
   for (const src of [t, dec]) {
     // ⚠ ")" allowed, trimmed only when unbalanced — a filename really can be
     // "… (1).jpg", and excluding ")" outright truncates the reference into one
     // the server rightly cannot answer. Same trap as lib/extract-refs.mjs.
     for (const m of src.matchAll(/\/_next\/image\?[^"'\\\s<>]+/g)) {
-      let r = m[0].replace(/&amp;/g, "&");
+      let r = decodeEntities(m[0]);
       while (r.endsWith(")") && (r.match(/\(/g) || []).length < (r.match(/\)/g) || []).length) r = r.slice(0, -1);
       refs.add(r);
     }
-    for (const m of src.matchAll(/"(\/[\w./~@%+-]+\.(?:lottie|json|mp4|webm|ktx2|wasm|glb|hdr|bin|png|jpe?g|gif|svg|webp|avif|woff2?|css|js)(?:\?[^"]*)?)"/gi)) refs.add(m[1]);
+    // ⛔ DECODE THE CAPTURE, NOT JUST THE HAYSTACK. Scanning the raw text and
+    // the decoded text and unioning the two is right for a CLOSURE scan, where
+    // a superset costs one redundant lookup. Here every member of the set
+    // becomes a VERDICT, so the raw pass's spelling of a query separator —
+    // `&amp;w=700`, which in HTML means `&w=700` and nothing else — is asked of
+    // the server as if it were an address, 404s, and is reported as a missing
+    // asset that is sitting right there. Measured on artisansdidees: 44 such
+    // rows, every file present. That is the phantom-reference failure this
+    // toolchain has now met three times, in a gate added to close it.
+    for (const m of src.matchAll(/"(\/[\w./~@%+-]+\.(?:lottie|json|mp4|webm|ktx2|wasm|glb|hdr|bin|png|jpe?g|gif|svg|webp|avif|woff2?|css|js)(?:\?[^"]*)?)"/gi)) refs.add(decodeEntities(m[1]));
   }
 }
 
