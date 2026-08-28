@@ -91,7 +91,16 @@ const has = (name) => args.includes('--' + name);
 // suspected reload loop, a suspected renderer crash, a suspected patched clock
 // — all of it an artifact of one misspelled flag that nothing rejected.
 const KNOWN_FLAGS = new Set(['shot', 'format', 'quality', 'wait', 'scroll', 'walk', 'walk-dwell',
-  'no-external', 'eval', 'evalAfter', 'mobile', 'side', 'cdp-port', 'width', 'height']);
+  'no-external', 'eval', 'evalAfter', 'evalAfterDelay', 'mobile', 'side', 'expect-side',
+  'cdp-port', 'width', 'height']);
+// ⛔ THE ENUMERATION IS ITSELF A CHECK, AND ITS FIRST VERSION WAS WRONG. It
+// shipped without `expect-side` (L166) or `evalAfterDelay` (L421) — two flags
+// this file reads and one of them a documented cross-side assertion — so the
+// fix for a silent ignore FATAL'd on two of its own arguments instead. Same
+// shape as the accident it closes: a second, hand-maintained copy of a fact
+// that already lives in the code, drifting from it. ⚠ Adding a `flag()`/`has()`
+// call here means adding its name above; the audit is one grep:
+//   grep -oE "(flag|has)\('[a-zA-Z-]+'" probe.mjs | sort -u
 {
   const bad = [];
   for (const a of args) {
