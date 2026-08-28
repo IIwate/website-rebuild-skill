@@ -291,6 +291,34 @@ if (wpJsonpEntries.length > 0) {
 // inside it is to check them against the real id set.
 const KNOWN = new Set(entries.map((e) => String(e.id)));
 
+// A packer's module id: a content hash, or a small ordinal. Same judgement
+// cold-audit-modules.mjs makes about literals inside a require call.
+const ID_SHAPE = /^(?:[0-9a-f]{16,}|\d{1,6})$/i;
+
+/**
+ * File one literal from inside a require call.
+ *
+ * ⛔ `KNOWN` WAS DOING TWO JOBS, and dropping it to fix the second broke the
+ * first. Filtering on it kept the SOUNDNESS the conditional-require scan needs —
+ * `reqName(...)` collects every literal at any depth, so `n(new Error("http
+ * status code: " + s))` would otherwise file a sentence as a dependency. But it
+ * also silently narrowed the edge set to THIS CHUNK, and a site's modules
+ * require across chunk boundaries freely (slice-modules.mjs §"ids that live in
+ * OTHER chunks"), so a real cross-chunk edge vanished with no trace — an
+ * assertion over an input the tool itself had shortened.
+ *
+ * ⭐ So: shape decides whether it is an id at all, membership decides which
+ * ledger it lands in. `requires` stays closed over the map, which is what
+ * closure.mjs asserts on; `crossChunkRequires` records the rest so the miss is
+ * REPORTED rather than either dropped or fatal. When a site-wide map exists
+ * (cold-audit-modules.mjs reads `MAP.chunks`), those ids are simply in KNOWN and
+ * this set empties on its own.
+ */
+const addRequire = (v, requires, crossChunk) => {
+  if (KNOWN.has(v)) requires.add(v);
+  else if (ID_SHAPE.test(v)) crossChunk.add(v);
+};
+
 const mods = [];
 for (const { id, fi, aliases = [] } of entries) {
   // ⛔ Three factory shapes, not one. webpack emits `function (m, e, r) {…}`;
@@ -340,6 +368,7 @@ for (const { id, fi, aliases = [] } of entries) {
   const reqName = isTurbo ? null : (params[2] ?? null);
   const ctxName = isTurbo ? (params[0] ?? null) : null;
   const requires = new Set();
+  const crossChunk = new Set();
   const exportNames = new Set();
   let exportsAssigned = 0;
   for (let k = b; k < end; k++) {
@@ -347,7 +376,7 @@ for (const { id, fi, aliases = [] } of entries) {
     if (ctxName && lab(k) === "name" && val(k) === ctxName && lab(k + 1) === "." && lab(k + 2) === "name") {
       const method = val(k + 2);
       if ((method === "i" || method === "r") && lab(k + 3) === "(" && lab(k + 4) === "num") {
-        requires.add(String(val(k + 4)));
+        addRequire(String(val(k + 4)), requires, crossChunk);
         continue;
       }
       if (method === "s" && lab(k + 3) === "(") {
@@ -365,8 +394,15 @@ for (const { id, fi, aliases = [] } of entries) {
       }
     }
 
-    // reqName(<anything>) — collect every literal inside the call that is a module id.
-    // In multi-chunk bundles, dependencies cross chunk boundaries freely.
+    // reqName(<anything>) — collect every literal inside the call, at any depth.
+    //
+    // ⛔ Matching only `reqName("id")` misses a CONDITIONAL require, and this
+    // bundle has one: `i(t ? "c0e8c815…" : "2f021872…")` picks a video-player
+    // implementation by browser and options. Both targets then had no inbound
+    // edge, the closure classified them as dead code, and the port shipped
+    // without them — while a nine-checkpoint pixel walk stayed at 0.00, because
+    // the branch is not taken on the paths that were driven. This is exactly the
+    // hole a list reconciliation exists to find and a functional test cannot.
     if (reqName && lab(k) === "name" && val(k) === reqName && lab(k + 1) === "(") {
       let d = 0;
       for (let j = k + 1; j < end; j++) {
@@ -374,7 +410,7 @@ for (const { id, fi, aliases = [] } of entries) {
         if (l === "(" || l === "[" || l === "{" || l === "${") d++;
         else if (l === ")" || l === "]" || l === "}") { d--; if (d === 0) { k = j; break; } }
         else if (d >= 1 && (l === "string" || l === "num")) {
-          requires.add(String(val(j)));
+          addRequire(String(val(j)), requires, crossChunk);
         }
       }
       continue;
@@ -418,7 +454,7 @@ for (const { id, fi, aliases = [] } of entries) {
   // can hang them on a shadowed body — which makes slice-modules emit an alias
   // pointing at the wrong factory. Same failure text as the bug aliases exist to
   // fix ("the module factory is not available"), one level harder to trace.
-  mods.push({ id, aliases, startLine, endLine, startChar, endChar, lines: endLine - startLine + 1, requires: [...requires], exportsAssigned, exportNames: [...exportNames].slice(0, 12) });
+  mods.push({ id, aliases, startLine, endLine, startChar, endChar, lines: endLine - startLine + 1, requires: [...requires], crossChunkRequires: [...crossChunk], exportsAssigned, exportNames: [...exportNames].slice(0, 12) });
 }
 
 // ⛔ A container can define the same id more than once, and this one does: 597
@@ -486,6 +522,21 @@ console.log(`  tokenized by acorn@${ACORN_VERSION} (pinned, spawned — not impo
 if (containerKind === "TurbopackChunk" && turboDeps.length) {
   console.log(`  chunk declares ${turboDeps.length} cross-chunk dependency id(s): ${turboDeps.join(", ")}`);
   console.log(`  ⚠ these are the container's PROLOGUE — a re-emitted chunk must carry them or load order breaks`);
+}
+// ⭐ The edges that LEAVE this chunk. Printed unconditionally when non-empty:
+// they are absent from `requires` by construction (closure.mjs asserts that set
+// is closed), so without this line the only trace of them is a field in the
+// JSON — and a dependency nobody prints is a dependency nobody ports.
+{
+  const outbound = new Set();
+  for (const m of mods) for (const id of m.crossChunkRequires || []) outbound.add(id);
+  if (outbound.size) {
+    const shown = [...outbound].slice(0, 12).join(", ");
+    console.log(`  ${outbound.size} require target(s) are NOT defined in this file — they live in other chunks:`);
+    console.log(`    ${shown}${outbound.size > 12 ? ` … +${outbound.size - 12} more` : ""}`);
+    console.log(`  ⚠ recorded per module as \`crossChunkRequires\`, kept OUT of \`requires\` so the closure`);
+    console.log(`    stays closed. Porting any of them means mapping their chunk too.`);
+  }
 }
 console.log("");
 console.log(`  largest modules:`);

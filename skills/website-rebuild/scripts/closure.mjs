@@ -67,6 +67,36 @@ if (missing.length) {
 }
 console.log(`  ok   closed — every require resolves inside the set`);
 
+// ⭐ CLOSED IS NOT THE SAME AS COMPLETE. `requires` is closed over this map by
+// construction (module-map.mjs files an id it cannot resolve under
+// `crossChunkRequires` instead), so the assertion above can only ever speak
+// about edges that stay inside the file. The edges that LEAVE it are the ones a
+// port trips over — the runtime throws "module N … the module factory is not
+// available" at evaluation time, from a slice that checked byte-identical.
+// ⚠ Not a failure: a chunk depending on another chunk is normal, and the mirror
+// serves the other chunk verbatim. It is only a failure once someone ports this
+// slice standalone, which is why it prints here rather than deciding the exit
+// code.
+{
+  const outbound = new Map();
+  for (const id of mods) {
+    for (const t of byId.get(id).crossChunkRequires || []) {
+      if (!outbound.has(t)) outbound.set(t, []);
+      outbound.get(t).push(id);
+    }
+  }
+  if (outbound.size) {
+    console.log(`\n  ⚠    ${outbound.size} require target(s) in this closure live in ANOTHER chunk:`);
+    for (const [t, from] of [...outbound].slice(0, 12)) {
+      console.log(`         ${t}   <- ${from.slice(0, 4).join(", ")}${from.length > 4 ? ` … +${from.length - 4}` : ""}`);
+    }
+    if (outbound.size > 12) console.log(`         … ${outbound.size - 12} more`);
+    console.log(`       Either map that chunk too and re-run, or confirm the runtime resolves it from`);
+    console.log(`       a chunk the deliverable ships verbatim. A slice missing one of these is`);
+    console.log(`       byte-identical and still throws at evaluation time.`);
+  }
+}
+
 await mkdir(path.dirname(OUT), { recursive: true });
 await writeFile(OUT, JSON.stringify({ seed, modules: mods }, null, 2) + "\n");
 console.log(`  -> ${path.relative(process.cwd(), OUT)}`);
