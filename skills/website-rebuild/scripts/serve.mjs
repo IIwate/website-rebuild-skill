@@ -58,7 +58,7 @@
 
 import http from "node:http";
 import { rewriteFlight, repairFlightRows, hasFlight } from "./lib/flight.mjs";
-import { sniffTextBytes } from "./lib/extract-refs.mjs";
+import { sniffTextBytes, textRefVerdict } from "./lib/extract-refs.mjs";
 import fs from "node:fs";
 import fsp from "node:fs/promises";
 import path from "node:path";
@@ -207,24 +207,34 @@ for (const root of ROOTS) {
   } catch {}
 }
 
-// ⛔ AN EXTENSION-LESS FILE'S TYPE IS DECIDED BY ITS BYTES, NOT BY ITS HEADER.
-// This test used to read the response's own content-type, which is computed one
-// line above it as `MIME[ext] || "application/octet-stream"` — so for the only
-// case it was ever consulted for (`ext === ""`) it was asking about a constant,
+// ⛔ AN EXTENSION-LESS FILE'S TYPE IS NOT DECIDED BY THE RESPONSE'S OWN HEADER.
+// This test used to read the response's content-type, which is computed one line
+// above it as `MIME[ext] || "application/octet-stream"` — so for the only case
+// it was ever consulted for (`ext === ""`) it was asking about a constant,
 // answered "not text" every time, and the whole extension-less branch never ran
 // once. ⚠ A CHECK WHOSE INPUT IS DERIVED FROM ITS OWN CONDITION IS NOT A CHECK.
 // It cost nothing visible: the files went out unrewritten, exactly as they did
 // before the branch was added, and no gate looks at a mirrored API cache.
 //
-// ⭐ The mirror stores no response headers (inventory.tsv is SHA256/BYTES/PATH/
-// URL), so sniffing the bytes is the only evidence available — and the sniff
-// is IMPORTED, not written here. lib/extract-refs.mjs owns this predicate for
-// the reason lib/flight.mjs owns localisation: verify-mirror decides with it
-// which files to scan for references, and a server that answered the question
-// differently would leave the ledger claiming a reference is localised while
-// the bytes going out still carry the absolute URL. The first version of this
-// was a private stricter copy (fatal UTF-8 decode), which disagreed with the
-// shared one on exactly that class: text that is not valid UTF-8.
+// ⭐ Two sources of evidence, in the order mirror-site.mjs already uses when it
+// decides which responses to rescan (`isTextRefSource`: declared type, then
+// extension, then bytes):
+//   1. what the ORIGIN declared. mirror-manifest.json records it per entry and
+//      always has (`type: contentType || ''`); what was missing is that THIS
+//      SERVER never read it, which `RECORDED_TYPE` above now fixes.
+//   2. the bytes, for the rows that carry no recorded type — a mirror taken
+//      before the field existed, or a response the origin sent bare.
+// ⚠ Not the other way round. Sniffing is one-directional and crude by design
+// (see lib/extract-refs.mjs), so where a declaration exists it is the better
+// evidence, and answering differently from the crawler is what makes a ledger
+// claim a reference is localised while the bytes going out still carry the
+// absolute URL.
+//
+// The sniff itself is IMPORTED, not written here, for the reason lib/flight.mjs
+// owns localisation: verify-mirror decides with the same predicate which files
+// to scan for references. The first version of this was a private stricter copy
+// (fatal UTF-8 decode), which disagreed with the shared one on exactly the class
+// it was consulted for: text that is not valid UTF-8.
 const SNIFF_BYTES = 4096;
 
 async function looksTextual(file) {
@@ -239,6 +249,13 @@ async function looksTextual(file) {
   } finally {
     await fh?.close();
   }
+}
+
+/** Is this extension-less response text? Declared type first, bytes second. */
+async function extensionlessIsText(file) {
+  // Empty `url`: the extension arm of the shared verdict has nothing to say
+  // about a file with no extension, so this asks only about the declaration.
+  return textRefVerdict({ contentType: RECORDED_TYPE.get(file) || "" }) ?? looksTextual(file);
 }
 
 const MIME = {
@@ -794,7 +811,7 @@ const server = http.createServer(async (req, res) => {
 
     // 4. response-layer text transforms (ext-host rewrite + probe injection)
     const wantsProbe = ext === ".html" && url.searchParams.has("__probe") && PROBE_SHIM;
-    const canRewrite = TEXT_REWRITE.has(ext) || (ext === "" && await looksTextual(hit.file));
+    const canRewrite = TEXT_REWRITE.has(ext) || (ext === "" && await extensionlessIsText(hit.file));
     if ((canRewrite && (EXT_HOSTS.length || ORIGIN_HOSTS.length)) || wantsProbe) {
       let text = await fsp.readFile(hit.file, "utf8");
       if (EXT_HOSTS.length || ORIGIN_HOSTS.length) text = rewrite(text, ext);
