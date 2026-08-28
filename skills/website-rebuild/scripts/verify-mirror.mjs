@@ -91,7 +91,7 @@
  * TODO list has carried a site-coupled careers-kimi ancestor since the start).
  */
 import { createReadStream } from "node:fs";
-import { open, readdir, readFile, stat } from "node:fs/promises";
+import { open, readdir, readFile, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { createHash } from "node:crypto";
 import { localRelPath, loadPolicy, describePolicy, canonicalUrl } from "./lib/urlpath.mjs";
@@ -125,6 +125,10 @@ const UA =
 // and the set of files the closure gate scans.
 const LEDGER_FILES = new Set([
   "mirror-manifest.json",
+  // The closure gate WRITES closure-gap.txt into the mirror so --seeds can reach
+  // it - which made the coverage check report the gate own artefact as an orphan
+  // one run later. A gate must not fail on what it itself wrote.
+  "closure-gap.txt",
   "inventory.tsv",
   "redirects.tsv",
   "netcapture.tsv",
@@ -615,7 +619,11 @@ if (!SKIP.has("authenticity")) {
     woff2: (b) => startsWith(b, [0x77, 0x4f, 0x46, 0x32]),
     woff: (b) => startsWith(b, [0x77, 0x4f, 0x46, 0x46]),
     otf: (b) => startsWith(b, [0x4f, 0x54, 0x54, 0x4f]),
-    ttf: (b) => startsWith(b, [0x00, 0x01, 0x00, 0x00]) || startsWith(b, [0x74, 0x72, 0x75, 0x65]),
+    // ⚠ "OTTO" too: an OpenType/CFF font served under a .ttf name with
+    // `font/ttf` is the ORIGIN'S labeling habit, not corruption — the bytes are
+    // a real font. Measured on hubtown: commit-mono-bold.ttf is OTTO/CFF, and
+    // rejecting it told the operator to re-fetch a file that was already right.
+    ttf: (b) => startsWith(b, [0x00, 0x01, 0x00, 0x00]) || startsWith(b, [0x74, 0x72, 0x75, 0x65]) || startsWith(b, [0x4f, 0x54, 0x54, 0x4f]),
     mp4: (b) => startsWith(b, [0x66, 0x74, 0x79, 0x70], 4),
     webm: (b) => startsWith(b, [0x1a, 0x45, 0xdf, 0xa3]),
     ogg: (b) => startsWith(b, [0x4f, 0x67, 0x67, 0x53]),
@@ -938,6 +946,15 @@ if (!SKIP.has("closure")) {
       console.log(`         ${h}  (${rows.length})`);
       list(rows, (m) => `           ${m.url}\n             <- ${m.from.join(", ")}`);
     }
+    // ⭐ The console listing is TRUNCATED (MAX_REPORT), and the natural next
+    // step is "pipe the missing URLs into mirror-site --seeds" — which, fed
+    // from the truncated listing, seeds the same first page of the gap every
+    // round while the gate keeps failing. Measured: four seed rounds at a
+    // constant 32 URLs against a 384-reference gap, converging on nothing.
+    // The ACTIONABLE artefact must be complete, so it goes to a file.
+    const gapFile = path.join(ROOT, "closure-gap.txt");
+    await writeFile(gapFile, missing.map((m) => m.url).join("\n") + "\n");
+    console.log(`         complete list -> ${path.relative(process.cwd(), gapFile)}  (${missing.length} URLs, ready for --seeds)`);
     console.log(
       `         Each must be fetched (mirror-site.mjs --seeds) or get a line in the mirror's\n` +
         `         external.txt and be excused here with --allow-missing. One line excuses one\n` +

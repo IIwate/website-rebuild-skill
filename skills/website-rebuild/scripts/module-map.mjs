@@ -241,6 +241,21 @@ for (let i = 0; i + 2 < T.length; i++) {
 let entries = [];
 let containerKind = "ObjectExpression";
 
+// ⭐ A POSITIVE SIGNATURE BEATS A COUNT, and this chain is that rule written as
+// an order. Both webpack readers are heuristic scans for `[function…` /
+// `key: function` shapes; the JSONP and TURBOPACK readers each match a
+// structural literal that only their packer emits. So a positive match decides,
+// and the generic property scan is only consulted when neither fired.
+// ⛔ The tiebreak this replaced was "more modules wins", and a Turbopack chunk
+// can carry MORE webpack-shaped properties inside its module bodies than it has
+// modules — a three.js MathUtils table, a carousel's slot array. Measured
+// upstream: 3 spurious webpack entries outranked the chunk's 1 real factory, 7
+// outranked 2, 26 outranked 14, and the plausibility check below then correctly
+// FATAL'd on the wrong container. A file cannot be both.
+// ⛔ ONE module is a container too (`turbo.length > 0`, not `>= 2`): a
+// single-factory Turbopack chunk — a lazily-loaded scene, a dynamic() boundary —
+// is a container with one entry, and demanding two FATAL'd on it as "no
+// container" while its push sat on line 1.
 if (wpJsonpEntries.length > 0) {
   entries = wpJsonpEntries;
   containerKind = wpJsonpKind;
@@ -267,15 +282,6 @@ if (wpJsonpEntries.length > 0) {
     containerKind = "ArrayExpression";
     entries = arr.map((fi, idx) => ({ id: String(idx), fi }));
   }
-}
-
-// ⭐ Both readers have run; take whichever explains more of the file. A webpack
-// reader pointed at a Turbopack chunk finds a couple of unrelated properties,
-// so "more modules wins" is the right tiebreak, and the plausibility check
-// below still has to pass either way.
-if (turbo.length > entries.length) {
-  containerKind = "TurbopackChunk";
-  entries = turbo;
 }
 
 
@@ -527,9 +533,18 @@ console.log(`\n  ${leaf} module(s) require nothing (leaves);  ${mods.length - le
   });
   let outside = 0;
   for (const idx of reqCallIdx) if (!insideModule(idx)) outside++;
-  const coverage = fileLines ? total / fileLines : 0;
+  // ⚠ Coverage over the CONTAINER SPAN, not the whole file. A chunk can carry a
+  // preamble that is not module code — measured here: a Sentry debugId IIFE
+  // ahead of a single-module Turbopack push, where the one real module covered
+  // 33% of the FILE and 100% of the container, and the guard FATAL'd a correct
+  // read. The denominator is the region between the first module's first line
+  // and the last module's last line; the whole-file number stays in the log.
+  const spanStart = mods.length ? Math.min(...mods.map((m) => m.startLine)) : 1;
+  const spanEnd = mods.length ? Math.max(...mods.map((m) => m.endLine)) : fileLines;
+  const spanLines = Math.max(1, spanEnd - spanStart + 1);
+  const coverage = spanLines ? total / spanLines : 0;
   const problems = [];
-  if (coverage < 0.5) problems.push(`the modules found cover only ${(coverage * 100).toFixed(0)}% of the file's lines`);
+  if (coverage < 0.5) problems.push(`the modules found cover only ${(coverage * 100).toFixed(0)}% of the container span's lines`);
   if (reqCallIdx.length > 8 && outside > reqCallIdx.length * 0.5) {
     problems.push(`${outside} of ${reqCallIdx.length} require-shaped call(s) fall OUTSIDE every module this reader found`);
   }

@@ -148,6 +148,11 @@ for (const ref of refs) {
   // are the same asset, and only the server knew it — which is why 92 images
   // that are present were reported as holes in the deliverable.
   const extForm = /^ext\/([^/]+)\/(.*)$/.exec(bare);
+  // ⚠ A STUBBED host's reference is answered by the SERVER (empty body), not by
+  // a file — that is the entire point of --stub-ext-hosts. Reporting it as a
+  // hole in the deliverable tells the operator to go mirror a tracking script
+  // that was deliberately excluded and registered.
+  if (extForm && STUB_HOSTS.includes(extForm[1])) continue;
   const candidates = [
     ...(mapped ? [path.join(MIRROR, mapped), path.join(MIRROR, mapped, "index.html")] : []),
     ...(ref.endsWith("/") ? [path.join(MIRROR, bare, "index.html")]

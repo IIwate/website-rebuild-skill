@@ -79,6 +79,30 @@ traverse(FILE, {
     const v = p.node.value;
     if (v.type === "FunctionExpression" || v.type === "ArrowFunctionExpression") NODES.set(id, p.get("value"));
   },
+  // ⭐ The OTHER container. Turbopack pushes a flat array —
+  // `TURBOPACK.push([currentScript, id, factory, id, factory, …])` — so the
+  // factory nodes live as ARRAY ELEMENTS after their numeric ids, and an
+  // ObjectProperty walk finds none of them. Without this, a Turbopack chunk
+  // whose modules declare no export names (CSS registration, side-effect
+  // modules) gave this tool NOTHING and it exited FATAL on a container that
+  // module-map had read perfectly well.
+  CallExpression(p) {
+    const c = p.node.callee;
+    if (c.type !== "MemberExpression" || c.property?.name !== "push") return;
+    const arr = p.node.arguments[0];
+    if (!arr || arr.type !== "ArrayExpression") return;
+    const els = arr.elements;
+    for (let i = 1; i < els.length - 1; i++) {
+      const idEl = els[i], fnEl = els[i + 1];
+      const id = idEl?.type === "NumericLiteral" ? String(idEl.value)
+        : idEl?.type === "StringLiteral" ? String(idEl.value) : null;
+      if (!id || !fnEl) continue;
+      if (fnEl.type === "FunctionExpression" || fnEl.type === "ArrowFunctionExpression") {
+        NODES.set(id, p.get(`arguments.0.elements.${i + 1}`));
+        i++;
+      }
+    }
+  },
 });
 // ⭐ A packer that DECLARES export names has already answered the question this
 // tool exists to answer. Turbopack writes `ctx.s([["HeroSection", () => x]], id)`

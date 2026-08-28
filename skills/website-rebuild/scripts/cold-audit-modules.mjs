@@ -38,7 +38,17 @@ const args = process.argv.slice(2);
 const flag = (n, d) => { const i = args.indexOf("--" + n); return i >= 0 && args[i + 1] !== undefined ? args[i + 1] : d; };
 const MAP = JSON.parse(await readFile(path.resolve(flag("map", "docs/module-map.json")), "utf8"));
 const CLO = JSON.parse(await readFile(path.resolve(flag("closure", "docs/app-closure.json")), "utf8"));
-const SRC = (await readFile(path.resolve(MAP.source), "utf8")).split("\n");
+// ⭐ A SITE is many chunks. A Next/Turbopack build ships dozens of chunk files,
+// and a site-wide map (merged from per-chunk maps) tags every module with the
+// chunk it lives in. Read each module's own chunk; a single-file map still
+// works unchanged (no `chunk` field -> MAP.source).
+const srcCache = new Map();
+const srcOf = async (m) => {
+  const file = m.chunk ? path.join(path.dirname(path.resolve(MAP.source)), `${m.chunk}.pretty.js`) : path.resolve(MAP.source);
+  if (!srcCache.has(file)) srcCache.set(file, (await readFile(file, "utf8")).split("\n"));
+  return srcCache.get(file);
+};
+const SRC = MAP.chunks ? null : await srcOf({});
 
 const ported = new Set(CLO.modules.map(String));
 const all = MAP.modules;
@@ -68,6 +78,7 @@ let examined = 0;
 let noReqCount = 0;
 const TURBO = MAP.container === "TurbopackChunk";
 for (const m of all) {
+  const SRC = await srcOf(m);
   const body = SRC.slice(m.startLine - 1, m.endLine).join("\n");
   // ⛔ Take the signature from the module's FIRST LINE, not from the first match
   // anywhere in its body. The body is full of inner functions, and the first

@@ -437,10 +437,17 @@ if (DO_FETCH && missing.length) {
       url: m.path,
       bytes: body.length,
       sha: createHash("sha256").update(body).digest("hex"),
-      // The origin's own declaration, kept verbatim exactly as mirror-site.mjs
+      // The origin's own declaration, kept VERBATIM exactly as mirror-site.mjs
       // stores it: verify-mirror's authenticity gate and the shared "is this
       // text?" predicate both use the ledger's type as their oracle, so a row
       // written without one is a row those gates have to guess about.
+      // ⭐ serve.mjs now answers from this field (`RECORDED_TYPE`), which is what
+      // an extensionless Nuxt server route needs — extension-guessing turns
+      // `/api/_auth/session` into text/html, and ofetch parses BY CONTENT-TYPE
+      // and hands the app a string where it awaited an object.
+      // ⛔ Verbatim means the parameters too. Stripping `; charset=utf-8` here
+      // would make the server serve a mirrored `.html` row as bare `text/html`,
+      // OVERRIDING the `MIME[".html"]` default that does carry the charset.
       type: res.headers.get("content-type") || "",
     });
     console.log(`  OK ${m.path}`);
@@ -463,6 +470,9 @@ if (DO_FETCH && missing.length) {
  * coverage check (a file on disk "nobody can name a URL for") and once from the
  * inventory cross-check (a row "not in mirror-manifest.json"). Two failing gates
  * per fetched file, from a run whose whole purpose was closing the gap.
+ * ⛔ And it does not merely stay red: any later mirror-site run REWRITES both
+ * ledgers from the manifest, so a row that only ever reached inventory.tsv is
+ * silently dropped again — the gap closes, then reopens with nothing to show it.
  * ⭐ Half a ledger is not a ledger, and the half that was missing was the half
  * every gate reads.
  */
@@ -473,6 +483,9 @@ async function appendLedger(rows) {
   // Read-modify-write the whole document, not just `files`: `origin` is what
   // verify-mirror resolves its own --origin default from, and dropping the
   // other top-level keys would trade one broken ledger for another.
+  // ⛔ And not inside a swallowing try/catch either. A missing or half-written
+  // manifest is exactly when this pass must not go quiet — the `.catch(() => ({}))`
+  // below rebuilds the document instead of skipping the write.
   const doc = await fs
     .readFile(manifestPath, "utf8")
     .then((t) => JSON.parse(t))

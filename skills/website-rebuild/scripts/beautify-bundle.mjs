@@ -79,6 +79,22 @@ for (const file of FILES) {
     console.error(`[beautify FAIL] ${src} (exit ${r.status})`);
     process.exit(1);
   }
+  // ⛔ VERIFY THE OUTPUT STILL PARSES. js-beautify can corrupt a file: a
+  // backtick INSIDE a double-quoted string ("`forbidden()`…") reads to it as a
+  // template-literal opener, and it then line-wraps mid-string — an
+  // unterminated string constant in what is supposed to be the project's
+  // coordinate system. Everything downstream reads _pretty/ as ground truth,
+  // so a corrupt file here poisons every line number after it. On failure the
+  // ORIGINAL bytes ship as the coordinates — minified but valid.
+  if (type === "js") {
+    const chk = spawnSync("npx", ["-y", "acorn@8.14.0", "--ecma2022", "--silent", dest], { encoding: "utf8" });
+    if (chk.status !== 0) {
+      console.error(`  ⚠ beautified output DOES NOT PARSE (js-beautify corruption) — shipping the`);
+      console.error(`    original bytes verbatim as this file's coordinates instead:`);
+      console.error(`    ${(chk.stderr || "").split("\n")[0]}`);
+      writeFileSync(dest, readFileSync(src));
+    }
+  }
   const sha = createHash("sha256").update(readFileSync(src)).digest("hex");
   entries.push({
     pretty: path.basename(dest),

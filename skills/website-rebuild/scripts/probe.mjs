@@ -83,6 +83,28 @@ const flag = (name, dflt) => {
   return i >= 0 ? args[i + 1] : dflt;
 };
 const has = (name) => args.includes('--' + name);
+// ⛔ AN UNKNOWN FLAG MUST BE FATAL, NOT SILENCE. This tool sat in a toolchain
+// whose sibling (netcapture.mjs) takes --settle; passing --settle HERE was
+// silently ignored and every "long" observation quietly ran at the 6-second
+// default. The cost was a multi-hour ghost hunt: a loader "stuck" at the same
+// 6.2s frame every run, a timer that "never fired" (it was 2s away), a
+// suspected reload loop, a suspected renderer crash, a suspected patched clock
+// — all of it an artifact of one misspelled flag that nothing rejected.
+const KNOWN_FLAGS = new Set(['shot', 'format', 'quality', 'wait', 'scroll', 'walk', 'walk-dwell',
+  'no-external', 'eval', 'evalAfter', 'mobile', 'side', 'cdp-port', 'width', 'height']);
+{
+  const bad = [];
+  for (const a of args) {
+    if (!a.startsWith('--')) continue;
+    const name = a.slice(2);
+    if (!KNOWN_FLAGS.has(name)) bad.push(a);
+  }
+  if (bad.length) {
+    console.error(`FATAL: unknown flag(s): ${bad.join(' ')}`);
+    console.error('       known: ' + [...KNOWN_FLAGS].map((f) => '--' + f).join(' '));
+    process.exit(2);
+  }
+}
 if (!url) {
   console.error('usage: probe.mjs <url> [--shot out.png] [--format png|jpeg] [--quality 92] [--wait ms] [--scroll frac] [--walk steps] [--walk-dwell ms] [--no-external] [--eval expr] [--evalAfter expr] [--mobile] [--side mirror|rebuild] [--cdp-port N]');
   process.exit(2);
@@ -278,6 +300,23 @@ ws.onmessage = (ev) => {
     // Landonorris lesson: security errors (e.g. SRI hash mismatches) arrive
     // here, not on the Runtime domain. Without this case the probe green-lights
     // pages whose scripts were silently blocked.
+    // ⛔ A CRASHED-AND-AUTORELOADED RENDERER IS INVISIBLE without these. The
+    // page dies (OOM under SwiftShader is the usual killer), Chrome reloads it,
+    // timers and clocks silently belong to a new document — and the report
+    // reads "0 errors, 0 failures" over a page that never survived long enough
+    // to finish anything. Measured on hubtown: performance.now() said 6s after
+    // a 180s settle, and nothing in the report explained why.
+    case 'Inspector.targetCrashed': {
+      lifecycle.push('TARGET CRASHED');
+      break;
+    }
+    case 'Page.frameNavigated': {
+      if (m.params.frame && !m.params.frame.parentId) {
+        navigations += 1;
+        if (navigations > 1) lifecycle.push(`RENAVIGATED (#${navigations}) -> ${(m.params.frame.url || '').slice(0, 90)}`);
+      }
+      break;
+    }
     case 'Log.entryAdded': {
       const e = m.params.entry;
       if (e.level === 'error') pageErrors.push(`[${e.source}] ${e.text}`.slice(0, 300));
@@ -287,7 +326,10 @@ ws.onmessage = (ev) => {
 };
 
 await new Promise((r) => (ws.onopen = r));
+let navigations = 0;
+const lifecycle = [];
 await send('Network.enable');
+await send('Inspector.enable');
 await send('Log.enable');
 await send('Runtime.enable');
 await send('Page.enable');
@@ -390,6 +432,10 @@ if (SHOT) {
 
 console.log(`\n=== console (${consoleMsgs.length}) ===`);
 for (const c of consoleMsgs.slice(0, 40)) console.log(c);
+if (lifecycle.length) {
+  console.log(`=== lifecycle (${lifecycle.length}) ===`);
+  for (const l of lifecycle) console.log(l);
+}
 console.log(`=== page errors (${pageErrors.length}) ===`);
 for (const e of pageErrors.slice(0, 20)) console.log(e);
 console.log(`=== request failures (${failures.length}) ===`);

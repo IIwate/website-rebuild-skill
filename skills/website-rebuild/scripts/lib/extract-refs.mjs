@@ -420,6 +420,21 @@ export function createRefExtractor({ origin, originHost, assetHosts, onOffHost }
       else if (inner.startsWith("/") && /\.[a-z0-9]{2,5}$/i.test(inner.split("?")[0])) addIfAsset(ORIGIN + inner, urls);
     }
 
+    // 4c. RELATIVE MODULE SPECIFIERS in JS. Vite writes its chunk manifest as
+    // an array of "./Xxx.js" strings (__vite__mapDeps) and its dynamic imports
+    // as import("./Xxx.js") — all relative to the IMPORTING FILE's directory.
+    // A root-relative shape never matches them, so a third of the lazy chunks
+    // were absent from a "closed" mirror; at runtime the failed import fired
+    // Nuxt's app:chunkError hook, which calls reloadNuxtApp — a RELOAD LOOP in
+    // which every timer forever belongs to a document that no longer exists.
+    // Measured on hubtown: probe uptime 6s after a 100s settle.
+    if (baseUrl && /\.js($|\?)/i.test(baseUrl)) {
+      const dir = baseUrl.replace(/[^/]+(\?.*)?$/, "");
+      for (const m of text.matchAll(/"(\.\/[\w~.-]+\.(?:js|css|json|woff2?|png|jpe?g|webp|svg|wasm|glb|ktx2))"/g)) {
+        try { addIfAsset(new URL(m[1], dir).href, urls); } catch {}
+      }
+    }
+
     // 5. relative url(...) inside CSS
     if (baseUrl && /\.css($|\?)/i.test(baseUrl)) {
       for (const m of text.matchAll(/url\(\s*['"]?(?!data:|https?:|\/\/)([^'")]+)['"]?\s*\)/gi)) {

@@ -188,6 +188,25 @@ const TEXT_REWRITE = new Set([".html", ".css", ".js", ".mjs", ".json", ".svg"]);
 // length, and the blanket rewrite is safe there.
 const RAW_FLIGHT_ROW = /(^|\n)[0-9a-f]+:T[0-9a-f]+,/;
 
+// ⭐ THE MIRROR ALREADY KNOWS WHAT THE ORIGIN DECLARED. An extensionless URL
+// (a Nuxt server route like /api/_auth/session) stores as <path>/index.html,
+// and extension-guessing then serves the origin's application/json bytes as
+// text/html — whereupon ofetch, which parses BY CONTENT-TYPE, hands the app a
+// STRING where it awaited an object, and an enter sequence dies with zero
+// failed requests to point at. The manifest records the declared type per
+// entry; the server's job is to say the same thing the origin said.
+const RECORDED_TYPE = new Map();
+for (const root of ROOTS) {
+  try {
+    const mf = JSON.parse(await fsp.readFile(path.join(root, "mirror-manifest.json"), "utf8"));
+    for (const rec of Object.values(mf.files || {})) {
+      if (!rec || !rec.path || !rec.type) continue;
+      RECORDED_TYPE.set(path.join(root, rec.path), rec.type);
+      RECORDED_TYPE.set(path.join(root, rec.path, "index.html"), rec.type);
+    }
+  } catch {}
+}
+
 // ⛔ AN EXTENSION-LESS FILE'S TYPE IS DECIDED BY ITS BYTES, NOT BY ITS HEADER.
 // This test used to read the response's own content-type, which is computed one
 // line above it as `MIME[ext] || "application/octet-stream"` — so for the only
@@ -452,6 +471,18 @@ function rewrite(text, ext) {
 }
 
 function rewriteText(text, ext) {
+  // ⛔ A URL CAN CARRY USERINFO, AND EVERY HOST SHAPE BELOW MISSES IT. Sentry's
+  // DSN is the canonical case: `https://<key>@o3794….ingest.us.sentry.io/…`
+  // sits in a chunk, the stub host is listed, and the request still went out —
+  // because `https://host/` never occurs in the text; `https://key@host/` does.
+  // Normalize the userinfo away for LISTED hosts only (plain and \/-escaped
+  // spellings), then the ordinary shapes localise what remains.
+  for (const h of [...ORIGIN_HOSTS, ...EXT_HOSTS]) {
+    const eh = h.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    text = text
+      .replace(new RegExp(`https?://[\\w.+-]+(?::[^@/\\s"']*)?@${eh}`, "gi"), (m) => m.slice(0, m.indexOf(":")) + "://" + h)
+      .replace(new RegExp(`https?:\\\\/\\\\/[\\w.+-]+(?::[^@\\s"']*)?@${eh}`, "gi"), (m) => m.slice(0, m.indexOf(":")) + ":\\/\\/" + h);
+  }
   for (const h of ORIGIN_HOSTS) {
     text = text.replaceAll(`https://${h}/`, "/").replaceAll(`http://${h}/`, "/");
     // The NO-PATH form: `https://host` with nothing after it means the home
@@ -553,7 +584,10 @@ async function resolveFile(pathname, search = "") {
   // resources (`?width=320` vs `?width=1200`), and answering either from a bare
   // request is exactly the collapse verify-mirror's injectivity gate exists to
   // catch. One variant, serve it; more than one, 404 and let the gate speak.
-  if (!search) {
+  // With OR without a query: a bare request finds its one stored variant, and a
+  // query whose exact variant was never stored finds the equivalent one — both
+  // only when unambiguous (see resolveSoleQueryVariant).
+  {
     const only = await resolveSoleQueryVariant(pathname);
     if (only) return only;
   }
@@ -590,11 +624,36 @@ async function queryVariantsOf(pathname) {
   return out;
 }
 
-/** Serve a bare request from its ONE stored variant; refuse when ambiguous. */
+/**
+ * Serve a request from its stored variant(s) when that is UNAMBIGUOUS:
+ * exactly one variant, or several that are byte-identical.
+ *
+ * ⭐ The second arm is measured, not assumed. Next's `?_rsc=` token is
+ * SESSION-STATE: the runtime computes a fresh one each visit, so the variant a
+ * capture stored and the variant a replay requests never agree — 11 prefetch
+ * 404s on a page whose mirror held every payload. Two tokens for one route
+ * were byte-identical (63,738 B, same sha), which is what licenses answering
+ * either request with the one payload. Differing variants still refuse:
+ * ?width=320 vs ?width=1200 are two resources, and the injectivity gate owns
+ * that distinction.
+ */
 async function resolveSoleQueryVariant(pathname) {
   const v = await queryVariantsOf(pathname);
-  if (v.length !== 1) return null;
-  return statFile(v[0]);
+  if (!v.length || v.length > 6) return null;
+  // ⚠ A variant can be a plain file OR a directory holding index.html — the
+  // url->path mapping decides per entry (an extensionless route stores as a
+  // directory). Resolve each to its actual file before judging anything: the
+  // first version stat'd the directory, got "not a file", and refused to serve
+  // a sole variant that was sitting right there.
+  const resolve1 = async (f) => (await statFile(f)) || statFile(path.join(f, "index.html"));
+  const first = await resolve1(v[0]);
+  if (v.length === 1) return first;
+  if (!first) return null;
+  const { createHash } = await import("node:crypto");
+  const sha = async (f) => createHash("sha256").update(await fsp.readFile((await resolve1(f)).file)).digest("hex");
+  const h0 = await sha(v[0]);
+  for (const f of v.slice(1)) if (await sha(f) !== h0) return null;
+  return first;
 }
 
 /**
@@ -728,7 +787,7 @@ const server = http.createServer(async (req, res) => {
 
     const ext = path.extname(hit.file).toLowerCase();
     const headers = {
-      "content-type": MIME[ext] || "application/octet-stream",
+      "content-type": RECORDED_TYPE.get(hit.file) || MIME[ext] || "application/octet-stream",
       "cache-control": "no-cache",
       "access-control-allow-origin": "*",
     };
