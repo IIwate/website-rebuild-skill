@@ -28,12 +28,13 @@
 // Usage:
 //   node netcapture.mjs --origin https://example.com [--mirror mirror]
 //     [--routes /,/about,/contact]      routes to visit (default "/")
-//     [--viewports desktop,mobile]      which emulated viewports to run
+//     [--viewports desktop,mobile]      which emulated viewports to run (default: both)
 //     [--steps 12] [--dwell 1500]       scroll-walk: wheel steps and per-step dwell (ms)
 //     [--settle 9000]                   post-navigation settle before scrolling (ms)
 //     [--hosts cdn.x.com,media.y.net]   extra hosts to record besides the origin
 //     [--out <mirror>/netcapture.tsv]   HAVE/GAP ledger destination
-//     [--fetch]                         also download anything the mirror is missing
+//     [--fetch]                         also download anything the mirror is missing,
+//                                       into both ledgers (manifest + inventory)
 //
 // --hosts IS NOT OPTIONAL ON A CDN-BACKED SITE. Records are keyed by absolute
 // URL over an allow-list of hosts, whose semantics match mirror-site.mjs's
@@ -108,12 +109,31 @@ const VIEWPORT_DEFS = {
   desktop: { width: 1440, height: 900, mobile: false, deviceScaleFactor: 1 },
   mobile: { width: 390, height: 844, mobile: true, deviceScaleFactor: 2 },
 };
-const VIEWPORTS = Object.fromEntries(
-  flag("viewports", "desktop,mobile")
-    .split(",")
-    .filter((v) => VIEWPORT_DEFS[v])
-    .map((v) => [v, VIEWPORT_DEFS[v]]),
-);
+// ⛔ AN UNRECOGNISED VIEWPORT USED TO BE DROPPED IN SILENCE. The selection was a
+// filter with no floor under it, so `--viewports mobil` (typo), `Mobile` (this
+// table is case-sensitive) or `desktop, mobile` (space after the comma) left an
+// EMPTY set, the capture loop below ran zero times, and the run still printed
+//
+//     requests observed: 0
+//     MIRROR GAPS:       0
+//
+// over a netcapture.tsv containing nothing but its header. That is this pass's
+// worst possible output: GAP=0 is the number the caller came for, and here it
+// was computed over an empty observation. Same family as the UNDER-OBSERVED
+// warning at the end — A COUNT COMPUTED OVER NOTHING OBSERVED READS AS A PASS —
+// except nothing printed at all. A partial typo is fatal too: `desktop,mobil`
+// silently captured desktop only and reported it as the whole matrix.
+const VIEWPORT_KEYS = flag("viewports", "desktop,mobile").split(",").map((s) => s.trim()).filter(Boolean);
+const UNKNOWN_VIEWPORTS = VIEWPORT_KEYS.filter((v) => !Object.hasOwn(VIEWPORT_DEFS, v));
+if (!VIEWPORT_KEYS.length || UNKNOWN_VIEWPORTS.length) {
+  console.error(
+    `FATAL: --viewports ${UNKNOWN_VIEWPORTS.length ? `names no such viewport: ${UNKNOWN_VIEWPORTS.join(", ")}` : "is empty"}.\n` +
+      `       known viewports: ${Object.keys(VIEWPORT_DEFS).join(", ")} (case-sensitive)\n` +
+      `       Refusing to run: an empty viewport set captures nothing and reports GAP=0.`,
+  );
+  process.exit(2);
+}
+const VIEWPORTS = Object.fromEntries(VIEWPORT_KEYS.map((v) => [v, VIEWPORT_DEFS[v]]));
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
@@ -393,7 +413,10 @@ if (DO_FETCH && missing.length) {
   // deliberately, none of them blessable by any gate.
   //
   // ⛔ A tool that can leave the artefact in a state no gate accepts is a
-  // footgun with a comment on it. Appending the row is fifteen lines.
+  // footgun with a comment on it. Appending the rows is fifteen lines.
+  // ⚠ ROWS, PLURAL — the first version of this fix wrote the inventory row and
+  // not the manifest row, so the footgun survived the comment that declared it
+  // fixed. See appendLedger below.
   console.log("\nfetching gaps... (bytes AND ledger rows)");
   for (const m of missing) {
     // m.path is an absolute URL (records are keyed by host + path).
@@ -409,26 +432,72 @@ if (DO_FETCH && missing.length) {
     const body = Buffer.from(await res.arrayBuffer());
     await fs.mkdir(path.dirname(out), { recursive: true });
     await fs.writeFile(out, body);
-    fetched.push({ rel, url: m.path, bytes: body.length, sha: createHash("sha256").update(body).digest("hex") });
+    fetched.push({
+      rel,
+      url: m.path,
+      bytes: body.length,
+      sha: createHash("sha256").update(body).digest("hex"),
+      // The origin's own declaration, kept verbatim exactly as mirror-site.mjs
+      // stores it: verify-mirror's authenticity gate and the shared "is this
+      // text?" predicate both use the ledger's type as their oracle, so a row
+      // written without one is a row those gates have to guess about.
+      type: res.headers.get("content-type") || "",
+    });
     console.log(`  OK ${m.path}`);
   }
   await appendLedger(fetched);
 }
 
 /**
- * Append what --fetch landed to the mirror's ONE ledger, in its format
- * (SHA256 / BYTES / PATH / URL), skipping paths already recorded.
+ * Append what --fetch landed to the mirror's ledgers — BOTH of them, in their
+ * formats: mirror-manifest.json (url -> {path, bytes, sha256, type}) and
+ * inventory.tsv (SHA256 / BYTES / PATH / URL). Rows already recorded are left
+ * alone: a full crawl's row describes the same bytes and has no less provenance
+ * than this pass does.
+ *
+ * ⛔ BOTH, NOT ONE — the comment above promised "one mirror, one ledger" and
+ * this function used to write the inventory row only, which left the artefact in
+ * precisely the state that comment says a tool must not leave it in.
+ * mirror-manifest.json is THE ledger as far as verify-mirror.mjs is concerned,
+ * so every --fetch'd file came back through the gate TWICE RED: once from the
+ * coverage check (a file on disk "nobody can name a URL for") and once from the
+ * inventory cross-check (a row "not in mirror-manifest.json"). Two failing gates
+ * per fetched file, from a run whose whole purpose was closing the gap.
+ * ⭐ Half a ledger is not a ledger, and the half that was missing was the half
+ * every gate reads.
  */
 async function appendLedger(rows) {
   if (!rows.length) return;
+
+  const manifestPath = path.join(ROOT, "mirror-manifest.json");
+  // Read-modify-write the whole document, not just `files`: `origin` is what
+  // verify-mirror resolves its own --origin default from, and dropping the
+  // other top-level keys would trade one broken ledger for another.
+  const doc = await fs
+    .readFile(manifestPath, "utf8")
+    .then((t) => JSON.parse(t))
+    .catch(() => ({}));
+  if (!doc.files) doc.files = {};
+  if (!doc.origin) doc.origin = ORIGIN;
+  const addManifest = rows.filter((r) => !doc.files[r.url]);
+  for (const r of addManifest) {
+    doc.files[r.url] = { path: r.rel, bytes: r.bytes, sha256: r.sha, type: r.type };
+  }
+  if (addManifest.length) await fs.writeFile(manifestPath, JSON.stringify(doc, null, 2));
+
   const inv = path.join(ROOT, "inventory.tsv");
   let text = await fs.readFile(inv, "utf8").catch(() => "");
   if (!text) text = "SHA256\tBYTES\tPATH\tURL\n";
   const known = new Set(text.trim().split("\n").slice(1).map((l) => l.split("\t")[2]));
   const add = rows.filter((r) => !known.has(r.rel));
-  if (!add.length) return void console.log(`  ledger — all ${rows.length} path(s) already recorded`);
-  if (!text.endsWith("\n")) text += "\n";
-  text += add.map((r) => `${r.sha}\t${r.bytes}\t${r.rel}\t${r.url}`).join("\n") + "\n";
-  await fs.writeFile(inv, text);
-  console.log(`  ledger — ${add.length} row(s) appended to ${path.relative(process.cwd(), inv)}`);
+  if (add.length) {
+    if (!text.endsWith("\n")) text += "\n";
+    text += add.map((r) => `${r.sha}\t${r.bytes}\t${r.rel}\t${r.url}`).join("\n") + "\n";
+    await fs.writeFile(inv, text);
+  }
+
+  console.log(
+    `  ledger — ${addManifest.length} manifest row(s) + ${add.length} inventory row(s) appended` +
+      (rows.length - addManifest.length ? `, ${rows.length - addManifest.length} already recorded` : ""),
+  );
 }

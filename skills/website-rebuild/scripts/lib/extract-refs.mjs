@@ -466,3 +466,76 @@ export function createRefExtractor({ origin, originHost, assetHosts, onOffHost }
     return urls;
   };
 }
+
+/** Vendors whose presence on an unfollowed host is expected, not a finding. */
+const TELEMETRY_HOST = /googletagmanager|google-analytics|doubleclick|facebook|clarity|hotjar/i;
+
+/** Does this reference name a FILE (as opposed to a namespace URI or a page)? */
+const looksLikeAsset = (href) => {
+  try {
+    const u = new URL(href);
+    return /\.[a-z0-9]{2,5}($|\?)/i.test(u.pathname + (u.search || ""));
+  } catch {
+    return false;
+  }
+};
+
+/**
+ * Census of the references `addIfAsset` drops because their host is not on the
+ * allow-list — the other half of the onOffHost contract above.
+ *
+ * ⭐ SHARED FOR THE SAME REASON THE SHAPES ARE. Both callers have to answer one
+ * question — "is this unfollowed host worth shouting about?" — and they have to
+ * answer it the same way. Silence is indistinguishable from "there was nothing
+ * there" (the measured 143-reference case is in createRefExtractor's header),
+ * but a census that names every namespace URI trains the reader to skip it, and
+ * a skipped census is a silent one again. So the ranking and the "does this look
+ * like an asset host?" judgement live here, once; each caller keeps its own
+ * wording, because what an unfollowed host MEANS differs between them:
+ *   - the crawler's allow-list is a CLI argument, so an unfollowed host is a
+ *     decision the operator made and may want to revisit;
+ *   - the gate's is DERIVED from the ledger, so an unfollowed host is one the
+ *     mirror holds no file from at all and nobody ever decided about.
+ */
+export function createOffHostCensus() {
+  const seen = new Map(); // host -> { n, sample, assetSample }
+  return {
+    onOffHost(host, href) {
+      let e = seen.get(host);
+      if (!e) seen.set(host, (e = { n: 0, sample: href, assetSample: null }));
+      e.n += 1;
+      // ⛔ THE JUDGEMENT MUST NOT REST ON WHICHEVER REFERENCE CAME FIRST. A
+      // library CDN is routinely named by its BASE before any of its files:
+      //     B = "https://unpkg.com/detect-gpu@5.0.70/dist/benchmarks"
+      //     fetch(B + "/d-nvidia.json");  fetch(".../m-adreno.json")
+      // The base has no extension, so a sample-only test files the one host
+      // that is actually holding runtime assets under "namespace identifier"
+      // and says nothing about it — the precise failure this census exists to
+      // end, rebuilt one level up. Keep the first asset-SHAPED reference too,
+      // and judge on that.
+      if (!e.assetSample && looksLikeAsset(href)) e.assetSample = href;
+    },
+    get size() {
+      return seen.size;
+    },
+    /**
+     * rows      every unfollowed host, most-referenced first
+     * total     references across all of them
+     * assetish  the subset with at least one reference that names a FILE.
+     *           Namespace identifiers (www.w3.org appears 84x in any SVG-heavy
+     *           site) and outbound social links stay in `rows` for completeness
+     *           but are never suggested as mirror targets — advising someone to
+     *           mirror instagram.com would be worse than saying nothing.
+     * top       the one host worth a loud warning: asset-shaped, at or over
+     *           `minRefs`, and not a known telemetry vendor — or null.
+     */
+    summary(minRefs = 20) {
+      const rows = [...seen].sort((a, b) => b[1].n - a[1].n);
+      const total = rows.reduce((t, [, e]) => t + e.n, 0);
+      const assetish = rows.filter(([, e]) => e.assetSample);
+      const first = assetish[0];
+      const top = first && first[1].n >= minRefs && !TELEMETRY_HOST.test(first[0]) ? first : null;
+      return { rows, total, assetish, top };
+    },
+  };
+}

@@ -98,7 +98,7 @@ import { localRelPath, loadPolicy, describePolicy, canonicalUrl } from "./lib/ur
 // Both halves come from the same module on purpose: the SHAPES a reference can
 // take, and WHICH FILES get scanned for them. A gate that carries its own copy
 // of either one inherits exactly the blind spot it is auditing.
-import { createRefExtractor, textRefVerdict, sniffTextBytes } from "./lib/extract-refs.mjs";
+import { createRefExtractor, createOffHostCensus, textRefVerdict, sniffTextBytes } from "./lib/extract-refs.mjs";
 
 const args = process.argv.slice(2);
 const flag = (n, d) => {
@@ -812,7 +812,27 @@ if (!SKIP.has("closure")) {
       hosts.add(new URL(url).hostname);
     } catch {}
   }
-  const extract = createRefExtractor({ origin: ORIGIN, originHost: ORIGIN_HOST, assetHosts: hosts });
+  // ⛔ A REFERENCE THIS GATE CANNOT FOLLOW USED TO LEAVE NO TRACE. `hosts` above
+  // is DERIVED FROM THE LEDGER, so a host the crawler never fetched from is not
+  // on it, and every reference to that host was dropped inside the extractor in
+  // silence — while "reference set − disk set = ∅" printed green over a set the
+  // gate had itself narrowed. Same family as the escaped spellings and the
+  // extension whitelist in this gate's header: NOT A WRONG ASSERTION, AN
+  // ASSERTION OVER A SHORT INPUT.
+  //
+  // ⭐ And the difference from the crawler is what makes it worth printing at a
+  // LOWER bar here. The crawler's allow-list is a CLI argument — an unfollowed
+  // host is a decision someone made. This one is derived, so an unfollowed host
+  // is one THE MIRROR HOLDS NO FILE FROM AT ALL and nobody ever decided about:
+  // a runtime library's CDN, a font service, an image host that only ever
+  // appears inside a bundle. One asset-shaped reference is enough to report.
+  const census = createOffHostCensus();
+  const extract = createRefExtractor({
+    origin: ORIGIN,
+    originHost: ORIGIN_HOST,
+    assetHosts: hosts,
+    onOffHost: census.onOffHost,
+  });
 
   // A mirrored file's own URL is its base, so relative refs (CSS url()) resolve
   // the way the browser resolved them.
@@ -863,6 +883,49 @@ if (!SKIP.has("closure")) {
     `  info scanned ${scanned} text files (${sniffed} of them identified by sniffing the bytes, ` +
       `not by extension), ${refs.size} distinct references`,
   );
+
+  // The references the assertion below never got to see. Printed BEFORE the
+  // verdict so it cannot be read as a footnote to a green run.
+  //
+  // ⚠ NOT A FAILURE, and the reason is the excuse vocabulary rather than the
+  // finding's weight: a host-scope line in external.txt ("accepted degradation
+  // / stubbed vendor") is a legitimate decision, and it is already honoured
+  // below — so what is left here is exactly the set NOBODY HAS DECIDED ABOUT.
+  // Making that red would flip the exit code of every existing mirror that has
+  // an undocumented namespace host, which buys one excuse list and teaches the
+  // reader to skim. It is loud instead. If a host here is holding real assets,
+  // the fix is --hosts on a re-crawl, not a line in external.txt.
+  if (census.size) {
+    const { rows, total, assetish } = census.summary();
+    const undecided = assetish.filter(([h]) => !hostWide.has(h.toLowerCase()));
+    // The COUNT prints unconditionally — that is the line that ends the silence.
+    // The per-host LIST does not: a run whose only unfollowed hosts are
+    // namespace identifiers (www.w3.org, schema.org) would otherwise print a
+    // dozen rows of nothing every time, and a block the reader has learned to
+    // scroll past is silent again by another route.
+    console.log(
+      `  info ${total} reference(s) point at ${rows.length} host(s) this gate cannot resolve — the mirror ` +
+        `holds no file from them, so the closure assertion below never saw them` +
+        (undecided.length ? ":" : " (none of them names a file: namespace URIs, outbound links, registered hosts)"),
+    );
+    if (undecided.length) {
+      // Show the asset-shaped reference: it is the actionable spelling, and the
+      // first-seen one is routinely a base literal.
+      list(
+        undecided,
+        ([h, e]) => `         x${String(e.n).padStart(4)}  ${h}   e.g. ${(e.assetSample || e.sample).slice(0, 100)}`,
+      );
+      console.log(
+        `\n!! ${undecided.length} of those host(s) look like ASSET hosts (at least one reference names a\n` +
+          `!! file) and have no whole-host line in external.txt. A runtime library's CDN, a font service\n` +
+          `!! or an image host that only ever appears inside a bundle lands here. Until each one is\n` +
+          `!! either mirrored (mirror-site.mjs --hosts ${undecided.slice(0, 2).map(([h]) => h).join(",")}) or registered at host\n` +
+          `!! scope in external.txt, "reference set − disk set = ∅" below is a statement about a\n` +
+          `!! SHORTER reference set than the mirror actually contains.`,
+      );
+    }
+  }
+
   if (missing.length) {
     const byHost = new Map();
     for (const m of missing) {

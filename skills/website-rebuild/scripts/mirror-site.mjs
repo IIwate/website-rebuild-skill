@@ -61,7 +61,7 @@ import {
 // `.txt` feeds full of asset URLs were opened by neither side, and the closure
 // gate could not report it because the blind spot was shared (objectarchive
 // N13: 16 feeds, reference set 3,109 -> 3,521).
-import { createRefExtractor, isTextRefSource } from './lib/extract-refs.mjs';
+import { createRefExtractor, createOffHostCensus, isTextRefSource } from './lib/extract-refs.mjs';
 
 // ---------------------------------------------------------------------------
 // CONFIG — per-project constants; site specifics come from the CLI instead.
@@ -120,7 +120,7 @@ const ASSET_HOSTS = new Set([
   ORIGIN_HOST, // same-origin assets (css/js/media referenced by absolute or root-relative URL)
 ]);
 
-const offHostRefs = new Map(); // host -> {n, sample} for hosts NOT on ASSET_HOSTS
+const offHostRefs = createOffHostCensus(); // hosts NOT on ASSET_HOSTS
 
 // ⭐ The ledger is CUMULATIVE, not per-run. It used to start empty, so a
 // gap-filling run (--seeds) rewrote mirror-manifest.json with only the URLs it
@@ -198,11 +198,10 @@ const extractAssetUrls = createRefExtractor({
   // Census of every reference pointing at a host the allow-list does not
   // follow. Printed at the end: a mirror that looks finished while one
   // unfollowed host holds all the artwork is the failure this catches.
-  onOffHost: (host, href) => {
-    let e = offHostRefs.get(host);
-    if (!e) offHostRefs.set(host, (e = { n: 0, sample: href }));
-    e.n += 1;
-  },
+  // The ranking and the "is this an asset host?" judgement are shared with
+  // verify-mirror.mjs's closure gate (lib/extract-refs.mjs) — both sides have
+  // to agree on which unfollowed host is worth shouting about.
+  onOffHost: offHostRefs.onOffHost,
 });
 
 // --scope <prefix>: restrict the PAGE queue to a path prefix. Step 0 grades a
@@ -380,26 +379,14 @@ const fail = Object.values(manifest).filter((f) => !f.path).length;
 // error — plenty are analytics or outbound links — but it is a DECISION, and a
 // decision nobody was told about is the shape this crawler used to fail in.
 if (offHostRefs.size) {
-  const rows = [...offHostRefs].sort((a, b) => b[1].n - a[1].n);
-  const total = rows.reduce((t, [, e]) => t + e.n, 0);
+  const { rows, total, assetish, top } = offHostRefs.summary();
   console.log(`\nreferences to hosts NOT followed (${total} across ${rows.length} host(s)) — each is a decision:`);
-  for (const [host, e] of rows.slice(0, 12)) console.log(`  x${String(e.n).padStart(4)}  ${host}   e.g. ${e.sample.slice(0, 110)}`);
-  // Only suggest hosts that LOOK like asset hosts — the sample URL ends in a
-  // file extension. Namespace identifiers (www.w3.org) and outbound social
-  // links are in the census for completeness, but telling someone to mirror
-  // instagram.com would be worse advice than saying nothing.
-  const assetish = rows.filter(([, e]) => {
-    try {
-      const u = new URL(e.sample);
-      return /\.[a-z0-9]{2,5}($|\?)/i.test(u.pathname + (u.search || ""));
-    } catch { return false; }
-  });
+  for (const [host, e] of rows.slice(0, 12)) console.log(`  x${String(e.n).padStart(4)}  ${host}   e.g. ${(e.assetSample || e.sample).slice(0, 110)}`);
   // No unfollowed host looks like an asset host -> nothing to warn about. The
   // warning exists for "an unfollowed host is holding the media"; firing it on
   // a namespace identifier (www.w3.org appears 84x in any SVG-heavy site) would
   // train the reader to ignore it, which is worse than not printing it.
-  const top = assetish[0];
-  if (top && top[1].n >= 20 && !/googletagmanager|google-analytics|doubleclick|facebook|clarity|hotjar/i.test(top[0])) {
+  if (top) {
     console.log(
       `\n!! ${top[0]} alone accounts for ${top[1].n} references and does not look like telemetry.\n` +
         `!! If the site's media lives there, this mirror is INCOMPLETE no matter how green the\n` +
