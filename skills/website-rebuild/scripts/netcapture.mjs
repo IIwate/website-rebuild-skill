@@ -441,6 +441,23 @@ if (DO_FETCH && missing.length) {
  */
 async function appendLedger(rows) {
   if (!rows.length) return;
+  // BOTH ledgers. The first version appended inventory.tsv only;
+  // mirror-manifest.json is the authority verify-mirror audits, so every
+  // --fetch left files the manifest could not name - the same off-the-books
+  // state this function was added to prevent, one ledger over. Worse: any later
+  // mirror-site run rewrites both ledgers from the manifest, so rows that only
+  // ever reached inventory.tsv are silently dropped again.
+  const mfPath = path.join(ROOT, "mirror-manifest.json");
+  try {
+    const mf = JSON.parse(await fs.readFile(mfPath, "utf8"));
+    let n = 0;
+    for (const r of rows) {
+      if (mf.files[r.url]) continue;
+      mf.files[r.url] = { path: r.rel, bytes: r.bytes, sha256: r.sha };
+      n++;
+    }
+    if (n) await fs.writeFile(mfPath, JSON.stringify(mf, null, 2));
+  } catch {}
   const inv = path.join(ROOT, "inventory.tsv");
   let text = await fs.readFile(inv, "utf8").catch(() => "");
   if (!text) text = "SHA256\tBYTES\tPATH\tURL\n";

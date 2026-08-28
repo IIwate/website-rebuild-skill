@@ -95,7 +95,15 @@ export function localizeShapes(text, host, to, onHit = () => {}) {
  *  over an empty string can never reproduce it, so the gate matches these bytes
  *  exactly instead. */
 export const noindexBlock = (cfg) =>
-  (cfg.notice || "") + '<meta name="robots" content="noindex,nofollow">\n';
+  // ⛔ `notice: true` is a NATURAL thing to write in a config, and string
+  // concatenation happily renders it as the literal text "true" INSIDE <head> —
+  // where a bare text node makes the HTML parser close the head early and move
+  // every following <meta>/<link> into <body>. Measured: the nav lost its
+  // auth-dependent buttons, a canvas never mounted, and the word "true" sat in
+  // the page's corner — while every static gate stayed green, because the
+  // transform table replays what the transform table produced. Only a string
+  // is a notice; anything else means "no extra notice, just the meta".
+  (typeof cfg.notice === "string" ? cfg.notice : "") + '<meta name="robots" content="noindex,nofollow">\n';
 
 /**
  * Apply the configured table to one document (or one diff hunk).

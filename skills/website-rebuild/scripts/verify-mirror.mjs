@@ -91,7 +91,7 @@
  * TODO list has carried a site-coupled careers-kimi ancestor since the start).
  */
 import { createReadStream } from "node:fs";
-import { open, readdir, readFile, stat } from "node:fs/promises";
+import { open, readdir, readFile, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { createHash } from "node:crypto";
 import { localRelPath, loadPolicy, describePolicy, canonicalUrl } from "./lib/urlpath.mjs";
@@ -125,6 +125,10 @@ const UA =
 // and the set of files the closure gate scans.
 const LEDGER_FILES = new Set([
   "mirror-manifest.json",
+  // The closure gate WRITES closure-gap.txt into the mirror so --seeds can reach
+  // it - which made the coverage check report the gate own artefact as an orphan
+  // one run later. A gate must not fail on what it itself wrote.
+  "closure-gap.txt",
   "inventory.tsv",
   "redirects.tsv",
   "netcapture.tsv",
@@ -873,6 +877,15 @@ if (!SKIP.has("closure")) {
       console.log(`         ${h}  (${rows.length})`);
       list(rows, (m) => `           ${m.url}\n             <- ${m.from.join(", ")}`);
     }
+    // ⭐ The console listing is TRUNCATED (MAX_REPORT), and the natural next
+    // step is "pipe the missing URLs into mirror-site --seeds" — which, fed
+    // from the truncated listing, seeds the same first page of the gap every
+    // round while the gate keeps failing. Measured: four seed rounds at a
+    // constant 32 URLs against a 384-reference gap, converging on nothing.
+    // The ACTIONABLE artefact must be complete, so it goes to a file.
+    const gapFile = path.join(ROOT, "closure-gap.txt");
+    await writeFile(gapFile, missing.map((m) => m.url).join("\n") + "\n");
+    console.log(`         complete list -> ${path.relative(process.cwd(), gapFile)}  (${missing.length} URLs, ready for --seeds)`);
     console.log(
       `         Each must be fetched (mirror-site.mjs --seeds) or get a line in the mirror's\n` +
         `         external.txt and be excused here with --allow-missing. One line excuses one\n` +

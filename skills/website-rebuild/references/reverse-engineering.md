@@ -408,3 +408,30 @@ grep 命中只是假设，**每条必须回上下文确认**；**计数同理**�
 - [ ] 阶段计划（REBUILD_PLAN）已按 engine-notes 的"复刻直接结论"排出依赖序里程碑
 
 全部勾选后才进入阶段 2（加载 `porting-discipline.md`）。
+
+## §0.5.2 ⛔ Turbopack 的运行时自带按文件名索引的 chunk 清单【raycastkbd】
+
+eightdesign 的容器图是**平的**:每个 chunk 的名字都出现在 HTML 的 flight 清单里,
+把外壳里的名字改成 `.port.js` 就完成了移植交付,跨侧 0.00。
+
+raycast.com 不是。它的 **Turbopack 运行时 chunk(`turbopack-*.js`)内部嵌着一份
+按原始文件名索引的 chunk 清单**,动态导入按它解析路径;另有 chunk 之间按原名交叉引用
+(实测 8 处)。把外壳与 flight 里的名字改成 `.port.js` 之后:
+
+- flight 驱动的水合加载 `.port.js`(移植件)
+- 运行时清单驱动的动态导入**仍按原名再加载一遍原件**
+- 同一批模块**被求值两次**,单例状态分裂
+
+⚠ 症状与病灶隔了三层:导航的登录/下载按钮消失、一个 canvas 不再挂载、
+**控制台零报错**——没有崩溃,只有两份互不相识的 store。二分 22 个 chunk 全都"有问题",
+才看清不是某个 chunk 坏了,是**改名机制本身**在这个形状下不成立。
+
+### ⭐ 解法:分层交付,不改名
+
+移植件以**原名**落在 `site/_next/.../chunks/`,镜像原件留在 `mirror/` 作证据;
+`serve --root site --fallback-root mirror` 让每个被移植的名字由移植件应答、其余回落。
+外壳零 chunk 变换。移植的证据链改由 `slice --check`(可复现)、模块表门(token 级)
+与渲染对拍(像素 0)承担。
+
+⛔ 判据:**看到运行时 chunk 内部引用兄弟 chunk 文件名,就不要用改名交付。**
+一条 grep 就能判:`grep -l "chunks/" <runtime-chunk>`。
