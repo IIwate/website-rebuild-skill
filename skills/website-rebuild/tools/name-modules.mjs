@@ -89,6 +89,15 @@ traverse(FILE, {
   CallExpression(p) {
     const c = p.node.callee;
     if (c.type !== "MemberExpression" || c.property?.name !== "push") return;
+    // ⛔ ANCHOR ON `TURBOPACK`, not on `.push([…])`. Any array push with an
+    // (id, function) pair in it matched the first version — a route table, a
+    // plugin registry, a `handlers.push([2, cb])` — and this tool would then
+    // name a callback as if it were a module factory. module-map.mjs identifies
+    // the same container by requiring the literal `TURBOPACK` identifier
+    // (§"--- Turbopack container ---"), and TWO TOOLS DISAGREEING ABOUT WHAT
+    // THE CONTAINER IS is the same defect as two copies of a reference shape:
+    // whichever one is looser decides, and nothing says they diverged.
+    if (!/TURBOPACK/.test(SRC.slice(c.object.start, c.object.end))) return;
     const arr = p.node.arguments[0];
     if (!arr || arr.type !== "ArrayExpression") return;
     const els = arr.elements;

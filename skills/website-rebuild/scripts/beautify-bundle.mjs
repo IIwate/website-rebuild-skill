@@ -86,6 +86,7 @@ for (const file of FILES) {
   // coordinate system. Everything downstream reads _pretty/ as ground truth,
   // so a corrupt file here poisons every line number after it. On failure the
   // ORIGINAL bytes ship as the coordinates — minified but valid.
+  let verbatim = false;
   if (type === "js") {
     const chk = spawnSync("npx", ["-y", "acorn@8.14.0", "--ecma2022", "--silent", dest], { encoding: "utf8" });
     if (chk.status !== 0) {
@@ -93,6 +94,7 @@ for (const file of FILES) {
       console.error(`    original bytes verbatim as this file's coordinates instead:`);
       console.error(`    ${(chk.stderr || "").split("\n")[0]}`);
       writeFileSync(dest, readFileSync(src));
+      verbatim = true;
     }
   }
   const sha = createHash("sha256").update(readFileSync(src)).digest("hex");
@@ -101,6 +103,7 @@ for (const file of FILES) {
     source: path.relative(process.cwd(), src),
     sha256: sha,
     type,
+    verbatim,
   });
 }
 
@@ -119,7 +122,7 @@ Generated ${new Date().toISOString()} by scripts/beautify-bundle.mjs.
 ${entries
   .map(
     (e) =>
-      `| ${e.pretty} | ${e.source} | \`${e.sha256.slice(0, 16)}…\` | \`npx -y js-beautify@${JS_BEAUTIFY_VERSION} --type ${e.type} -f ${e.source} -o mirror/_pretty/${e.pretty}\` |`,
+      `| ${e.pretty} | ${e.source} | \`${e.sha256.slice(0, 16)}…\` | \`npx -y js-beautify@${JS_BEAUTIFY_VERSION} --type ${e.type} -f ${e.source} -o mirror/_pretty/${e.pretty}\` |${e.verbatim ? "  ⛔ NOT BEAUTIFIED — original bytes, line numbers are meaningless" : ""}`,
   )
   .join("\n")}
 
@@ -135,3 +138,23 @@ if (new Set(dests).size !== dests.length) {
   process.exit(5);
 }
 console.log(`[beautify] ${entries.length} file(s) done; ${new Set(dests).size} distinct output(s); ledger -> ${path.relative(process.cwd(), path.join(OUT, "README.md"))}`);
+
+// ⛔ A CORRUPTION FALLBACK THAT EXITS 0 IS A SILENT ONE. Shipping the original
+// bytes keeps the tree usable, and that is the right call — but the whole
+// PURPOSE of _pretty/ is to be the coordinate system every `file:line` citation
+// resolves against, and for these files there are no line numbers to cite: the
+// bundle is one line. The warning was printed mid-run, hundreds of npx lines
+// above the prompt, by a command that then reported success. Same treatment as
+// the injectivity assertion right above: the artefacts are written, and the run
+// is red until someone has seen this.
+const verbatimEntries = entries.filter((e) => e.verbatim);
+if (verbatimEntries.length) {
+  console.error(`\nFATAL: ${verbatimEntries.length} file(s) could not be beautified and shipped as ORIGINAL bytes:`);
+  for (const e of verbatimEntries) console.error(`         ${e.pretty}  <- ${e.source}`);
+  console.error(`       They are valid and byte-faithful, but they are NOT a coordinate system —`);
+  console.error(`       every line number cited into them names the whole file. module-map records`);
+  console.error(`       startChar/endChar as well, which is what to use here; anything that reads`);
+  console.error(`       startLine/endLine (cold-audit, extract-source) is reading one line.`);
+  console.error(`       Marked in the ledger. Re-run once the input is fixed, or exclude the file.`);
+  process.exit(5);
+}

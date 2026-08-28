@@ -77,6 +77,10 @@
  *                                   whole host; a full URL excuses EXACTLY
  *                                   itself; a trailing "*" declares a prefix
  *                                   and is printed on every run
+ *   [--gap-out closure-gap.txt]     where the COMPLETE closure gap is written
+ *                                   (the console listing is truncated). Outside
+ *                                   the mirror by default — the mirror is the
+ *                                   subject, not a scratch directory
  *   [--skip mapping,ledger,authenticity,closure,resample]
  *   [--interstitial-extra FILE]     newline list of EXTRA challenge/block-body
  *                                   regexes (one JS regex source per line, "#"
@@ -114,6 +118,14 @@ const RESAMPLE_DELAY = Number(flag("resample-delay", 1500));
 const RESAMPLE_SEED = Number(flag("resample-seed", 1));
 const RESAMPLE_HTML = args.includes("--resample-html");
 const ALLOW_FILE = flag("allow-missing", path.join(ROOT, "external.txt"));
+// ⛔ THE GATE'S OWN OUTPUT DOES NOT BELONG IN THE SUBJECT. The complete gap list
+// (below) landed in the mirror root, and the coverage check then had to be
+// taught to ignore it — an exclusion is not a fix when the artefact should not
+// have been there. `mirror/` is the one thing this toolchain treats as
+// inviolable (mirroring.md §0: it is both the reverse-engineering evidence and
+// the comparison baseline), and a verification pass that MUTATES what it
+// verifies has spent that guarantee to save a path argument.
+const GAP_OUT = path.resolve(flag("gap-out", "closure-gap.txt"));
 const INTERSTITIAL_FILE = flag("interstitial-extra", null);
 const UA =
   "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0 Safari/537.36";
@@ -125,9 +137,9 @@ const UA =
 // and the set of files the closure gate scans.
 const LEDGER_FILES = new Set([
   "mirror-manifest.json",
-  // The closure gate WRITES closure-gap.txt into the mirror so --seeds can reach
-  // it - which made the coverage check report the gate own artefact as an orphan
-  // one run later. A gate must not fail on what it itself wrote.
+  // ⚠ Kept even though --gap-out now defaults outside the mirror: a mirror taken
+  // before that change has the file sitting in it, and the coverage check would
+  // report the previous run's artefact as an orphan.
   "closure-gap.txt",
   "inventory.tsv",
   "redirects.tsv",
@@ -951,10 +963,10 @@ if (!SKIP.has("closure")) {
     // from the truncated listing, seeds the same first page of the gap every
     // round while the gate keeps failing. Measured: four seed rounds at a
     // constant 32 URLs against a 384-reference gap, converging on nothing.
-    // The ACTIONABLE artefact must be complete, so it goes to a file.
-    const gapFile = path.join(ROOT, "closure-gap.txt");
-    await writeFile(gapFile, missing.map((m) => m.url).join("\n") + "\n");
-    console.log(`         complete list -> ${path.relative(process.cwd(), gapFile)}  (${missing.length} URLs, ready for --seeds)`);
+    // The ACTIONABLE artefact must be complete, so it goes to a file — outside
+    // the mirror by default (--gap-out), because the mirror is the subject.
+    await writeFile(GAP_OUT, missing.map((m) => m.url).join("\n") + "\n");
+    console.log(`         complete list -> ${path.relative(process.cwd(), GAP_OUT)}  (${missing.length} URLs, ready for --seeds)`);
     console.log(
       `         Each must be fetched (mirror-site.mjs --seeds) or get a line in the mirror's\n` +
         `         external.txt and be excused here with --allow-missing. One line excuses one\n` +
