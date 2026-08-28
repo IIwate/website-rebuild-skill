@@ -148,7 +148,22 @@ export function transformPage(html, cfg, { head = true } = {}) {
   // rows whose `T<hex>` still claims the old count, and the page dies inside
   // React's parser with no 404 and no failed request to point at it. Measured
   // here: 17 of 115 built pages, invisible to every other gate.
+  // ⛔ A DEVALUE DATA ISLAND IS PROGRAM INPUT, NOT ADDRESSES. Nuxt inlines
+  // `<script type="application/json" id="__NUXT_DATA__">` whose entries the app
+  // PARSES at runtime — measured on hubtown: the island carries the deploy's
+  // site record ("hubtown-live", env, url), the WebGL boot derives its Theatre
+  // environment from it, and localizing that url to "/" made `new URL(...)`
+  // paths and sheet lookups fail three layers away (addSheetObject reading
+  // 'object' of undefined) while every request stayed 200. §4.10's rule, one
+  // ring further in: display text was content, and so is parsed data. The
+  // island is carved out before localization and restored verbatim after.
+  const islands = [];
+  out = out.replace(/(<script[^>]*id="__NUXT_DATA__"[^>]*>)([\s\S]*?)(<\/script>)/g, (m0, open, body, close) => {
+    islands.push(body);
+    return open + "\u0000NUXTDATA" + (islands.length - 1) + "\u0000" + close;
+  });
   out = (hasFlight(out) ? rewriteFlight(out, localizeAll) : null) ?? localizeAll(out);
+  out = out.replace(/\u0000NUXTDATA(\d+)\u0000/g, (_, i) => islands[Number(i)]);
 
   // --- site-specific transforms ---------------------------------------------
   // ⛔ THESE GO THROUGH THE LENGTH-AWARE PATH TOO. It is not only localisation

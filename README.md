@@ -304,6 +304,8 @@ README.md                  # 本文件
 
 - **v0.1.70**:⛔ **未知参数必须 FATAL——一次静默忽略买了三小时追凶。** probe 的参数叫 `--wait`,兄弟工具 netcapture 叫 `--settle`;传错的那个被静默吞掉,每次"长观察"都跑在默认 6 秒上,于是"加载器卡死/定时器不响/重载循环/渲染器崩溃/时钟被接管"五层幻影各自都有"证据"——**每个局部检验都对,前提错了,它们全在为幻影作证**。probe 现在枚举参数、未知即 FATAL,并新增 lifecycle 眼睛(崩溃/重导航进报告)。另三课(hubtown,Nuxt/Vite 形态):**Vite chunk 清单是相对说明符**(`__vite__mapDeps`,三分之一懒 chunk 曾隐形,import 失败触发 Nuxt 重载);**无扩展名服务端路由按 manifest 类型伺服**(ofetch 按 content-type 解析,`text/html` 让应用拿到字符串);`.ttf` 里可以住 OTTO/CFF。
 
+- **v0.1.71**:⛔ **devalue 数据岛是程序输入,不是地址**(§4.10 的内圈)。hubtown 的 `__NUXT_DATA__` 岛带着部署站点记录,WebGL 引导从中推导 Theatre 环境——把里面的 URL 本地化成 `/`,三层之外炸成 `addSheetObject undefined`,期间每个请求都是 200。⚠ 载荷门的"差异限于引用"判据会**放行**这种改动——抓到它的是渲染文本对拍 + 外壳二分(仅 noindex 完好、仅 localize 损坏)。修法:岛整体切出本地化、原样放回;零外联不受影响(那 URL 是数据,从不被请求)。另:载荷门认 Nuxt3 外置 `_payload.json` 且它优先于内联形状(nuxt2 形状曾抓住运行时 config 求值失败,把错误匹配报成了内容损坏)。
+
 ## 下一步
 
 - **v0.2+**：补齐剩余的 B 类场景——第三方存储桶资产发现、运行时接口与 headless CMS 快照、超大型多分包代码切片、失效站点的存档抢救。
