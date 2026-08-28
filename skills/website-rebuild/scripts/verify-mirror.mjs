@@ -619,7 +619,11 @@ if (!SKIP.has("authenticity")) {
     woff2: (b) => startsWith(b, [0x77, 0x4f, 0x46, 0x32]),
     woff: (b) => startsWith(b, [0x77, 0x4f, 0x46, 0x46]),
     otf: (b) => startsWith(b, [0x4f, 0x54, 0x54, 0x4f]),
-    ttf: (b) => startsWith(b, [0x00, 0x01, 0x00, 0x00]) || startsWith(b, [0x74, 0x72, 0x75, 0x65]),
+    // ⚠ "OTTO" too: an OpenType/CFF font served under a .ttf name with
+    // `font/ttf` is the ORIGIN'S labeling habit, not corruption — the bytes are
+    // a real font. Measured on hubtown: commit-mono-bold.ttf is OTTO/CFF, and
+    // rejecting it told the operator to re-fetch a file that was already right.
+    ttf: (b) => startsWith(b, [0x00, 0x01, 0x00, 0x00]) || startsWith(b, [0x74, 0x72, 0x75, 0x65]) || startsWith(b, [0x4f, 0x54, 0x54, 0x4f]),
     mp4: (b) => startsWith(b, [0x66, 0x74, 0x79, 0x70], 4),
     webm: (b) => startsWith(b, [0x1a, 0x45, 0xdf, 0xa3]),
     ogg: (b) => startsWith(b, [0x4f, 0x67, 0x67, 0x53]),

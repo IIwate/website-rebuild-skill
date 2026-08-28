@@ -182,6 +182,25 @@ const STUB_EXT_HOSTS = [
 // File extensions whose responses are eligible for external-host rewriting.
 const TEXT_REWRITE = new Set([".html", ".css", ".js", ".mjs", ".json", ".svg"]);
 
+// ⭐ THE MIRROR ALREADY KNOWS WHAT THE ORIGIN DECLARED. An extensionless URL
+// (a Nuxt server route like /api/_auth/session) stores as <path>/index.html,
+// and extension-guessing then serves the origin's application/json bytes as
+// text/html — whereupon ofetch, which parses BY CONTENT-TYPE, hands the app a
+// STRING where it awaited an object, and an enter sequence dies with zero
+// failed requests to point at. The manifest records the declared type per
+// entry; the server's job is to say the same thing the origin said.
+const RECORDED_TYPE = new Map();
+for (const root of ROOTS) {
+  try {
+    const mf = JSON.parse(await fsp.readFile(path.join(root, "mirror-manifest.json"), "utf8"));
+    for (const rec of Object.values(mf.files || {})) {
+      if (!rec || !rec.path || !rec.type) continue;
+      RECORDED_TYPE.set(path.join(root, rec.path), rec.type);
+      RECORDED_TYPE.set(path.join(root, rec.path, "index.html"), rec.type);
+    }
+  } catch {}
+}
+
 const MIME = {
   ".html": "text/html; charset=utf-8",
   ".js": "text/javascript; charset=utf-8",
@@ -720,7 +739,7 @@ const server = http.createServer(async (req, res) => {
 
     const ext = path.extname(hit.file).toLowerCase();
     const headers = {
-      "content-type": MIME[ext] || "application/octet-stream",
+      "content-type": RECORDED_TYPE.get(hit.file) || MIME[ext] || "application/octet-stream",
       "cache-control": "no-cache",
       "access-control-allow-origin": "*",
     };

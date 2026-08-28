@@ -196,6 +196,23 @@ https://host/9dc1a6fb114b646f-s.p…      整个路径前缀都在上一个 push
 规则应当是**按括号配平裁剪**:配平的 `(` … `)` 属于文件名,孤零零的尾随 `)` 才是
 CSS `url(...)` 的收尾定界符。同一个坑在检查脚本里又踩了一次。
 
+### 0.23 Nuxt/Vite 目标的三个镜像必修课【hubtown】
+
+1. ⛔ **Vite 的 chunk 清单是相对说明符**:`__vite__mapDeps` 与 `import("./Xxx.js")` 都相对
+   引用文件所在目录,根相对形状全部匹配不到——实测三分之一的懒加载 chunk 不在"闭包已空"
+   的镜像里。运行时 import 失败会触发 Nuxt 的 `app:chunkError` → `reloadNuxtApp`。
+   提取器已加 4c 形状(JS 内 `"./x.ext"` 按 baseUrl 目录解析)。
+2. ⭐ **`/_nuxt/builds/latest.json` 是运行时拼的**,静态字节里不完整出现;Nuxt 拿它比对
+   构建号,404/不一致会走重载路径。抓包看得到,记得补种。
+3. ⛔ **无扩展名的服务端路由要按 manifest 记录的 content-type 伺服**:`/api/_auth/session`
+   存成 `<path>/index.html`,按后缀猜成 `text/html`;ofetch **按 content-type 解析**,
+   拿到字符串而不是对象,应用侧静默断链。netcapture --fetch 现在把观测到的类型写进两本账,
+   serve.mjs 优先用 manifest 记录的类型应答。
+
+### 0.24 ⚠ `.ttf` 后缀里可以住着 OpenType/CFF
+`OTTO` 魔数 + `font/ttf` 声明是**源站自己的标注习惯**,字节是真字体。
+真实性门的 ttf 魔数现在认 `00010000`、`true`、`OTTO` 三种。
+
 ## 0. 三条地基原则
 
 1. **镜像神圣不可污染**：`mirror/` 磁盘文件抓下来后永不修改。它既是逆向的唯一原始依据，又是后续所有对拍验收的基准端——污染镜像 = 污染裁判【samsy】【noomo】【lando】。

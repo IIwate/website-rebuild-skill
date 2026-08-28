@@ -429,7 +429,12 @@ if (DO_FETCH && missing.length) {
     const body = Buffer.from(await res.arrayBuffer());
     await fs.mkdir(path.dirname(out), { recursive: true });
     await fs.writeFile(out, body);
-    fetched.push({ rel, url: m.path, bytes: body.length, sha: createHash("sha256").update(body).digest("hex") });
+    // ⭐ Carry the DECLARED TYPE into the ledger. serve.mjs answers extensionless
+    // paths (Nuxt server routes) with the manifest's recorded type; a row
+    // without one gets extension-guessed into text/html, and ofetch — which
+    // parses by content-type — hands the app a string where it awaited JSON.
+    fetched.push({ rel, url: m.path, bytes: body.length, sha: createHash("sha256").update(body).digest("hex"),
+      type: (res.headers.get("content-type") || "").split(";")[0] || undefined });
     console.log(`  OK ${m.path}`);
   }
   await appendLedger(fetched);
@@ -453,7 +458,7 @@ async function appendLedger(rows) {
     let n = 0;
     for (const r of rows) {
       if (mf.files[r.url]) continue;
-      mf.files[r.url] = { path: r.rel, bytes: r.bytes, sha256: r.sha };
+      mf.files[r.url] = { path: r.rel, bytes: r.bytes, sha256: r.sha, ...(r.type ? { type: r.type } : {}) };
       n++;
     }
     if (n) await fs.writeFile(mfPath, JSON.stringify(mf, null, 2));
