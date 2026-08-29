@@ -2,7 +2,7 @@
 
 ## Differences from Upstream
 
-This package is a fork of [boyang-hu/website-rebuild-skill](https://github.com/boyang-hu/website-rebuild-skill), merged up to and including upstream v0.1.70. It records only what differs from upstream; for what the skill is and how to run it, read `skills/website-rebuild/SKILL.md`.
+This package is a fork of [boyang-hu/website-rebuild-skill](https://github.com/boyang-hu/website-rebuild-skill), merged up to and including upstream v0.1.71. It records only what differs from upstream; for what the skill is and how to run it, read `skills/website-rebuild/SKILL.md`.
 
 ### Engineering additions
 

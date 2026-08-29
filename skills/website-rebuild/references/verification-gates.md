@@ -1251,3 +1251,26 @@ port 合法地改 URL 与资源路径(本地化、每 chunk 一条替换),它不
 ### 顺带:probe 现在长了生命周期的眼睛
 `Inspector.targetCrashed` 与主框架重导航会出现在报告里(`=== lifecycle ===`)。
 一个崩溃后被 Chrome 自动重载的页面,此前在报告里读作"0 报错 0 失败"。
+
+## §4.18 ⛔ devalue 数据岛是程序输入,不是地址【hubtown】
+
+§4.10 说锚文本里的 URL 是内容;这一课在它内圈:**被应用解析的数据里的 URL 也是内容**。
+
+Nuxt 内联 `<script type="application/json" id="__NUXT_DATA__">`(devalue 编码)。
+hubtown 的岛里带着部署站点记录(`"hubtown-live"`,env,url)。WebGL 引导从中推导
+Theatre 环境;把那个 url 本地化成 `/` 之后,`new URL(...)` 与 sheet 查找在**三层之外**
+炸成 `addSheetObject reading 'object' of undefined`——期间每个请求都是 200。
+
+⚠ 载荷门抓不到它:它的判据"每处差异限于一个引用"会放行这种改动——
+**知道一个 PASS 值多少,是这个 PASS 的一部分**(§4.12 同款忠告,这次真的兑了现)。
+抓到它的是渲染层文本对拍 + 外壳二分(仅 noindex 的变体完好,仅 localize 的变体损坏)。
+
+⭐ 修法:本地化前把 `__NUXT_DATA__` 岛整体切出,之后原样放回(`lib/shell-build.mjs`)。
+零外联不受影响:那个 URL 是数据,运行时从不请求它(实测 external = 0)。
+
+## §4.19 载荷门认 Nuxt3 外置载荷文件,且它**优先**于内联形状
+
+Nuxt3 可把载荷外置为 `/_payload.json?<buildId>`(devalue JSON 数组),页面里同时还有
+`window.__NUXT__={};__NUXT__.config={...}` 的**运行时配置**。nuxt2 形状会抓住后者,
+求值失败,报"载荷损坏"——**错误的形状匹配,报成了内容损坏**。
+外置载荷引用存在时,它就是载荷,先于一切内联形状。

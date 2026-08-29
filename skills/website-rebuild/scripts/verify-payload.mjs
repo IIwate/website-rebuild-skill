@@ -127,6 +127,7 @@ function expandFlight(stream) {
 }
 
 function expand(found) {
+  if (found.shape === "nuxt3-payload-file") return JSON.parse(found.src);
   if (found.shape.startsWith("flight")) return expandFlight(found.src);
   if (found.shape === "nuxt3") return JSON.parse(found.src);
   // nuxt2: an IIFE that returns the object. Evaluated, not re-implemented.
@@ -156,7 +157,20 @@ console.log(`=== verify-payload  ${A}${B ? "  vs  " + B : ""} ===\n`);
 
 for (const route of ROUTES) {
   const htmlA = await get(A, route);
-  const foundA = extract(htmlA);
+  // ⭐ Nuxt 3 can EXTERNALIZE the payload: the document references
+  // `/_payload.json?<buildId>` (a devalue-encoded JSON array) instead of
+  // inlining __NUXT_DATA__. When that reference exists it IS the payload, and
+  // it comes FIRST: the page may also carry an inline `window.__NUXT__ = {}`
+  // runtime-config assignment, which the nuxt2 shape happily grabs and then
+  // fails to evaluate — a wrong-shape match reported as a corrupt payload.
+  let payloadPath = null;
+  {
+    const m = htmlA.match(/"((?:[\w./-]*)?_payload\.json[^"]*)"/);
+    if (m) payloadPath = m[1].startsWith("/") ? m[1] : "/" + m[1].replace(/^\.\//, "");
+  }
+  let foundA = payloadPath
+    ? { shape: "nuxt3-payload-file", src: await get(A, payloadPath) }
+    : extract(htmlA);
   if (!foundA) { fail(`${route} — no known SSG payload shape found`); continue; }
 
   let dataA;
@@ -196,7 +210,10 @@ for (const route of ROUTES) {
   if (!B) continue;
 
   const htmlB = await get(B, route);
-  const foundB = extract(htmlB);
+  // Same precedence as side A: the externalized payload outranks inline shapes.
+  let foundB = payloadPath
+    ? { shape: "nuxt3-payload-file", src: await get(B, payloadPath) }
+    : extract(htmlB);
   if (!foundB) { fail(`${route} — payload missing on side B`); continue; }
   let dataB;
   try {
