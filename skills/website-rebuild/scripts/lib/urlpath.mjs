@@ -241,6 +241,26 @@ export function localRelPath(absUrl, originHost, policy = DEFAULT_POLICY) {
   // server and gate on the same answer (§2.1.1) — normalising downstream is how
   // they drifted in the first place.
   let clean = decodeURIComponent(u.pathname).replace(/\/{2,}/g, "/");
+  // ⛔ A URL PATH CAN CONTINUE PAST A FILE. Storyblok's image service appends
+  // transforms UNDER the original's path: `…/team-hero.jpg` is the original and
+  // `…/team-hero.jpg/m/110x110/filters:format(avif):quality(70)` is a variant.
+  // A naive mapping needs `team-hero.jpg` to be a file and a directory at once,
+  // and the crawl fails both ways — ENOTDIR creating the variant after the
+  // original, EISDIR writing the original after a variant. Measured: every
+  // storyblok asset with transforms, ~1,700 entries.
+  //
+  // ⭐ Flatten the tail into the filename: everything after an
+  // extension-bearing NON-FINAL segment joins it with the reserved "@@"
+  // delimiter (the same convention query strings use). Injective — "@@" is
+  // reserved — and shared by crawler, server, capture and gates via this one
+  // function, which is what keeps them agreeing (§2.1.1).
+  // ⚠ Gated on a KNOWN asset extension, not "any dotted segment": a version
+  // directory like `/decoders/1.5.5/…` must NOT flatten — a dot-anywhere rule
+  // would have silently remapped every existing mirror that has one.
+  clean = clean.replace(
+    /^(.*?\.(?:jpe?g|png|gif|webp|avif|svg|ico|mp4|webm|mov|mp3|wav|pdf|css|js|mjs|json|woff2?|ttf|otf|glb|gltf|ktx2|wasm|zip))(\/.+)$/i,
+    (m0, file, tail) => file + "@@" + tail.slice(1).replace(/\//g, "@@"),
+  );
   if (u.hostname !== originHost) {
     if (clean.endsWith("/")) clean += "index";
     return "assets/" + u.hostname + withQuerySuffix(clean, suffix);
@@ -268,6 +288,16 @@ export function localRelPath(absUrl, originHost, policy = DEFAULT_POLICY) {
 export function serveCandidates(pathname, search, policy = DEFAULT_POLICY) {
   const suffix = querySuffix(search, policy);
   const out = [];
+  // ⛔ THE SAME FLATTEN THE WRITER USED. localRelPath() flattens a path that
+  // continues past a file (Storyblok's `x.jpg/m/110x110/filters:…` transforms)
+  // into `x.jpg@@m@@110x110@@filters:…` — so the request, which arrives in the
+  // SLASH spelling, must be resolved through the identical rule or the server
+  // 404s on a file the crawler wrote. One library, one answer (§2.1.1).
+  const flat = pathname.replace(
+    /^(.*?\.(?:jpe?g|png|gif|webp|avif|svg|ico|mp4|webm|mov|mp3|wav|pdf|css|js|mjs|json|woff2?|ttf|otf|glb|gltf|ktx2|wasm|zip))(\/.+)$/i,
+    (m0, file, tail) => file + "@@" + tail.slice(1).replace(/\//g, "@@"),
+  );
+  if (flat !== pathname) out.push(flat);
   if (suffix) {
     // ⛔ For a DIRECTORY-style path the crawler and the server used to disagree
     // about the ORDER of two operations — attach the query suffix, and append

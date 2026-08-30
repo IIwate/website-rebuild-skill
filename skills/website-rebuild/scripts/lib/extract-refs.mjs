@@ -343,7 +343,21 @@ export function createRefExtractor({ origin, originHost, assetHosts, onOffHost }
   const scan = (text, baseUrl, urls) => {
     // 1. absolute URLs
     for (const m of text.matchAll(/https?:\/\/[a-z0-9.-]+\/[^\s"'`\\<>{}|^\][]+/gi)) {
-      addIfAsset(decodeEntities(m[0]).replace(/[),.;:!]+$/, ""), urls);
+      // ⚠ The trailing-punctuation trim strips ")" ONLY while unbalanced. A URL
+      // really can end in ")": Storyblok's `…filters:format(avif):quality(70)`.
+      // Blind stripping manufactured 1,593 phantom `…quality(70` URLs — one
+      // failed-fetch twin for every real reference — which is v0.1.68's paren
+      // lesson surfacing in its THIRD location. The other trailing marks
+      // (, . ; : !) stay unconditional: they are sentence punctuation around a
+      // URL in prose, never part of a path.
+      let ref = decodeEntities(m[0]);
+      for (;;) {
+        const last = ref[ref.length - 1];
+        if (",.;:!".includes(last)) { ref = ref.slice(0, -1); continue; }
+        if (last === ")" && (ref.match(/\(/g) || []).length < (ref.match(/\)/g) || []).length) { ref = ref.slice(0, -1); continue; }
+        break;
+      }
+      addIfAsset(ref, urls);
     }
     // 2. protocol-relative (//host/path)
     for (const m of text.matchAll(/["'(]\/\/([a-z0-9.-]+\/[^\s"')<>]+)/gi)) {

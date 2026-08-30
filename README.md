@@ -157,6 +157,7 @@ cp -R skills/website-rebuild ~/.claude/skills/website-rebuild
 | EIGHT DESIGN | [eightdesign.co.jp](https://eightdesign.co.jp/) | 日本设计公司**115 路由全站**（Next.js App Router + Turbopack），第一个 C2 类目标：23 个 chunk / 278 个模块逐字移植，**115/115 路由跨侧渲染一致**，载荷门逐叶比对 60.9 万条 |
 | Raycast Keyboard | [raycast.com/keyboard](https://www.raycast.com/keyboard) | Raycast × NuPhy 联名产品页（Turbopack + DRACO 3D 模型），判级到源码化**单次会话跑完**，4 个检查点**像素精确全零** |
 | Hubtown | [hubtown.co.in](https://hubtown.co.in/) | Unseen Studio 出品的全屏 WebGL 长镜头站（Nuxt 3 + three.js + **Theatre.js**），授权动画状态随包下发的 C2 范本；landing 像素差落在同侧噪声带内 |
+| ON.energy | [www.on.energy](https://www.on.energy/) | 能源公司官网（Nuxt 3 + WebGL GLB 场景 + **Storyblok headless CMS**），首个 CMS 资产桶全量镜像样本（原图 + `/m/` 变换变体约 1,800 图）；55/55 路由零报错，滚动 9 档对拍 8 档精确零、页顶视频钉帧后归零 |
 
 ### 只做过判级的边界样本
 
@@ -292,9 +293,13 @@ README.md                  # 本文件
 - **v0.1.70**：所有探针脚本严格校验命令行参数，未知参数直接报错；`probe` 新增生命周期报告（渲染器崩溃、主框架重导航）；引用提取支持 Vite 相对模块说明符（`__vite__mapDeps`、`import("./x.js")`）；serve 按镜像账本记录的 content-type 伺服无扩展名路由；字体真实性校验接受 `.ttf` 后缀下的 OpenType/CFF。
 - **v0.1.71**：URL 本地化豁免 Nuxt `__NUXT_DATA__` 数据岛（其内容是运行时解析的程序输入）；`verify-payload` 支持 Nuxt 3 外置 `_payload.json` 载荷并优先于内联形状识别。
 
+### Headless CMS 资产桶（v0.1.72）
+
+- **v0.1.72**：支持 Storyblok 式图片变换 URL（`/x.jpg/m/110x110/filters:...` 这类"文件名后还有路径"的形态）——URL 落盘时对已知资产扩展名后的路径段拍平，伺服端对同形态请求做同一变换回查；修复绝对 URL 提取时以括号收尾的地址被误剪（如 `quality(70)`）；`verify-refs-served` 与 `make-standalone` 新增 `--allow`，接受与镜像门同一份豁免清单（源站自身 404 的引用不再逼门变红）。
+
 ## 下一步
 
-- **v0.2+**：补齐剩余的 B 类场景——第三方存储桶资产发现、运行时接口与 headless CMS 快照、超大型多分包代码切片、失效站点的存档抢救。
+- **v0.2+**：补齐剩余的 B 类场景——超大型多分包代码切片、失效站点的存档抢救（第三方存储桶资产发现与 headless CMS 快照已在 v0.1.72 / ON.energy 落地）。
 - **源码化的两块空白**：命名的还原率取决于代码本身留下多少线索——实测一个扁平站有 63% 的局部变量没有任何可依据的证据，一个模块化站有 27/46 个模块只能保留哈希 id。这不是欠账，**错名比哈希更糟，因为哈希会让人去看**。另一块是模块头目前只写事实与溯源，**"这个模块是干什么的"仍然需要人来写**——工具写不出，而写错比留白更糟。
 - **远期**：C1 类（RSC 服务端组件）的"重构式逆向"方法论——C2（声明式组织、源码随包下发）已在 v0.1.54–0.1.71 间落地并跑通三个目标，剩下的是行为源真正不下发的那一半。
 
