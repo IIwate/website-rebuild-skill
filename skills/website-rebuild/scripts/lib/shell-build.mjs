@@ -8,8 +8,9 @@
 //
 // ⛔ NO SIDE EFFECTS IN THIS FILE OR IN A PROJECT'S shell-config.mjs. The gate
 // imports both, and a gate must never import a module that produces what it
-import { rewriteFlight, hasFlight } from "./flight.mjs";
 // audits (§2.1.2).
+import { rewriteFlight, hasFlight } from "./flight.mjs";
+import { protectDataIslands } from "./data-island.mjs";
 
 const esc = (s) => String(s).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 
@@ -108,7 +109,14 @@ export const noindexBlock = (cfg) =>
 /**
  * Apply the configured table to one document (or one diff hunk).
  * Pure: every counter is returned, none is module state.
- *   returns { text, hits: Map<id, n>, sub: Map<ruleId, n> }
+ *   returns { text, hits: Map<id, n>, sub: Map<ruleId, n>,
+ *             preserved: [{ url, asset }] }
+ *
+ * `preserved` is what the data-island carve-out held back from localisation
+ * (lib/data-island.mjs). It is part of the return value rather than a warning
+ * printed here because this function is pure and because the two callers owe
+ * it different answers: build-site.mjs ships bytes and can refuse, verify-shell
+ * is classifying a hunk and must not.
  *
  * `head` is false when the caller is classifying a fragment rather than
  * building a page, so a hunk is never "explained" by a transform it did not use.
@@ -148,22 +156,19 @@ export function transformPage(html, cfg, { head = true } = {}) {
   // rows whose `T<hex>` still claims the old count, and the page dies inside
   // React's parser with no 404 and no failed request to point at it. Measured
   // here: 17 of 115 built pages, invisible to every other gate.
-  // ⛔ A DEVALUE DATA ISLAND IS PROGRAM INPUT, NOT ADDRESSES. Nuxt inlines
-  // `<script type="application/json" id="__NUXT_DATA__">` whose entries the app
-  // PARSES at runtime — measured on hubtown: the island carries the deploy's
-  // site record ("hubtown-live", env, url), the WebGL boot derives its Theatre
-  // environment from it, and localizing that url to "/" made `new URL(...)`
-  // paths and sheet lookups fail three layers away (addSheetObject reading
-  // 'object' of undefined) while every request stayed 200. §4.10's rule, one
-  // ring further in: display text was content, and so is parsed data. The
-  // island is carved out before localization and restored verbatim after.
-  const islands = [];
-  out = out.replace(/(<script[^>]*id="__NUXT_DATA__"[^>]*>)([\s\S]*?)(<\/script>)/g, (m0, open, body, close) => {
-    islands.push(body);
-    return open + "\u0000NUXTDATA" + (islands.length - 1) + "\u0000" + close;
-  });
-  out = (hasFlight(out) ? rewriteFlight(out, localizeAll) : null) ?? localizeAll(out);
-  out = out.replace(/\u0000NUXTDATA(\d+)\u0000/g, (_, i) => islands[Number(i)]);
+  // ⛔ AND A DEVALUE DATA ISLAND IS PROGRAM INPUT, NOT ADDRESSES (§4.18). The
+  // carve-out lives in lib/data-island.mjs rather than here, for the same
+  // reason the length-aware path lives in lib/flight.mjs: serve.mjs localises
+  // the same bytes at RESPONSE time, and a guard on one of two localisers is
+  // either undone by the other or reported by the payload gate as a content
+  // difference (§4.9.4 — the debt this file's own header names).
+  // ⚠ What the carve-out kept is RETURNED, not swallowed: holding the island
+  // back re-opens the latent-outbound class shape 6 above exists to close, and
+  // build-site.mjs is what decides whether that ships.
+  const guarded = protectDataIslands(out, (t) =>
+    (hasFlight(t) ? rewriteFlight(t, localizeAll) : null) ?? localizeAll(t),
+  );
+  out = guarded.text;
 
   // --- site-specific transforms ---------------------------------------------
   // ⛔ THESE GO THROUGH THE LENGTH-AWARE PATH TOO. It is not only localisation
@@ -204,7 +209,7 @@ export function transformPage(html, cfg, { head = true } = {}) {
     if (out !== before) bump("T-NOINDEX");
   }
 
-  return { text: out, hits, sub };
+  return { text: out, hits, sub, preserved: guarded.preserved };
 }
 
 /** Every transform id the table can produce, builder and gate agreeing. */

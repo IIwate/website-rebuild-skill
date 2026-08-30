@@ -47,14 +47,29 @@ const totals = new Map(ids.map((id) => [id, 0]));
 const subTotals = new Map();
 const identical = [];
 const survivors = [];
+const heldUrls = new Map(); // asset-shaped URL a carve-out preserved -> pages
 const report = { config: CONFIG, pages: [] };
 
 for (const page of PAGES) {
   const src = await readFile(path.join(MIRROR, page.rel), "utf8");
-  const { text, hits, sub } = transformPage(src, cfg);
+  const { text, hits, sub, preserved } = transformPage(src, cfg);
   if (text === src) identical.push(page.rel);
   for (const [k, n] of hits) totals.set(k, (totals.get(k) || 0) + n);
   for (const [k, n] of sub) subTotals.set(k, (subTotals.get(k) || 0) + n);
+
+  // ⛔ THE DATA-ISLAND CARVE-OUT IS A TRADE, AND THIS IS THE HALF THAT SHIPS.
+  // Holding `__NUXT_DATA__` back from localisation (§4.18) protects the fields
+  // the app PARSES — and preserves every other absolute URL in the island with
+  // them. That is the class this table's shape 6 was written for: 11 media-host
+  // URLs once survived every other spelling inside a serialised payload and the
+  // runtime probe caught exactly one, because a payload URL is not requested
+  // until the page happens to want it. A preserved URL that names a FILE is an
+  // address by shape, so it is an outbound the deliverable would carry — the
+  // build refuses it here rather than leaving it to a probe that cannot see it.
+  for (const p of preserved || []) {
+    if (!p.asset) continue;
+    heldUrls.set(p.url, [...(heldUrls.get(p.url) || []), page.rel]);
+  }
 
   // Purpose checks: what a remove/replace transform is FOR cannot be stated by
   // a hit count. Values come from the MIRROR at build time, never hard-coded.
@@ -102,6 +117,13 @@ if (survivors.length) {
 }
 if (identical.length) {
   problems.push(`${identical.length} page(s) came out byte-identical to the mirror: ${identical.join(", ")}`);
+}
+if (heldUrls.size) {
+  problems.push(
+    `${heldUrls.size} asset-shaped URL(s) preserved by the data-island carve-out — each is an outbound the ` +
+      `deliverable would carry, and no load-time probe sees it until the page asks:\n       ` +
+      [...heldUrls].map(([u, pages]) => `${u.slice(0, 100)}  (${pages.length} page(s), e.g. ${pages[0]})`).join("\n       "),
+  );
 }
 
 console.log(`=== build-site -> ${path.relative(process.cwd(), target)} ===`);

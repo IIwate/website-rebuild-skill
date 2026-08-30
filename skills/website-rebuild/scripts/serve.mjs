@@ -59,6 +59,7 @@
 import http from "node:http";
 import { rewriteFlight, repairFlightRows, hasFlight } from "./lib/flight.mjs";
 import { sniffTextBytes, textRefVerdict } from "./lib/extract-refs.mjs";
+import { protectDataIslands, describePreserved } from "./lib/data-island.mjs";
 import fs from "node:fs";
 import fsp from "node:fs/promises";
 import path from "node:path";
@@ -465,9 +466,43 @@ const REWRITES = args
     return { from: spec.slice(0, at), to: spec.slice(at + 2), hits: 0 };
   });
 
-function rewrite(text, ext) {
+// What the data-island carve-out has held back from localisation. ⛔ A
+// REFERENCE SERVER CANNOT FATAL ON THIS — it has to keep answering — but it
+// must not stay silent either: holding an island back re-opens the latent
+// outbound this file's shape 6 exists to close, and "ten latent ones sit in
+// the blob" is a failure this server has already met once. Bounded output, in
+// the order verify-offline.mjs reports the same class: every ASSET-SHAPED URL
+// preserved is named ONCE (they are addresses by shape, the set is finite, and
+// each one needs an external.txt line), while the data-shaped remainder gets a
+// single first-hit summary the way `--rewrite` announces itself.
+const islandSeen = new Set();
+let islandNoted = false;
+
+function rewrite(text, ext, where = "") {
   // Rewritten bytes can no longer match SRI hashes; drop integrity attrs (HTML only).
   if (ext === ".html") text = text.replace(/ integrity="[^"]*"/g, "");
+  // ⛔ A DEVALUE DATA ISLAND IS PROGRAM INPUT, NOT ADDRESSES (§4.18), and the
+  // guard is SHARED with lib/shell-build.mjs rather than copied here — the two
+  // localisers disagreeing about where an island is would be §4.9.4's drift in
+  // its most expensive form, because the payload gate compares exactly these
+  // two outputs and would report the disagreement as corrupted content.
+  // ⭐ `where` is what makes the EXTERNALIZED payload reachable: `.json` is in
+  // TEXT_REWRITE, so `/_payload.json` (§4.19) would otherwise be localised
+  // here exactly the way the inline island was.
+  const guarded = protectDataIslands(text, (t) => rewriteInner(t, ext), { where });
+  for (const p of guarded.preserved) {
+    if (!p.asset || islandSeen.has(p.url)) continue;
+    islandSeen.add(p.url);
+    console.log(`  [island] ${where || "(response)"}: preserved asset-shaped URL — ${p.url.slice(0, 100)}`);
+  }
+  if (guarded.preserved.length && !islandNoted) {
+    islandNoted = true;
+    console.log(`  [island] ${where || "(response)"}: ${describePreserved(guarded.preserved)}`);
+  }
+  return guarded.text;
+}
+
+function rewriteInner(text, ext) {
   // ⛔ Length-prefixed payloads first, and out of band: rewriteFlight() hands
   // each row's content to rewriteText() on its own and re-declares the length.
   // If the blanket pass below reached those rows it would shorten them without
@@ -794,7 +829,7 @@ const server = http.createServer(async (req, res) => {
       // Replay the origin's 404 template if the mirror captured one.
       const tpl = await statFile(path.join(ROOT, "404.html"));
       if (tpl && !url.pathname.startsWith("/ext/")) {
-        const html = rewrite(await fsp.readFile(tpl.file, "utf8"), ".html");
+        const html = rewrite(await fsp.readFile(tpl.file, "utf8"), ".html", "404.html");
         res.writeHead(404, { "content-type": "text/html; charset=utf-8" });
         return res.end(html);
       }
@@ -814,7 +849,7 @@ const server = http.createServer(async (req, res) => {
     const canRewrite = TEXT_REWRITE.has(ext) || (ext === "" && await extensionlessIsText(hit.file));
     if ((canRewrite && (EXT_HOSTS.length || ORIGIN_HOSTS.length)) || wantsProbe) {
       let text = await fsp.readFile(hit.file, "utf8");
-      if (EXT_HOSTS.length || ORIGIN_HOSTS.length) text = rewrite(text, ext);
+      if (EXT_HOSTS.length || ORIGIN_HOSTS.length) text = rewrite(text, ext, url.pathname);
       if (wantsProbe) text = text.replace(/<head([^>]*)>/i, `<head$1><script>${PROBE_SHIM}</script>`);
       const body = Buffer.from(text, "utf8");
       res.writeHead(200, { ...headers, "content-length": body.length });

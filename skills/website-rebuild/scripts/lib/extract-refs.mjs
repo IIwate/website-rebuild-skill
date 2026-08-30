@@ -485,8 +485,12 @@ export function createRefExtractor({ origin, originHost, assetHosts, onOffHost }
 /** Vendors whose presence on an unfollowed host is expected, not a finding. */
 const TELEMETRY_HOST = /googletagmanager|google-analytics|doubleclick|facebook|clarity|hotjar/i;
 
-/** Does this reference name a FILE (as opposed to a namespace URI or a page)? */
-const looksLikeAsset = (href) => {
+/** Does this reference name a FILE (as opposed to a namespace URI or a page)?
+ *  Exported for lib/data-island.mjs, which has to answer the same question
+ *  about a URL a carve-out preserved: one that names a file is an ADDRESS the
+ *  localiser was held back from, and that is the half of the trade a gate has
+ *  to see. */
+export const looksLikeAsset = (href) => {
   try {
     const u = new URL(href);
     return /\.[a-z0-9]{2,5}($|\?)/i.test(u.pathname + (u.search || ""));
