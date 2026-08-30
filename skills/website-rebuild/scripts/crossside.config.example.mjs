@@ -43,7 +43,7 @@ export const info = [
  * build(cases) returns a JS expression string, evaluated in the page, whose
  * value is `{ out: { [case]: value } }`.
  *
- * ⛔ It must construct its OWN fixture rather than reusing whatever the page
+ * ⛔ It must construct its OWN one-shot synthetic input rather than reusing whatever the page
  * happens to contain: the two sides are different pages, and a gate that reads
  * their existing DOM is comparing two documents, not one implementation against
  * another. Build identical scaffolding on both sides, measure, tear it down.

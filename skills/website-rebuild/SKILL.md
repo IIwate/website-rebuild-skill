@@ -230,6 +230,8 @@ Step 0 → M(n) 全程不装任何东西；**复刻项目要到 M(n+1) 才获得
 - [legal-and-deploy.md](references/legal-and-deploy.md) — 版权取证与部署决断（取证归 skill，决定归用户）
 - [readable-source.md](references/readable-source.md) — M(n+1) 源码化：port/ → src/ 的可读工程（拆模块、去混淆、注释纪律、自包含契约）
 - [assets/templates/rebuild-plan.md](assets/templates/rebuild-plan.md)、[assets/templates/engine-notes.md](assets/templates/engine-notes.md)、[assets/templates/verify-spa-navigation.mjs](assets/templates/verify-spa-navigation.mjs) — 文档与门禁模板
+- [scripts/verify-ledger.mjs](scripts/verify-ledger.mjs)、[scripts/verify-sourceified-tokens.mjs](scripts/verify-sourceified-tokens.mjs) — 坐标台账与源码化等价的可选校验门
+- [tools/demangle-modules.mjs](tools/demangle-modules.mjs) — 源码化阶段的作用域安全重命名工具
 
 ## Notes
 
@@ -237,3 +239,4 @@ Step 0 → M(n) 全程不装任何东西；**复刻项目要到 M(n+1) 才获得
 - **工期预期**：方法论成熟形态下，单页创意站 1-3 天（数十个 commit）；多场景 WebGL 作品集站按周计。向用户给预估时参考 Step 1 的难度评级。
 - **对拍失败先怀疑环境**：后台节流、HMR 幽灵模块、探针时钟、headless 字体缺失都会伪装成代码 bug。判定源码问题前先过 environment-traps.md 的校准清单。
 - 遇到本 skill 未覆盖的场景（B 类缺口），明确告诉用户"这一段没有既成指南，按通用纪律推进"，并把新经验记入项目文档——它们是 skill 下一版的输入。
+- **工具边界**：新入口只提供可复用的判据、变换器和记录形状；调用方的路径、路由、状态、资产来源、允许差异与部署决定必须自行取证并登记。模板中的 `example` / `sample` 仅用于说明接口，不能直接作为验收配置。冒烟和负向检查使用一次性临时脚本或临时目录，执行后清理，不要求维护项目专属测试资产。

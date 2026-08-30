@@ -13,5 +13,6 @@ parser（`@babel/parser` / `@babel/traverse`）。这里放的就是那个阶段
 | 工具 | 用途 |
 |---|---|
 | `name-modules.mjs` | 按 0–4 级证据给模块提名，并记下依据的那句话；无证据保留哈希 id |
+| `demangle-modules.mjs` | 用 Babel Binding 做作用域安全的重命名；只改声明、引用和赋值的源码区间，不负责拆分模块或生成模块地图。输入/输出边界见 `references/readable-source.md` §3.2.2 |
 
 ⚠ 复制到复刻项目时放在项目的 `tools/` 下，与项目 `package.json` 的 devDependencies 一起走。
