@@ -153,24 +153,70 @@ const get = async (base, route) => {
   return res.text();
 };
 
+/**
+ * ⛔ A GATE MUST FAIL LEGIBLY. `get` throws on a non-2xx and every call in this
+ * file is a TOP-LEVEL await, so one 404 — a side that does not serve the
+ * payload file, a route the mirror never captured — kills the process with a
+ * stack trace and takes the remaining routes AND the final summary with it.
+ * That reads as "the gate is broken", which is the opposite of what happened;
+ * it is the same distinction verify-offline.mjs states at its own head. A
+ * fetch failure is a FAIL line. Everything that is not a fetch failure still
+ * throws, because a gate that swallows its own bugs is worse than one that
+ * dies of them.
+ */
+const tryGet = async (base, route) => {
+  try {
+    return { text: await get(base, route) };
+  } catch (e) {
+    return { error: e.message };
+  }
+};
+
+/**
+ * ⭐ Nuxt 3 can EXTERNALIZE the payload: the document references
+ * `/_payload.json?<buildId>` (a devalue-encoded JSON array) instead of
+ * inlining __NUXT_DATA__. When that reference exists it IS the payload, and it
+ * comes FIRST: the page may also carry an inline `window.__NUXT__ = {}`
+ * runtime-config assignment, which the nuxt2 shape happily grabs and then
+ * fails to evaluate — a wrong-shape match reported as a corrupt payload.
+ */
+function externalPayloadPath(html) {
+  const m = html.match(/"((?:[\w./-]*)?_payload\.json[^"]*)"/);
+  if (!m) return null;
+  return m[1].startsWith("/") ? m[1] : "/" + m[1].replace(/^\.\//, "");
+}
+
+/**
+ * One side's payload for one route.
+ *
+ * ⛔ EACH SIDE IS ASKED WHAT IT REFERENCES. Deriving the path from side A and
+ * fetching THAT from side B carries side A's build id across, and a rebuild
+ * does not have side A's build id — so B answers 404 for a file it serves
+ * perfectly well under its own name, and a side that inlines the payload while
+ * A externalizes it is asked for a file it was never going to have. Both come
+ * back as "corrupt payload" for a payload that is fine. The shapes are then
+ * compared as shapes, which is the finding this replaces the crash with.
+ */
+async function payloadOf(base, html) {
+  const at = externalPayloadPath(html);
+  if (!at) return { found: extract(html), at: null };
+  const res = await tryGet(base, at);
+  if (res.error) return { found: null, at, error: res.error };
+  return { found: { shape: "nuxt3-payload-file", src: res.text }, at };
+}
+
 console.log(`=== verify-payload  ${A}${B ? "  vs  " + B : ""} ===\n`);
 
 for (const route of ROUTES) {
-  const htmlA = await get(A, route);
-  // ⭐ Nuxt 3 can EXTERNALIZE the payload: the document references
-  // `/_payload.json?<buildId>` (a devalue-encoded JSON array) instead of
-  // inlining __NUXT_DATA__. When that reference exists it IS the payload, and
-  // it comes FIRST: the page may also carry an inline `window.__NUXT__ = {}`
-  // runtime-config assignment, which the nuxt2 shape happily grabs and then
-  // fails to evaluate — a wrong-shape match reported as a corrupt payload.
-  let payloadPath = null;
-  {
-    const m = htmlA.match(/"((?:[\w./-]*)?_payload\.json[^"]*)"/);
-    if (m) payloadPath = m[1].startsWith("/") ? m[1] : "/" + m[1].replace(/^\.\//, "");
+  const resA = await tryGet(A, route);
+  if (resA.error) { fail(`${route} — ${resA.error}`); continue; }
+  const htmlA = resA.text;
+  const sideA = await payloadOf(A, htmlA);
+  if (sideA.error) {
+    fail(`${route} — ${sideA.error}\n         The document names ${sideA.at}, so THAT file is the payload; a side that cannot serve it has none to compare.`);
+    continue;
   }
-  let foundA = payloadPath
-    ? { shape: "nuxt3-payload-file", src: await get(A, payloadPath) }
-    : extract(htmlA);
+  const foundA = sideA.found;
   if (!foundA) { fail(`${route} — no known SSG payload shape found`); continue; }
 
   let dataA;
@@ -209,12 +255,25 @@ for (const route of ROUTES) {
 
   if (!B) continue;
 
-  const htmlB = await get(B, route);
-  // Same precedence as side A: the externalized payload outranks inline shapes.
-  let foundB = payloadPath
-    ? { shape: "nuxt3-payload-file", src: await get(B, payloadPath) }
-    : extract(htmlB);
+  const resB = await tryGet(B, route);
+  if (resB.error) { fail(`${route} — ${resB.error}`); continue; }
+  const htmlB = resB.text;
+  // Same precedence as side A, and derived from side B's OWN document.
+  const sideB = await payloadOf(B, htmlB);
+  if (sideB.error) {
+    fail(`${route} — side B: ${sideB.error}\n         B's document names ${sideB.at}, so B has to serve it.`);
+    continue;
+  }
+  const foundB = sideB.found;
   if (!foundB) { fail(`${route} — payload missing on side B`); continue; }
+  // ⚠ A shape disagreement is a FINDING, not a reason to stop. Both sides
+  // still expand into the same structure, so the comparison below is worth
+  // running — but one side externalizing the payload while the other inlines
+  // it is a port difference nothing else in this toolchain reports, and it is
+  // the difference that used to surface as an unexplained 404.
+  if (foundA.shape !== foundB.shape) {
+    fail(`${route} — the two sides carry the payload in different shapes: A ${foundA.shape}, B ${foundB.shape}`);
+  }
   let dataB;
   try {
     dataB = expand(foundB);
