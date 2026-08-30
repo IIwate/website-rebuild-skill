@@ -149,7 +149,11 @@ for (const id of ids) {
     ``,
   ].filter((l) => l !== null).join("\n");
 
-  await writeFile(path.join(OUT, "modules", fileFor(id)), header + "export default " + body + "\n");
+  // A name may carry directories (`vendor/swup/head-plugin/lib/index`) — the
+  // tree is the point of naming, so make room for it.
+  const dest = path.join(OUT, "modules", fileFor(id));
+  await mkdir(path.dirname(dest), { recursive: true });
+  await writeFile(dest, header + "export default " + body + "\n");
 }
 
 // --- registry + runtime -----------------------------------------------------

@@ -45,6 +45,13 @@ const A = (flag("a", "") || "").replace(/\/+$/, "");
 const B = (flag("b", "") || "").replace(/\/+$/, "");
 const ROUTES = flag("routes", "/").split(",").filter(Boolean);
 const DUMP = flag("dump", null);
+// --allow-absent: a hand-built SSG can carry NO data island at all — content
+// lives in the markup, which the shell byte gate already covers. Opt-in, per
+// project, AFTER verifying the absence (grep for window.__* / self.__* /
+// json islands): agreement-on-absence passes, but one side having a payload
+// the other lacks still fails. Without the flag, absence stays loud — a
+// payload shape this gate doesn't recognize yet must not pass as "none".
+const ALLOW_ABSENT = args.includes("--allow-absent");
 
 if (!A) {
   console.error("usage: verify-payload.mjs --a <base> [--b <base>] --routes /,/x [--dump dir]");
@@ -171,7 +178,21 @@ for (const route of ROUTES) {
   let foundA = payloadPath
     ? { shape: "nuxt3-payload-file", src: await get(A, payloadPath) }
     : extract(htmlA);
-  if (!foundA) { fail(`${route} — no known SSG payload shape found`); continue; }
+  if (!foundA) {
+    if (ALLOW_ABSENT) {
+      // Absence must AGREE across sides: a port that dropped the island the
+      // mirror carries — or grew one — is exactly what this gate exists to see.
+      if (B) {
+        const htmlB0 = await get(B, route);
+        const foundB0 = extract(htmlB0);
+        if (foundB0) { fail(`${route} — side A has no payload but side B carries a ${foundB0.shape} island`); continue; }
+      }
+      console.log(`--- ${route}  [no payload island — declared absent, sides agree] ---`);
+      continue;
+    }
+    fail(`${route} — no known SSG payload shape found`);
+    continue;
+  }
 
   let dataA;
   try {

@@ -163,6 +163,12 @@ for (const ref of refs) {
   // on disk that host's files live under `assets/<host>/…`. The two spellings
   // are the same asset, and only the server knew it — which is why 92 images
   // that are present were reported as holes in the deliverable.
+  // ⚠ A bare `/ext/<host>` with NO path is a LOCALIZED CONNECTION HINT — a
+  // preconnect/dns-prefetch whose href was a host root. A connection is not a
+  // file; reporting it as a hole tells the operator to mirror nothing. (The
+  // host's TLD also reads as a file extension to the page/asset classifier —
+  // `.com` passes /\.[a-z0-9]{2,5}$/ — so it lands on the ASSET side there.)
+  if (/^ext\/[^/]+\/?$/.test(bare)) continue;
   const extForm = /^ext\/([^/]+)\/(.*)$/.exec(bare);
   // ⚠ A STUBBED host's reference is answered by the SERVER (empty body), not by
   // a file — that is the entire point of --stub-ext-hosts. Reporting it as a

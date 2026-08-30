@@ -689,7 +689,17 @@ if (!SKIP.has("authenticity")) {
     const head = await readHead(path.join(ROOT, rel), 512);
     if (!head || !head.length) continue;
     if (kind && SIGS[kind] && !SIGS[kind](head)) {
-      confused.push(
+      // ⚠ Like OTTO under .ttf above: bytes that are a REAL image of another
+      // known format, declared image/*, are the ORIGIN'S labeling habit, not a
+      // refusal body. Measured on a Strapi bucket: a 2.8 MB GIF uploaded as
+      // .jpg, served as image/jpeg, byte-identical on refetch. The gate exists
+      // to catch HTML under an asset URL, not to police extension hygiene —
+      // so this downgrades to a lead the operator can read, not a failure.
+      const IMG_KINDS = ["png", "jpeg", "gif", "webp", "avif", "bmp", "ico"];
+      const actual = IMG_KINDS.find((k) => SIGS[k](head));
+      if (BINARY_DECL.test(type) && /^image\//i.test(type) && actual) {
+        console.log(`  info cross-image mislabel — ${rel} declared ${type}, bytes are ${actual} (origin's own labeling; refetch to confirm identical bytes)`);
+      } else confused.push(
         `${rel}\n           declared ${type || "(nothing — extension used)"}, bytes are not ${kind}  <- ${url}`,
       );
     } else if (!kind && HTMLISH.test(head.toString("utf8"))) {

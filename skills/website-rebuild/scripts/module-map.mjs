@@ -66,11 +66,28 @@ const propName = (i) => T[i]?.type?.keyword ?? val(i);
 // thing. Accepting only the quoted form found 376 of 597 modules and the miss
 // was invisible — every id it dropped simply never appeared downstream.
 const KEY = new Set(["string", "name", "num"]);
+// ⚠ The factory is not always the `function` keyword. Webpack emits ARROW
+// factories under newer targets: `"./src/x.js":(t,e,s)=>{…}` — and a
+// single-param arrow can drop the parens entirely (`e=>{…}`). Accepting only
+// `function` found 4 of 12 modules here, and the plausibility gate below
+// (436/436 requires unexplained) is what surfaced it. An arrow candidate is
+// accepted only when the `(…)` closes straight into `=>`, so a parenthesized
+// value expression cannot pose as a factory.
 const props = [];
 for (let i = 0; i + 2 < T.length; i++) {
   if (!KEY.has(lab(i)) || lab(i + 1) !== ":") continue;
-  if (lab(i + 2) !== "function") continue;
-  props.push(i);
+  const l2 = lab(i + 2);
+  if (l2 === "function") { props.push(i); continue; }
+  if (l2 === "name" && lab(i + 3) === "=>") { props.push(i); continue; }
+  if (l2 === "(") {
+    let d = 0, k = i + 2;
+    for (; k < T.length; k++) {
+      const l = lab(k);
+      if (l === "(") d++;
+      else if (l === ")") { d--; if (d === 0) break; }
+    }
+    if (lab(k + 1) === "=>") props.push(i);
+  }
 }
 
 // Group by enclosing brace depth so a stray `{ x: function(){} }` elsewhere in
@@ -294,6 +311,16 @@ for (const { id, fi } of entries) {
   const reqName = isTurbo ? null : (params[2] ?? null);
   const ctxName = isTurbo ? (params[0] ?? null) : null;
   const requires = new Set();
+  // ⛔ CROSS-CHUNK requires are real edges. `KNOWN.has(v)` exists to keep
+  // garbage strings out of `requires`, but it also silently dropped
+  // `s("./node_modules/gsap/index.js")` when gsap lives in a VENDOR chunk —
+  // and the closure then declared a chunk "closed" that throws without three
+  // other chunks loaded. In a string-keyed container a `./`-prefixed string
+  // inside a require call is a module id wherever it lives; record the ones
+  // KNOWN doesn't hold as externalRequires so the porter sees the chunk's
+  // true boundary. (Numeric containers keep the KNOWN filter: a bare number
+  // in a require call proves nothing.)
+  const externalRequires = new Set();
   const exportNames = new Set();
   let exportsAssigned = 0;
   for (let k = b; k < end; k++) {
@@ -338,6 +365,7 @@ for (const { id, fi } of entries) {
         else if (d >= 1 && (l === "string" || l === "num")) {
           const v = String(val(j));
           if (KNOWN.has(v)) requires.add(v);
+          else if (l === "string" && v.startsWith("./")) externalRequires.add(v);
         }
       }
       continue;
@@ -350,7 +378,7 @@ for (const { id, fi } of entries) {
       else if (lab(k + 3) === "." && isProp(k + 4) && lab(k + 5) === "=") exportNames.add(propName(k + 4));
     }
   }
-  mods.push({ id, aliases: (entries.find((e) => String(e.id) === String(id)) || {}).aliases || [], startLine, endLine, startChar, endChar, lines: endLine - startLine + 1, requires: [...requires], exportsAssigned, exportNames: [...exportNames].slice(0, 12) });
+  mods.push({ id, aliases: (entries.find((e) => String(e.id) === String(id)) || {}).aliases || [], startLine, endLine, startChar, endChar, lines: endLine - startLine + 1, requires: [...requires], externalRequires: [...externalRequires], exportsAssigned, exportNames: [...exportNames].slice(0, 12) });
 }
 
 // ⛔ A container can define the same id more than once, and this one does: 597
@@ -426,6 +454,15 @@ for (const m of mods.slice(0, 12)) {
 }
 const leaf = mods.filter((m) => m.requires.length === 0).length;
 console.log(`\n  ${leaf} module(s) require nothing (leaves);  ${mods.length - leaf} have dependencies`);
+{
+  const xr = new Set(mods.flatMap((m) => m.externalRequires || []));
+  if (xr.size) {
+    console.log(`  ⚠ ${xr.size} CROSS-CHUNK id(s) required but not registered in this chunk — the chunk`);
+    console.log(`    does not run alone; a port must keep the chunks that provide these (or their runtime):`);
+    for (const v of [...xr].slice(0, 10)) console.log(`      ${v}`);
+    if (xr.size > 10) console.log(`      … ${xr.size - 10} more`);
+  }
+}
 
 // ⛔ Every id must be a string. The @babel version read a numeric key straight
 // through, so one module's id was the NUMBER 14 while closure.mjs and

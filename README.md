@@ -158,6 +158,7 @@ cp -R skills/website-rebuild ~/.claude/skills/website-rebuild
 | Raycast Keyboard | [raycast.com/keyboard](https://www.raycast.com/keyboard) | Raycast × NuPhy 联名产品页（Turbopack + DRACO 3D 模型），判级到源码化**单次会话跑完**，4 个检查点**像素精确全零** |
 | Hubtown | [hubtown.co.in](https://hubtown.co.in/) | Unseen Studio 出品的全屏 WebGL 长镜头站（Nuxt 3 + three.js + **Theatre.js**），授权动画状态随包下发的 C2 范本；landing 像素差落在同侧噪声带内 |
 | ON.energy | [www.on.energy](https://www.on.energy/) | 能源公司官网（Nuxt 3 + WebGL GLB 场景 + **Storyblok headless CMS**），首个 CMS 资产桶全量镜像样本（原图 + `/m/` 变换变体约 1,800 图）；55/55 路由零报错，滚动 9 档对拍 8 档精确零、页顶视频钉帧后归零 |
+| Milk Network | [milknetwork.com](https://milknetwork.com/) | 沙特品牌代理官网（webpack + GSAP + swup PJAX + **Strapi CMS 桶**），首个**双语 RTL** 站（en/ar 122 路由成对）；main 的 15 模块全量源码化并以 **chunk 形交付**（原 runtime/vendor 原件不动）；滚动对拍 cross 与 band 逐档数值全同，动画完结态精确零 |
 
 ### 只做过判级的边界样本
 
@@ -296,6 +297,10 @@ README.md                  # 本文件
 ### Headless CMS 资产桶（v0.1.72）
 
 - **v0.1.72**：支持 Storyblok 式图片变换 URL（`/x.jpg/m/110x110/filters:...` 这类"文件名后还有路径"的形态）——URL 落盘时对已知资产扩展名后的路径段拍平，伺服端对同形态请求做同一变换回查；修复绝对 URL 提取时以括号收尾的地址被误剪（如 `quality(70)`）；`verify-refs-served` 与 `make-standalone` 新增 `--allow`，接受与镜像门同一份豁免清单（源站自身 404 的引用不再逼门变红）。
+
+### webpack 箭头工厂与双语站（v0.1.73）
+
+- **v0.1.73**：模块图谱与冷审支持 webpack 箭头工厂（`"key":(t,e,s)=>{}`，新编译目标的产物）；模块图谱新增跨 chunk 依赖记录（`externalRequires`）——依赖 vendor 分包的 chunk 不再被闭包误判为自洽；引用提取修复两类越界（内联 `url(...)` 尾随 CSS 声明、实体解码引入的引号边界）；爬虫台账修剪无人引用的陈旧失败行；`verify-mirror` 将"另一种已知图片格式挂错扩展名"降为线索（源站自身的标注习惯）；`verify-payload` 新增 `--allow-absent`（无数据岛的纯标记 SSG，两侧一致缺席才放行）；模块落源支持带目录的模块名；`make-standalone` 不再把本地化的 preconnect 裸主机当资产缺口。
 
 ## 下一步
 

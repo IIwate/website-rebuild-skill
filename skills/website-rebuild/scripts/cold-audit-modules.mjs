@@ -96,8 +96,24 @@ for (const m of all) {
   const wsig = head.match(/function\s*\(\s*(\w+)\s*,\s*(\w+)\s*,\s*(\w+)\s*\)/);
   if (wsig) R = wsig[3];
   else {
-    const tsig = head.match(/(?:^|[,[]\s*)(?:\(\s*(\w+)[^)]*\)|(\w+))\s*=>/);
-    if (tsig) { R = tsig[1] || tsig[2]; viaCtx = true; }
+    // webpack under a newer target emits ARROW factories: `"key": (t, e, s) => {`.
+    // The third parameter is still the require — this is webpack's contract in
+    // arrow spelling, NOT Turbopack's (whose single ctx requires via ctx.i/.r).
+    // Keyed on the `:` so a Turbopack array element can't match it.
+    const wArrow = head.match(/:\s*\(\s*(\w+)\s*,\s*(\w+)\s*,\s*(\w+)\s*\)\s*=>/);
+    if (wArrow) R = wArrow[3];
+    else if (/:\s*(?:function\s*)?\(\s*(?:\w+\s*(?:,\s*\w+\s*)?)?\)\s*(?:=>|\{)|:\s*\w+\s*=>/.test(head)) {
+      // A webpack factory with 0–2 parameters NEVER BINDS the require — the
+      // packer only passes what the module was compiled to use. No binding, no
+      // computed require: the module is examined and vacuously clean, and
+      // counting it as "unrecognised" would report a 100%-covered chunk as 40%.
+      examined++;
+      continue;
+    }
+    else {
+      const tsig = head.match(/(?:^|[,[]\s*)(?:\(\s*(\w+)[^)]*\)|(\w+))\s*=>/);
+      if (tsig) { R = tsig[1] || tsig[2]; viaCtx = true; }
+    }
   }
   if (!R) continue;
   examined++;
