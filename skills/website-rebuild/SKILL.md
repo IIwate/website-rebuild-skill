@@ -3,7 +3,7 @@ name: website-rebuild
 description: 1:1 rebuild of award-winning creative websites (WebGL / scroll-animation / portfolio sites). Evidence-driven pipeline - mirror-first forensics, line-number-traceable reverse engineering of minified bundles, verbatim porting, quantitative verification gates. Use when user asks to "复刻网站", "重建网站", "1:1 rebuild", "clone this site", or provides a URL of a creative/award site to reproduce.
 compatibility: Requires Node 22+ (bundled scripts use built-in WebSocket to talk to CDP), npx, and a local Chrome/Chromium for headless comparison. POSIX shell optional - the Step 0 probe protocol has a zero-dependency Node equivalent (scripts/fingerprint.mjs) for shells without curl/cmp/tr/perl (e.g. Windows PowerShell). Agent-agnostic - works in any Agent Skills-compatible runtime.
 metadata:
-  version: "0.1.73"
+  version: "0.2.1"
 ---
 
 # Website Rebuild（获奖创意站 1:1 复刻）
@@ -27,11 +27,11 @@ metadata:
 2. **未获用户明确决定前按安全默认执行**：私有仓库 + `noindex` + 不公开部署 + 不再分发。写给用户时说明这是**默认动作**（"在你决定之前我不会把它发出去"），**不是** agent 已作出的法务结论——两者责任归属完全不同。agent 只能往保守侧执行默认，往公开侧走必须有用户的明确决定。
 3. ⛔ **法务考量不得削减镜像完整性或门的覆盖面**：镜像是证据基座，**完整性是技术不变量**（四遍法、闭包门、GAP=0 全建立在它之上）。不抓只能有**技术性理由**（不是文件 / 服务端不提供 / 需授权或登录态 / 源站明令禁止），一律登记；**不得**以"反正不公开""不该多存一份"这类法务理由留洞。实证：某项目以"产出永不公开"为由对一类资产"登记、不补抓"，**缺了约 60% 的资产而五道门始终全绿**，藏了四个里程碑【objectarchive】。法务决定作用于**产出怎么被使用**，不是证据基座是否完整。
 
-## 适用范围（v0.1）⛔ 必读
+## 适用范围 ⛔ 必读
 
 **主场（A 类）**：内容静态托管、签名行为（动画/交互）全部存放在客户端静态资产里的站——命令式 WebGL/Canvas 场景、GSAP 时间轴、烘焙数据文件（GLB/.buf/.riv）、minified 或未混淆的 bundle。绝大多数 Awwwards 风格创意站属于此类。
 
-**有条件支持（B 类）**：管线成立但需要额外场景处理（Shopify 平台层剥离、第三方存储桶资产、运行时 API 快照、SSG payload 展开）。v0.1 提供的指南覆盖部分 B 类场景，遇到未覆盖的要向用户明示风险。
+**有条件支持（B 类）**：管线成立但需要额外场景处理（Shopify 平台层剥离、第三方存储桶资产、运行时 API 快照、SSG payload 展开）。当前版本的指南覆盖大部分 B 类场景，遇到未覆盖的要向用户明示风险。
 
 **明确拒绝（C/D 类）**：
 - **C1（仍然拒绝）**：组件源**根本不下发**——React RSC 服务端组件只下发 flight 序列化结果，客户端没有可转写的目标物。
@@ -65,14 +65,14 @@ metadata:
 
 ```
 [ ] Step 0  指纹侦察与范围门 ⛔（判级 A/B/C/D/X；C/D/X 拒绝或引导，不进入下一步）
-[ ] Step 1  开工评级（架构证否、分项难度打星、工期预估、与用户确认范围）
+[ ] Step 1  开工评级（架构证否、分项难度打星、工期预估、与用户确认范围 + 终点 L1/L2/L3）
 [ ] M0      镜像取证 ⛔（BFS 爬虫 + CDP 补录 + manifest 账本；GAP=0）
-[ ] M0.5    镜像断网跑通 ⛔（零 404 / 零控制台错误 / 零外联；serve.mjs 伺服）
+[ ] M0.5    镜像断网跑通 ⛔（零 404 / 零控制台错误 / 零外联；serve.mjs 伺服）← L1 镜像存档 终点
 [ ] M1      逆向建坐标系 ⛔（_pretty 钉版本展开；engine-notes 先于任何代码；技术栈钉死；REBUILD_PLAN 建立）
 [ ] M2+     严格溯源移植（依赖序里程碑推进；先竖切一条端到端链路；每里程碑冷启动实测 + CLEAN 门）
 [ ] M(n-1)  对拍验收（按 verification-gates.md 决策树选门型；根因修复，不调参糊平）
-[ ] M(n)    收口 ⛔（冷头评审 / 模块清单对账；版权取证 + 呈交用户决定——公开部署前必须完成）
-[ ] M(n+1)  源码化（port/ → src/：拆模块、去混淆重命名、补注释、自包含）
+[ ] M(n)    收口 ⛔（冷头评审 / 模块清单对账；版权取证 + 呈交用户决定——公开部署前必须完成）← L2 工程化复刻 终点
+[ ] M(n+1)  源码化（port/ → src/：拆模块、去混淆重命名、补注释、自包含）← L3 源码化 终点
 ```
 
 ⛔ = 阻塞门：验收标准未达成不得进入下一阶段。
@@ -82,6 +82,16 @@ metadata:
 **Step 0 — 指纹侦察与范围门**。加载 [references/scope-and-fingerprint.md](references/scope-and-fingerprint.md)，对用户给的 URL 执行探测协议（GET 到路径粒度、最终 URL 同一性、双抓 diff、物种/年代校验、bundle 初检），输出判级与依据。A/B 类继续；C/D/X 类向用户解释后停止或引导。
 
 **Step 1 — 开工评级**。加载 [references/recon-and-rating.md](references/recon-and-rating.md)。架构假设先证否（依赖表会撒谎），分项难度打星（素材/3D/滚动编排/私有格式/平台层），向用户确认复刻范围（整站或指定页面）与预期。
+
+⭐ **同一次提问里让用户选终点**（三级梯子，带着判级结论与分级成本估计问，不要干巴巴列选项）：
+
+| 终点 | 回答的问题 | 止于 | 典型用途 |
+|---|---|---|---|
+| **L1 镜像存档** | 它长什么样 | M0.5 | 存档、离线欣赏（获奖站年消失率约 29%） |
+| **L2 工程化复刻** | 它在做什么 | M(n) | 可部署、可验证的 1:1（含版权取证与部署评估） |
+| **L3 源码化** | 它怎么做的 | M(n+1) | 研究与学习实现手法 |
+
+**梯子单调，选低不亏**：每一级都是下一级的前缀，镜像纪律保证时间敏感的部分永远最先完成——今天选 L1，以后想升级随时续跑（向用户说明这一点）。**"拿它做自己的项目"（脚手架化）不是本 skill 的阶段**——用户问起时指向 [references/beyond-the-rebuild.md](references/beyond-the-rebuild.md) 交接，那是他的工程，skill 到"人能读懂的真实"为止。
 
 **M0 / M0.5 — 镜像取证**。加载 [references/mirroring.md](references/mirroring.md)。用 `scripts/mirror-site.mjs` BFS 爬取 + `scripts/netcapture.mjs` 真实浏览器补录，manifest 逐文件登记 sha256，`redirect: manual` 纪律，外部依赖逐项决策。`scripts/verify-mirror.mjs` 是**镜像自己的门**（五项断言，跑在断网门之前——下游所有门问的都是"渲染得出来吗"，错的镜像能让它们全绿；**一个 HTTP 200 也不是"你拿到了那个资源"的证据**）。`scripts/serve.mjs` 伺服镜像，断网验收。**这一步永远最先做**——原站随时可能消失或改版，镜像是全项目唯一证据基准，也是后续一切对拍的参照服。
 
@@ -94,6 +104,8 @@ metadata:
 **M(n) — 收口**。冷头评审：对 bundle 顶层类/模块清单逐一核对落点（功能测试测不出整块遗漏，只有清单式核对能）。加载 [references/legal-and-deploy.md](references/legal-and-deploy.md) 完成版权**取证**并把决定**呈交用户**——在用户决定之前按安全默认执行（**私有 + noindex + 不部署**），公开前必须逐资产取证、显著标注非官方复刻。
 
 **M(n+1) — 源码化**。加载 [references/readable-source.md](references/readable-source.md)。到 M(n) 为止产物**已证明正确但人读不了**（实测：14,271 行挤在一个文件里，`e` 出现 2962 次，注释占 0.2%）。本阶段把 `port/` 重写成 `src/`：拆模块 → 作用域安全地去混淆重命名 → 补分档注释 → 复制资产做到自包含。⛔ **拆分粒度不是自由选择**——扁平脚本的声明顺序即求值顺序，粒度由三条硬约束决定（互相引用 / 求值顺序 / import 绑定不可赋值），**先出划分方案让人过目，再切**；遇到巨型模块时**先测「延迟绑定少数末尾单例」的收益曲线再决定**（实测 6 个绑定即从 11,246 行降到 1,013 行，而换模块系统要赔上整条工具链才换来同样粒度）。⭐ **"这件事做不到"这个判断极不可靠**——实测两次判为结构性不可能，两次真凶都是自己工具里的一行 bug；先怀疑测量它的工具，再怀疑对象（`readable-source.md` §3.1–3.1.3）。⛔ **前置条件不可协商：必须先有全绿的门。** 没有裁判的重构是盲改；有了 `meanAbsDiff 0.00` 的裁判，每一步都能被证死——**这是重构能有的最好条件，也是它必须排在最后的原因**。现有门全部原样复用（目标换成 `src/` 构建产物，**容差不许放宽**），另加符号映射门与自包含门。⛔ 结构性重写（合并重复、提取公共函数、改算法）**默认禁止**——它会让门从"证明等价"退化为"没测出不等价"。⭐ **纪律 4 在本阶段依然有效**：你现在读得懂了，"这明显是个 bug"的冲动会比任何阶段都强，而它依然可能是行为本身。
+
+⭐ **无容器 scope-hoisted 产物（Vite/esbuild,逐字分层交付的站）走另一条路：不重写,切**——拼接式分解（`scripts/census-bundles.mjs` 出 chunk 图与坐标 → `scripts/slice-esm.mjs` 按声明切成语义命名的部件,按序拼接逐字节等于原件 → `scripts/verify-reassembly.mjs` 一门定案,字节等价成立时全部运行时门的裁决免费转移）。执行侧不变,浏览器继续跑原 chunk。详见 `readable-source.md` §3.0.6。
 
 ### 分支路由表
 
