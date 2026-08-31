@@ -3,7 +3,7 @@ name: website-rebuild
 description: 1:1 rebuild of award-winning creative websites (WebGL / scroll-animation / portfolio sites). Evidence-driven pipeline - mirror-first forensics, line-number-traceable reverse engineering of minified bundles, verbatim porting, quantitative verification gates. Use when user asks to "复刻网站", "重建网站", "1:1 rebuild", "clone this site", or provides a URL of a creative/award site to reproduce.
 compatibility: Requires Node 22+ (bundled scripts use built-in WebSocket to talk to CDP), npx, and a local Chrome/Chromium for headless comparison. POSIX shell optional - the Step 0 probe protocol has a zero-dependency Node equivalent (scripts/fingerprint.mjs) for shells without curl/cmp/tr/perl (e.g. Windows PowerShell). Agent-agnostic - works in any Agent Skills-compatible runtime.
 metadata:
-  version: "0.2.0"
+  version: "0.2.1"
 ---
 
 # Website Rebuild（获奖创意站 1:1 复刻）
@@ -65,14 +65,14 @@ metadata:
 
 ```
 [ ] Step 0  指纹侦察与范围门 ⛔（判级 A/B/C/D/X；C/D/X 拒绝或引导，不进入下一步）
-[ ] Step 1  开工评级（架构证否、分项难度打星、工期预估、与用户确认范围）
+[ ] Step 1  开工评级（架构证否、分项难度打星、工期预估、与用户确认范围 + 终点 L1/L2/L3）
 [ ] M0      镜像取证 ⛔（BFS 爬虫 + CDP 补录 + manifest 账本；GAP=0）
-[ ] M0.5    镜像断网跑通 ⛔（零 404 / 零控制台错误 / 零外联；serve.mjs 伺服）
+[ ] M0.5    镜像断网跑通 ⛔（零 404 / 零控制台错误 / 零外联；serve.mjs 伺服）← L1 镜像存档 终点
 [ ] M1      逆向建坐标系 ⛔（_pretty 钉版本展开；engine-notes 先于任何代码；技术栈钉死；REBUILD_PLAN 建立）
 [ ] M2+     严格溯源移植（依赖序里程碑推进；先竖切一条端到端链路；每里程碑冷启动实测 + CLEAN 门）
 [ ] M(n-1)  对拍验收（按 verification-gates.md 决策树选门型；根因修复，不调参糊平）
-[ ] M(n)    收口 ⛔（冷头评审 / 模块清单对账；版权取证 + 呈交用户决定——公开部署前必须完成）
-[ ] M(n+1)  源码化（port/ → src/：拆模块、去混淆重命名、补注释、自包含）
+[ ] M(n)    收口 ⛔（冷头评审 / 模块清单对账；版权取证 + 呈交用户决定——公开部署前必须完成）← L2 工程化复刻 终点
+[ ] M(n+1)  源码化（port/ → src/：拆模块、去混淆重命名、补注释、自包含）← L3 源码化 终点
 ```
 
 ⛔ = 阻塞门：验收标准未达成不得进入下一阶段。
@@ -82,6 +82,16 @@ metadata:
 **Step 0 — 指纹侦察与范围门**。加载 [references/scope-and-fingerprint.md](references/scope-and-fingerprint.md)，对用户给的 URL 执行探测协议（GET 到路径粒度、最终 URL 同一性、双抓 diff、物种/年代校验、bundle 初检），输出判级与依据。A/B 类继续；C/D/X 类向用户解释后停止或引导。
 
 **Step 1 — 开工评级**。加载 [references/recon-and-rating.md](references/recon-and-rating.md)。架构假设先证否（依赖表会撒谎），分项难度打星（素材/3D/滚动编排/私有格式/平台层），向用户确认复刻范围（整站或指定页面）与预期。
+
+⭐ **同一次提问里让用户选终点**（三级梯子，带着判级结论与分级成本估计问，不要干巴巴列选项）：
+
+| 终点 | 回答的问题 | 止于 | 典型用途 |
+|---|---|---|---|
+| **L1 镜像存档** | 它长什么样 | M0.5 | 存档、离线欣赏（获奖站年消失率约 29%） |
+| **L2 工程化复刻** | 它在做什么 | M(n) | 可部署、可验证的 1:1（含版权取证与部署评估） |
+| **L3 源码化** | 它怎么做的 | M(n+1) | 研究与学习实现手法 |
+
+**梯子单调，选低不亏**：每一级都是下一级的前缀，镜像纪律保证时间敏感的部分永远最先完成——今天选 L1，以后想升级随时续跑（向用户说明这一点）。**"拿它做自己的项目"（脚手架化）不是本 skill 的阶段**——用户问起时指向 [references/beyond-the-rebuild.md](references/beyond-the-rebuild.md) 交接，那是他的工程，skill 到"人能读懂的真实"为止。
 
 **M0 / M0.5 — 镜像取证**。加载 [references/mirroring.md](references/mirroring.md)。用 `scripts/mirror-site.mjs` BFS 爬取 + `scripts/netcapture.mjs` 真实浏览器补录，manifest 逐文件登记 sha256，`redirect: manual` 纪律，外部依赖逐项决策。`scripts/verify-mirror.mjs` 是**镜像自己的门**（五项断言，跑在断网门之前——下游所有门问的都是"渲染得出来吗"，错的镜像能让它们全绿；**一个 HTTP 200 也不是"你拿到了那个资源"的证据**）。`scripts/serve.mjs` 伺服镜像，断网验收。**这一步永远最先做**——原站随时可能消失或改版，镜像是全项目唯一证据基准，也是后续一切对拍的参照服。
 

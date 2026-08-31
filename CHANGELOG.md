@@ -1,5 +1,9 @@
 # 更新记录
 
+## 终点分级与交接边界（v0.2.1）
+
+- **v0.2.1**：开工评级时向用户呈交**三级终点选择**（L1 镜像存档 / L2 工程化复刻 / L3 源码化,带判级结论与分级成本;梯子单调,选低不亏、随时续跑升级）;新增交接文档 `references/beyond-the-rebuild.md`——**脚手架化明确划出 skill 边界**（"到人能读懂的真实为止"）,交接三样东西:衍生层原则（另起一层,发明才合法）、带裁判的 fork 工作法（把变红的字节清单/重拼门当偏离台账,防"近似漂移不可见"）、权利地图（资产与内容最重,先换占位物;代码著作权随偏离度渐变）。
+
 ## 无容器产物的语义源码层（v0.2.0）
 
 - **v0.2.0**：v0.2 线开篇——**拼接式分解**：Vite/esbuild 这类 scope-hoisted 无容器产物（模块边界被打包器抹掉,重写式拆分必然静默重排副作用）现在有了自己的源码化路径。新增三件套:`census-bundles`（chunk 级坐标账本:逐 chunk sha256/行数 + ESM import/export 依赖图,import 别名即命名证据）、`slice-esm`（把 chunk 切成按声明命名的部件文件,**按序拼接逐字节等于原件**——切点只在可证明安全处下刀,写盘前先自证重拼）、`verify-reassembly`（重拼门:逐部件 sha + 拼接 sha + 对活原件三重比对;字节等价成立时,全部运行时门的裁决免费转移到可读层）。实测 hashgraphvc（Nuxt 3 + Three WebGPU/TSL,33 chunk / 44.9 万行）:2,043 个部件全数重拼一致,18.9 万行的 worker chunk 拆出 751 件、场景 chunk 拆出 CameraSplineSystem / WebGPUWaveSimulation / Gerstner 等 151 件——名字全部来自代码自身。

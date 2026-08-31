@@ -1,7 +1,7 @@
 # website-rebuild-skill
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
-[![Version](https://img.shields.io/badge/version-0.2.0-blue.svg)](CHANGELOG.md)
+[![Version](https://img.shields.io/badge/version-0.2.1-blue.svg)](CHANGELOG.md)
 [![Agent Skills](https://img.shields.io/badge/Agent%20Skills-compatible-brightgreen.svg)](https://agentskills.io/)
 [![Node](https://img.shields.io/badge/node-%E2%89%A522-339933.svg)](#快速开始)
 
@@ -61,7 +61,7 @@ cp -R skills/website-rebuild ~/.claude/skills/website-rebuild
 
 给你的 agent 一个网址，说"复刻这个站"或"1:1 rebuild 这个网站"。
 
-**过程中它会来问你**：复刻范围（整站还是指定页面）、外部依赖怎么处置、以及所有涉及"能不能公开"的判断。这些是**你的决定**，agent 不会替你做。
+**过程中它会来问你**：复刻范围（整站还是指定页面）、**做到哪一级**（L1 镜像存档 / L2 工程化复刻 / L3 源码化——梯子单调，选低不亏，以后随时续跑升级）、外部依赖怎么处置、以及所有涉及"能不能公开"的判断。这些是**你的决定**，agent 不会替你做。
 
 **大概要多久**：单页创意站约 1–3 天（数十次提交）；多场景、重 WebGL 的站按周计。agent 会在开工前给出难度评级与预估。
 
@@ -82,6 +82,8 @@ cp -R skills/website-rebuild ~/.claude/skills/website-rebuild
 **它盯着的是"对不对"，不是"像不像"**。最近一个自研 WebGL 引擎站的复刻，三条路由做到了**跨侧逐像素一致**（`meanAbsDiff 0.00`），最终产出 389 个源码模块、中位数 18 行。
 
 ⭐ **最后一步是"源码化"，而它必须排在最后。** 重构最怕改完不知道有没有坏；这里在动手之前已经有了一个逐像素精确的裁判，所以每一次拆分、每一次改名都能被证死。**没有裁判的重构是盲改。**
+
+⭐ **skill 的终点也在这里：到"人能读懂的真实"为止。** 拿产出去做你自己的项目（脚手架、fork、二次创作）是**你的工程,不是它的阶段**——它不替你起名字、写故事、换内容,因为那些决定只有你自己能做。但它留了一样别处没有的东西:交付物自带的字节清单与重拼门,让你 fork 之后**精确地知道自己每一步偏离了源站什么**。交接指南见 [`beyond-the-rebuild.md`](skills/website-rebuild/references/beyond-the-rebuild.md)。
 
 ### 全程遵守的六条纪律
 
@@ -189,7 +191,7 @@ cp -R skills/website-rebuild ~/.claude/skills/website-rebuild
 ```
 skills/website-rebuild/    # 技能本体，目录结构遵循 agentskills.io 规范
 ├── SKILL.md               #   主流程 + 判级 + 纪律（激活时整体加载）
-├── references/            #   16 份分场景指南（按需加载）
+├── references/            #   17 份分场景指南（按需加载）
 ├── assets/templates/      #   文档模板
 ├── scripts/               #   零依赖 Node 工序脚本与验收门 + lib/ 共用模块
 │                          #     判级与源码化之前的全部工序都住这里
@@ -218,7 +220,7 @@ README.md                  # 本文件
 
 版本随真实复刻项目递进：每个版本发布的功能与修复，都先在至少一个完整项目上验证过。
 
-完整记录见 **[CHANGELOG.md](CHANGELOG.md)**。最新版本 **v0.2.0**：无容器 scope-hoisted 产物的语义源码层——拼接式分解,2,043 个部件逐字节重拼一致。
+完整记录见 **[CHANGELOG.md](CHANGELOG.md)**。最新版本 **v0.2.1**：三级终点选择（镜像存档 / 工程化复刻 / 源码化）+ 脚手架化的交接边界文档。
 
 ## 贡献
 
