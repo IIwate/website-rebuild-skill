@@ -620,6 +620,36 @@ if (!SKIP.has("authenticity")) {
   }
 
   // 2. TYPE CONFUSION — declared type vs magic bytes.
+
+  // ⛔ `ftyp` ALONE DECIDES NOTHING. AVIF and MP4 are both ISO-BMFF: the box at
+  // offset 4 is byte-identical in a still image and in a video, so a predicate
+  // that stops there makes `avif` and `mp4` the SAME TEST. That is not a
+  // cosmetic overlap — it is what lets an MP4 body sitting under an
+  // `image/jpeg` declaration match an image kind and get waved through as the
+  // origin's labeling habit, which is precisely the substitution this gate
+  // exists to catch. The brand list is what separates them.
+  // ⚠ Read the COMPATIBLE brands too, not just the major one at offset 8: an
+  // AVIF file routinely ships `major=mif1, compatible=[avif, mif1, miaf]`, and
+  // a video container can carry a HEIF-family brand in the same list. Deciding
+  // on the major brand alone leaves the two predicates overlapping again, one
+  // layer down.
+  const BRAND_AT = (b, off) =>
+    b.length >= off + 4 ? b.toString("latin1", off, off + 4).toLowerCase() : null;
+  const AVIF_BRANDS = new Set(["avif", "avis", "mif1", "miaf"]);
+  const ftypBrands = (b) => {
+    if (!startsWith(b, [0x66, 0x74, 0x79, 0x70], 4)) return null;
+    // Box length is big-endian at 0. Clamp to what was actually read — this
+    // runs on a 512-byte head, and a truncated brand list is not a parse error.
+    const end = Math.min(b.readUInt32BE(0) || b.length, b.length);
+    const brands = [BRAND_AT(b, 8)];
+    for (let off = 16; off + 4 <= end; off += 4) brands.push(BRAND_AT(b, off));
+    return brands.filter(Boolean);
+  };
+  const isAvifImage = (b) => {
+    const brands = ftypBrands(b);
+    return !!brands && brands.some((x) => AVIF_BRANDS.has(x));
+  };
+
   const SIGS = {
     png: (b) => startsWith(b, [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
     jpeg: (b) => startsWith(b, [0xff, 0xd8, 0xff]),
@@ -627,7 +657,7 @@ if (!SKIP.has("authenticity")) {
     webp: (b) => startsWith(b, [0x52, 0x49, 0x46, 0x46]) && startsWith(b, [0x57, 0x45, 0x42, 0x50], 8),
     bmp: (b) => startsWith(b, [0x42, 0x4d]),
     ico: (b) => startsWith(b, [0x00, 0x00, 0x01, 0x00]),
-    avif: (b) => startsWith(b, [0x66, 0x74, 0x79, 0x70], 4),
+    avif: isAvifImage,
     woff2: (b) => startsWith(b, [0x77, 0x4f, 0x46, 0x32]),
     woff: (b) => startsWith(b, [0x77, 0x4f, 0x46, 0x46]),
     otf: (b) => startsWith(b, [0x4f, 0x54, 0x54, 0x4f]),
@@ -636,7 +666,9 @@ if (!SKIP.has("authenticity")) {
     // a real font. Measured on hubtown: commit-mono-bold.ttf is OTTO/CFF, and
     // rejecting it told the operator to re-fetch a file that was already right.
     ttf: (b) => startsWith(b, [0x00, 0x01, 0x00, 0x00]) || startsWith(b, [0x74, 0x72, 0x75, 0x65]) || startsWith(b, [0x4f, 0x54, 0x54, 0x4f]),
-    mp4: (b) => startsWith(b, [0x66, 0x74, 0x79, 0x70], 4),
+    // An ISO-BMFF box that is NOT an AVIF-family still: the complement of
+    // isAvifImage, so the two can never both answer yes for the same bytes.
+    mp4: (b) => startsWith(b, [0x66, 0x74, 0x79, 0x70], 4) && !isAvifImage(b),
     webm: (b) => startsWith(b, [0x1a, 0x45, 0xdf, 0xa3]),
     ogg: (b) => startsWith(b, [0x4f, 0x67, 0x67, 0x53]),
     wav: (b) => startsWith(b, [0x52, 0x49, 0x46, 0x46]) && startsWith(b, [0x57, 0x41, 0x56, 0x45], 8),
