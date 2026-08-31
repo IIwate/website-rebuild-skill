@@ -852,11 +852,20 @@ const server = http.createServer(async (req, res) => {
     };
 
     // 4. response-layer text transforms (ext-host rewrite + probe injection)
+    // ⛔ "Is this text?" must use the same three-level signal as the MIME
+    // answer above: recorded content-type first, extension second. A mirrored
+    // Google-Fonts CSS lands as `css@@family=…` (no extension), passed the
+    // rewrite gate untouched, and every absolute gstatic URL inside it walked
+    // out live — measured on a dead-site rescue where that was the LAST
+    // outbound request standing.
+    const recType = String(RECORDED_TYPE.get(hit.file) || "");
+    const textByType = /^text\/|javascript|json|xml|svg|css/i.test(recType);
+    const rwExt = TEXT_REWRITE.has(ext) ? ext : (/css/i.test(recType) ? ".css" : /html/i.test(recType) ? ".html" : ".js");
     const wantsProbe = ext === ".html" && url.searchParams.has("__probe") && PROBE_SHIM;
-    const canRewrite = TEXT_REWRITE.has(ext) || (ext === "" && await extensionlessIsText(hit.file));
+    const canRewrite = TEXT_REWRITE.has(ext) || textByType || (ext === "" && await extensionlessIsText(hit.file));
     if ((canRewrite && (EXT_HOSTS.length || ORIGIN_HOSTS.length)) || wantsProbe) {
       let text = await fsp.readFile(hit.file, "utf8");
-      if (EXT_HOSTS.length || ORIGIN_HOSTS.length) text = rewrite(text, ext, url.pathname);
+      if (EXT_HOSTS.length || ORIGIN_HOSTS.length) text = rewrite(text, rwExt, url.pathname);
       if (wantsProbe) text = text.replace(/<head([^>]*)>/i, `<head$1><script>${PROBE_SHIM}</script>`);
       const body = Buffer.from(text, "utf8");
       res.writeHead(200, { ...headers, "content-length": body.length });

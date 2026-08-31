@@ -455,6 +455,24 @@ canvasStyleFromSource: (() => {
   3. **全流程异常拦截器**：持续监听 `Runtime.exceptionThrown`、`Runtime.consoleAPICalled (error)`、`Network.responseReceived (>=400)`，任何一处异常立刻判红。
   4. **过渡完成与稳定性断言**：不仅轮询 `url` 包含目标路径、目标 DOM 挂载、归一化文案匹配，还要求 computed `opacity === '1'` 并持续稳定采样保持 >= 2s，彻底排除过渡中途闪退或延迟重定向至 `/error`。
 
+### 1.8 声音是输出面：没有门断言过它,它就能整类缺失而全绿【overworldaudio】
+
+§8 的输出侧账列的全是**会上色的面**——而声音一个像素都不上。一个音频工作室站的
+签名行为是声音(逐控件 hover/click 音效 + 主题音乐),它可以**整类缺失**而像素、DOM、
+CLEAN、零外联全部绿:实测首爬后磁盘**零音频文件**,五门无一变红。两层课:
+
+- **镜像层**:声音 URL 几乎总是运行时拼的(`/sound/<codec>/<name>_<变体号>.<ext>`),
+  §1.6 class 4 的资源级探针才看得见。破法层级:bundle 提音名族(会漏变体号)→
+  试探种子(靠猜)→ ⭐ **驱动到出声状态后从音频引擎的池子里倒出全部 src 当种子**
+  (Howler:`Howler._howls[].._src`)——**池子即账本,实测不猜**。
+- **门层**:音频普查判据 = 驱动入声音上下文(点击入场/开声)后,
+  **池内全量 loaded + 零 `/sound/` 404 + 零外联**,镜像侧、端口侧、仓外副本三处一致。
+  ⚠ headless 下 `AudioContext.state === "suspended"` 属自动播放策略,两侧一致即可,
+  不判红;**"suspended 但 loaded"恰恰证明字节都在本地**——播放态另归交互门管。
+
+推广:输出面不止像素。凡"源站有而不上色"的通道(声音、震动、剪贴板、下载),
+开工时对照站型问一遍"这一类有没有门",挂零个门的通道逐条登记为开口或补门。
+
 ## 2. 门型选择决策树
 
 ```
@@ -680,7 +698,8 @@ grep -n "<那条正则/那张常量表>" scripts/*.mjs # 除 lib/ 外应当零�
 | 外壳构建 | `verify-payload` | SSG 载荷求值展开后按叶路径比对（不是比字节） | `--allow-absent`（无数据岛站，两侧一致缺席才放行） |
 | 产出静态面 | `verify-offline` | 字节里的外部绝对 URL 普查，逐 host 对 `external.txt`（§1.6 静态半边） | external.txt 的 LINK/EMBED/stub 行 |
 | 产出静态面 | `verify-refs-served` | 每条资产引用由**真服务器**应答（§2.1.1：问服务器，不重实现映射） | `--allow mirror/external.txt`（源站自身 404） |
-| 运行时 | `probe --no-external` | CLEAN + 零外联的资源级半边（§1.5 / §1.6） | probe 输出里逐条归属 |
+| 运行时 | `probe --no-external` | CLEAN + 零外联的资源级半边（§1.5 / §1.6），**深度**：单路由走查/截图/长观察 | probe 输出里逐条归属 |
+| 运行时 | `sweep-routes` | 渲染**广度**：全路由一个浏览器逐一 0 错误/0 失败/0 外联，可带交互钩子与逐路由采集（§1.8 音频普查在此搭车） | `--allow-external`（已登记 EMBED 主机；其上的 4xx 报告不判红） |
 | 像素 | `pixelcompare` / `pixel-walk` | 位置 × 状态两维检查点（§1.3.1），跨侧对同侧带宽（§1.3.2），重复帧点名（§4.8） | 带宽由 `--self` 实测,不许手挑 |
 | 像素前置 | `frame-census` | 帧里有东西（§4.3：byte-equal 不证明测的是想测的画面） | — |
 | M(n) 关账 | `cold-audit-modules` | bundle 模块清单对账 + 检查覆盖率自报（§0.24.0） | 未移植模块须无人 require |

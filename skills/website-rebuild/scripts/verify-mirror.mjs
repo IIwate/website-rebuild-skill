@@ -146,6 +146,10 @@ const LEDGER_FILES = new Set([
   "netcapture.tsv",
   "external.txt",
   "urlpath-policy.json",
+  // Archival rescues (wayback-mirror.mjs) add two ledger companions: the
+  // permanent-holes register and the per-file capture provenance.
+  "wayback-holes.txt",
+  "wayback-provenance.json",
 ]);
 const TOOL_DIRS = ["_pretty/", "_scripts/"];
 const isBookkeeping = (rel) =>
@@ -519,6 +523,13 @@ const INTERSTITIAL = [
   [/_pxCaptcha|Please verify you are a human/i, "PerimeterX/HUMAN challenge"],
   [/Pardon Our Interruption|are you a robot/i, "generic bot interstitial"],
   [/unusual traffic from your computer network/i, "rate-limit interstitial"],
+  // ⛔ DOMAIN-PARKING LOTS ANSWER 200 AND WEAR THE URL. On a dead-site rescue a
+  // parked capture is bytes that honestly hash, honestly close, and are the
+  // wrong site entirely — twice measured (Sedo in-window at one target, a
+  // Rakko lot overwriting a rescued root at another) with every other gate
+  // green. Parking is an interstitial: the page under the URL is not the site.
+  [/sedoparking\.com|parkingcrew|hugedomains\.com|rakkoid\.com|domain-parking|dan\.com\/buy/i, "domain-parking lot"],
+  [/domain (is )?for sale|buy this domain|売り出し中のドメイン/i, "domain-for-sale page", true],
   // weak — small documents only
   [/g-recaptcha|hcaptcha\.com\/captcha|challenges\.cloudflare\.com\/turnstile/i, "CAPTCHA widget", true],
   [/PerimeterX|DataDome|ddos-guard|incap_ses|ak_bmsc/i, "bot-vendor marker", true],

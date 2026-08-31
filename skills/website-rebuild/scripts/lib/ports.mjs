@@ -93,6 +93,7 @@ export const LANES = {
   "netcapture.cdp": { n: 3, tool: "netcapture.mjs", what: "headless Chrome debug port" },
   "verify-routes.server": { n: 4, tool: "verify-routes.mjs", what: "server under test" },
   "verify-ssr.server": { n: 5, tool: "verify-ssr.mjs", what: "SSR server under test" },
+  "sweep.cdp": { n: 6, tool: "sweep-routes.mjs", what: "headless Chrome debug port (whole-site sweep)" },
   // Reserved for the per-project CDP gates (scroll/audio/scene-graph/...), so
   // a project that copies one in gets a lane instead of inventing 9600+random.
   "scroll-compare.cdp": { n: 10, tool: "(per-project)", what: "headless Chrome debug port" },
