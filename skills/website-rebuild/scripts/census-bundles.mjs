@@ -41,22 +41,24 @@ const chunks = [];
 for (const name of names) {
   const buf = await readFile(path.join(DIR, name));
   const src = buf.toString("utf8");
-  // Line-anchored: an import/export STATEMENT starts a line in this output
-  // shape. Occurrences inside strings would need the tokenizer — for a
-  // coordinates ledger the trade is documented, not hidden.
+  // Statement-anchored on `^`, `\n`, `;` or `}` — a MINIFIED chunk packs
+  // `;import{...}from"./x.js"` mid-line, and pure line anchoring reported the
+  // entry of one real target as imp:0/exp:0 while it carried both. `;` inside
+  // a string can still false-positive; for a coordinates ledger that trade is
+  // documented, not hidden (the reassembly gate is elsewhere).
   const imports = [];
-  for (const m of src.matchAll(/(?:^|\n)import\s*(?:([^;]*?)\s*from\s*)?["']([^"']+)["'];?/g)) {
+  for (const m of src.matchAll(/(?:^|[\n;}])import\s*(?:([^;]*?)\s*from\s*)?["']([^"']+)["'];?/g)) {
     imports.push({ clause: m[1] ? m[1].trim().slice(0, 400) : null, source: m[2] });
   }
   const exportNames = [];
-  for (const m of src.matchAll(/(?:^|\n)export\s*\{([^}]*)\}/g)) {
+  for (const m of src.matchAll(/(?:^|[\n;}])export\s*\{([^}]*)\}/g)) {
     for (const piece of m[1].split(",")) {
       const asIdx = piece.indexOf(" as ");
       const exp = (asIdx >= 0 ? piece.slice(asIdx + 4) : piece).trim();
       if (exp) exportNames.push(exp);
     }
   }
-  if (/(?:^|\n)export default /.test(src)) exportNames.push("default");
+  if (/(?:^|[\n;}])export default /.test(src)) exportNames.push("default");
   chunks.push({
     file: name,
     sha256: createHash("sha256").update(buf).digest("hex"),

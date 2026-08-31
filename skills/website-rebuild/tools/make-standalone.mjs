@@ -138,7 +138,10 @@ const ledger = (await readFile(path.join(MIRROR, "inventory.tsv"), "utf8"))
 // The hash is taken from the DESTINATION file after the copy — it pins what
 // actually landed, not what was intended to land.
 const BYTE_MANIFEST = {};
-const UNVERIFIED = new Set(OWN.concat(BUILD_OUT).map((p2) => "public" + (p2.startsWith("/") ? p2 : "/" + p2)));
+// Only a project that HAS an own build gets unpinned paths — without --own,
+// BUILD_OUT is a default that names no real file, and listing it makes the
+// checker report a phantom "own-build path" on every verbatim-only project.
+const UNVERIFIED = new Set((OWN.length ? OWN.concat(BUILD_OUT) : []).map((p2) => "public" + (p2.startsWith("/") ? p2 : "/" + p2)));
 const posixRel = (rel) => rel.split(path.sep).join("/");
 const hashFile = (p2) => new Promise((res, rej) => {
   const h = createHash("sha256");

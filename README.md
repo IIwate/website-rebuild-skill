@@ -1,7 +1,7 @@
 # website-rebuild-skill
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
-[![Version](https://img.shields.io/badge/version-0.2.1-blue.svg)](CHANGELOG.md)
+[![Version](https://img.shields.io/badge/version-0.2.2-blue.svg)](CHANGELOG.md)
 [![Agent Skills](https://img.shields.io/badge/Agent%20Skills-compatible-brightgreen.svg)](https://agentskills.io/)
 [![Node](https://img.shields.io/badge/node-%E2%89%A522-339933.svg)](#快速开始)
 
@@ -172,6 +172,7 @@ cp -R skills/website-rebuild ~/.claude/skills/website-rebuild
 | ON.energy | [www.on.energy](https://www.on.energy/) | 能源公司官网（Nuxt 3 + WebGL GLB 场景 + **Storyblok headless CMS**），首个 CMS 资产桶全量镜像样本（原图 + `/m/` 变换变体约 1,800 图）；55/55 路由零报错，滚动 9 档对拍 8 档精确零、页顶视频钉帧后归零 |
 | Milk Network | [milknetwork.com](https://milknetwork.com/) | 沙特品牌代理官网（webpack + GSAP + swup PJAX + **Strapi CMS 桶**），首个**双语 RTL** 站（en/ar 122 路由成对）；main 的 15 模块全量源码化并以 **chunk 形交付**（原 runtime/vendor 原件不动）；滚动对拍 cross 与 band 逐档数值全同，动画完结态精确零 |
 | Hashgraph VC | [hashgraphvc.com](https://hashgraphvc.com/) | 风投官网（Nuxt 3 + Three r182 **WebGPU/TSL** + Theatre + Sanity CMS），⭐ **首个由非 Claude runtime（Codex）全程执行**的复刻——验证了 Agent Skills 跨运行时可移植性；166/166 响应字节一致、6 路由载荷 10,458 叶一致、多检查点像素差 0，交付以逐文件 sha256 钉死、构建时逐字节复核；也是 **v0.2.0 拼接式分解**的诞生地——44.9 万行 / 33 chunk 切成 **2,043 个语义命名部件,逐字节重拼一致** |
+| Overworld Audio | [overworldaudio.com](https://overworldaudio.com/) | 游戏音频工作室官网（Nuxt 3 + THREE/Theatre + **Howler**），⭐ **声音第一次成为验收面**——入场后 **98/98 音效池全量 loaded、零音频 404**（运行时拼 URL 的音频族对静态提取整类不可见,"池子即账本"采集法的诞生地）;拼接式分解过压缩形态考验（20 chunk/435 部件重拼一致）,交付物 379/379 字节自证;robots 为 Content-Signal 形态,已呈交用户裁决 |
 
 ### 只做过判级的边界样本
 
@@ -220,7 +221,7 @@ README.md                  # 本文件
 
 版本随真实复刻项目递进：每个版本发布的功能与修复，都先在至少一个完整项目上验证过。
 
-完整记录见 **[CHANGELOG.md](CHANGELOG.md)**。最新版本 **v0.2.1**：三级终点选择（镜像存档 / 工程化复刻 / 源码化）+ 脚手架化的交接边界文档。
+完整记录见 **[CHANGELOG.md](CHANGELOG.md)**。最新版本 **v0.2.2**：声音成为验收面(音频普查判据 + 池子即账本采集法)+ Content-Signal robots 读法。
 
 ## 贡献
 
