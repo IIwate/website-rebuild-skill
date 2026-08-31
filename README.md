@@ -1,7 +1,7 @@
 # website-rebuild-skill
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
-[![Version](https://img.shields.io/badge/version-0.2.6-blue.svg)](CHANGELOG.md)
+[![Version](https://img.shields.io/badge/version-0.2.7-blue.svg)](CHANGELOG.md)
 [![Agent Skills](https://img.shields.io/badge/Agent%20Skills-compatible-brightgreen.svg)](https://agentskills.io/)
 [![Node](https://img.shields.io/badge/node-%E2%89%A522-339933.svg)](#快速开始)
 
@@ -225,14 +225,15 @@ README.md                  # 本文件
 
 版本随真实复刻项目递进：每个版本发布的功能与修复，都先在至少一个完整项目上验证过。
 
-完整记录见 **[CHANGELOG.md](CHANGELOG.md)**。最新版本 **v0.2.6**:引用提取第六形态(文档相对拼写——老派站的整个画廊曾对闭包门隐形)+ 驱动器须匹配站点输入通道(wheel 站要用 WheelEvent 实驱)。
+完整记录见 **[CHANGELOG.md](CHANGELOG.md)**。最新版本 **v0.2.7**:`npm test` 冒烟自检 + GitHub Actions——55 脚本语法、零依赖门、共享库实测教训 fixture、微型镜像端到端。
 
 ## 贡献
 
 欢迎 issue 与 PR。两条与一般项目不同的约定：
 
 - **每条功能与修复都要有实测出处**——本仓的版本历史全部来自真实复刻项目里撞出来的问题，PR 请说明它在哪个目标上被验证过；
-- **`scripts/` 保持零依赖**（`node:` 之外不许 import，门不许 import 生产者）——`scripts/verify-zerodep.mjs` 会在评审时执行这条纪律。
+- **`scripts/` 保持零依赖**（`node:` 之外不许 import，门不许 import 生产者）——`scripts/verify-zerodep.mjs` 会在评审时执行这条纪律；
+- 提交前跑 **`npm test`**（秒级冒烟:语法 / 零依赖 / 共享库实测教训 fixture / 微型镜像端到端）——CI 会在 PR 上自动执行同一套。
 
 ## 许可
 
