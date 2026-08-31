@@ -654,6 +654,13 @@ async function resolveOne(pathname) {
   // that never got laid out.
   const clean = path.normalize(decodeURIComponent(pathname));
   if (clean.split(/[/\\]/).some((seg) => seg === "..")) return null;
+  // ⛔ Never serve a git repository. The standard layouts point --root at
+  // mirror/ or site/, where no .git lives — but a server pointed at a repo
+  // root answers /.git/HEAD, and from there the whole object store walks out
+  // (measured on a pre-skill rebuild whose server root WAS the repo).
+  // Only `.git` is blocked, not dotfiles wholesale: mirrors legitimately
+  // carry /.well-known/.
+  if (clean.split(/[/\\]/).some((seg) => seg === ".git")) return null;
 
   for (const root of ROOTS) {
     if (clean.startsWith("/ext/")) {

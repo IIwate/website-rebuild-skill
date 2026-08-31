@@ -169,6 +169,7 @@ cp -R skills/website-rebuild ~/.claude/skills/website-rebuild
 | Hubtown | [hubtown.co.in](https://hubtown.co.in/) | Unseen Studio 出品的全屏 WebGL 长镜头站（Nuxt 3 + three.js + **Theatre.js**），授权动画状态随包下发的 C2 范本；landing 像素差落在同侧噪声带内 |
 | ON.energy | [www.on.energy](https://www.on.energy/) | 能源公司官网（Nuxt 3 + WebGL GLB 场景 + **Storyblok headless CMS**），首个 CMS 资产桶全量镜像样本（原图 + `/m/` 变换变体约 1,800 图）；55/55 路由零报错，滚动 9 档对拍 8 档精确零、页顶视频钉帧后归零 |
 | Milk Network | [milknetwork.com](https://milknetwork.com/) | 沙特品牌代理官网（webpack + GSAP + swup PJAX + **Strapi CMS 桶**），首个**双语 RTL** 站（en/ar 122 路由成对）；main 的 15 模块全量源码化并以 **chunk 形交付**（原 runtime/vendor 原件不动）；滚动对拍 cross 与 band 逐档数值全同，动画完结态精确零 |
+| Hashgraph VC | [hashgraphvc.com](https://hashgraphvc.com/) | 风投官网（Nuxt 3 + Three r182 **WebGPU/TSL** + Theatre + Sanity CMS），⭐ **首个由非 Claude runtime（Codex）全程执行**的复刻——验证了 Agent Skills 跨运行时可移植性；166/166 响应字节一致、6 路由载荷 10,458 叶一致、多检查点像素差 0，交付以逐文件 sha256 钉死、构建时逐字节复核 |
 
 ### 只做过判级的边界样本
 
@@ -209,7 +210,7 @@ README.md                  # 本文件
 
 ## 路线图
 
-- **v0.2+**：补齐剩余的 B 类场景——超大型多分包代码切片、失效站点的存档抢救（第三方存储桶资产发现与 headless CMS 快照已在 v0.1.72 / ON.energy 落地）。
+- **v0.2+**：补齐剩余的 B 类场景——超大型多分包代码切片、失效站点的存档抢救（第三方存储桶资产发现与 headless CMS 快照已在 v0.1.72 / ON.energy 落地）；**无容器 scope-hoisted 产物（Vite）的语义源码层**——现有交付止于"逐字节模块 + 证据命名的人类索引"，把单个 18 万行的 chunk 拆成场景/材质/时间轴目录且每步过门，是下一档（实测参照：hashgraphvc）。
 - **源码化的两块空白**：命名的还原率取决于代码本身留下多少线索——实测一个扁平站有 63% 的局部变量没有任何可依据的证据，一个模块化站有 27/46 个模块只能保留哈希 id。这不是欠账，**错名比哈希更糟，因为哈希会让人去看**。另一块是模块头目前只写事实与溯源，**"这个模块是干什么的"仍然需要人来写**——工具写不出，而写错比留白更糟。
 - **远期**：C1 类（RSC 服务端组件）的"重构式逆向"方法论——C2（声明式组织、源码随包下发）已在 v0.1.54 起落地并跑通多个目标，剩下的是行为源真正不下发的那一半。
 
