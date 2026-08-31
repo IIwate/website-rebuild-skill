@@ -1,5 +1,9 @@
 # 更新记录
 
+## 无容器产物的语义源码层（v0.2.0）
+
+- **v0.2.0**：v0.2 线开篇——**拼接式分解**：Vite/esbuild 这类 scope-hoisted 无容器产物（模块边界被打包器抹掉,重写式拆分必然静默重排副作用）现在有了自己的源码化路径。新增三件套:`census-bundles`（chunk 级坐标账本:逐 chunk sha256/行数 + ESM import/export 依赖图,import 别名即命名证据）、`slice-esm`（把 chunk 切成按声明命名的部件文件,**按序拼接逐字节等于原件**——切点只在可证明安全处下刀,写盘前先自证重拼）、`verify-reassembly`（重拼门:逐部件 sha + 拼接 sha + 对活原件三重比对;字节等价成立时,全部运行时门的裁决免费转移到可读层）。实测 hashgraphvc（Nuxt 3 + Three WebGPU/TSL,33 chunk / 44.9 万行）:2,043 个部件全数重拼一致,18.9 万行的 worker chunk 拆出 751 件、场景 chunk 拆出 CameraSplineSystem / WebGPUWaveSimulation / Gerstner 等 151 件——名字全部来自代码自身。
+
 版本随真实复刻项目递进：每个版本发布的功能与修复，都先在至少一个完整项目上验证过。经验教训的完整记录在 `references/` 各文档中，此处只列变更。
 
 ## 流程与验收体系（v0.1.0 – v0.1.11）
