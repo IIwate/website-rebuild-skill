@@ -293,7 +293,24 @@ const KNOWN = new Set(entries.map((e) => String(e.id)));
 
 // A packer's module id: a content hash, or a small ordinal. Same judgement
 // cold-audit-modules.mjs makes about literals inside a require call.
+// ⭐ A STRING-KEYED CONTAINER HAS A THIRD SPELLING. webpack keys modules by
+// PATH there — `s("./node_modules/gsap/index.js")` is a require of gsap, and
+// gsap routinely lives in a vendor chunk, so under a hash/ordinal-only shape
+// test that edge fails BOTH judgements: not in KNOWN, not id-shaped, silently
+// dropped. The closure gate then calls a chunk closed that throws at
+// evaluation time without three other chunks loaded (measured on milknetwork:
+// 10 such ids, all of gsap/three/swiper).
+// ⚠ Gated on the LITERAL'S TOKEN TYPE **and** on how THIS container spells its
+// ids. A `./…` literal is an id only where ids are paths; inside a numeric
+// container it is an ordinary path string — an asset URL, an import hint — and
+// admitting it there re-opens the false-dependency half of the same bug.
+// Measured on the fixture: `s(cond ? "./assets/logo.svg" : "https://…")` in a
+// numeric container filed an SVG as a cross-chunk module.
 const ID_SHAPE = /^(?:[0-9a-f]{16,}|\d{1,6})$/i;
+const PATH_ID_SHAPE = /^\.{1,2}\//;
+// Does the container itself key modules by path? Asked of the ids it DEFINES,
+// which is the only evidence that does not depend on the literal being judged.
+const PATH_KEYED = [...KNOWN].some((id) => PATH_ID_SHAPE.test(id));
 
 /**
  * File one literal from inside a require call.
@@ -313,10 +330,19 @@ const ID_SHAPE = /^(?:[0-9a-f]{16,}|\d{1,6})$/i;
  * REPORTED rather than either dropped or fatal. When a site-wide map exists
  * (cold-audit-modules.mjs reads `MAP.chunks`), those ids are simply in KNOWN and
  * this set empties on its own.
+ *
+ * ⚠ MEMBERSHIP IS ASKED FIRST, always. A `./…` id defined in THIS container is
+ * a local edge and belongs in `requires` — reading the shape first would file
+ * every same-chunk path-keyed require as external and empty the closure gate's
+ * input on exactly the containers that spell ids as paths.
+ *
+ * @param keyKind the literal's token type ("string" | "num") — the container's
+ *   own spelling of ids, not a guess from the value.
  */
-const addRequire = (v, requires, crossChunk) => {
+const addRequire = (v, keyKind, requires, crossChunk) => {
   if (KNOWN.has(v)) requires.add(v);
   else if (ID_SHAPE.test(v)) crossChunk.add(v);
+  else if (keyKind === "string" && PATH_KEYED && PATH_ID_SHAPE.test(v)) crossChunk.add(v);
 };
 
 const mods = [];
@@ -376,7 +402,8 @@ for (const { id, fi, aliases = [] } of entries) {
     if (ctxName && lab(k) === "name" && val(k) === ctxName && lab(k + 1) === "." && lab(k + 2) === "name") {
       const method = val(k + 2);
       if ((method === "i" || method === "r") && lab(k + 3) === "(" && lab(k + 4) === "num") {
-        addRequire(String(val(k + 4)), requires, crossChunk);
+        // Turbopack spells ids as ordinals; `lab(k + 4)` is "num" by the guard.
+        addRequire(String(val(k + 4)), "num", requires, crossChunk);
         continue;
       }
       if (method === "s" && lab(k + 3) === "(") {
@@ -410,7 +437,7 @@ for (const { id, fi, aliases = [] } of entries) {
         if (l === "(" || l === "[" || l === "{" || l === "${") d++;
         else if (l === ")" || l === "]" || l === "}") { d--; if (d === 0) { k = j; break; } }
         else if (d >= 1 && (l === "string" || l === "num")) {
-          addRequire(String(val(j)), requires, crossChunk);
+          addRequire(String(val(j)), l, requires, crossChunk);
         }
       }
       continue;
