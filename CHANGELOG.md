@@ -1,5 +1,9 @@
 # 更新记录
 
+## 失效站点的存档抢救（v0.2.4）
+
+- **v0.2.4**：X 类不再等于"做不了"——新增 `wayback-mirror`:从 Internet Archive 把死站救成**标准镜像**（CDX 枚举 → 锚点+时间窗选连贯捕获,auto 锚点让抢注者时代的 301 洪水靠状态码+窗口出局 → `id_` 旗抓原始字节,绝不镜像被注入改写的回放页 → 与 mirror-site 同构的账本 + `wayback-provenance.json` 逐文件捕获坐标）。⛔ **洞是既成事实,登记即交付**:`wayback-holes.txt` 同时是 verify-mirror 的豁免清单;⭐ **别名回填**（同名异路捕获按推断回填,字节合理性校验挡住 SPA catch-all 假捕获,单列 FILLED BY ALIAS）;**seeds 模式**（探针/sweep 的 404 清单当种子问档案要,`web/<锚点>id_/` 自动落到最近捕获——死站版的抓包补录,迭代到不动点）。配套:`serve` 文本改写门改为账本 content-type 优先（无扩展名落盘的字体 CSS 曾绕过改写外呼）;`sweep-routes` 新增 `--allow-errors`（登记的怪癖放行不判红——死站无源可对拍时的判断登记通道）;新指南 `references/archival-rescue.md`。实测两个死站:darknetflix.io（2020 SOTY,8/15 路由复活,92 永久洞如实登记——含 7 个任何时代都未被捕获的懒 chunk）与 umamiland.withgoogle.com（Google 体验站,**9/9 路由全清**,探针→种子三轮迭代收敛,窗口放宽决策登记在案）。
+
 ## 渲染广度门（v0.2.3）
 
 - **v0.2.3**：新增 `sweep-routes`——全站渲染广度门：**全部路由,一个浏览器**（此前是逐路由起一个 Chrome 的手搓循环:122 路由约 40 分钟,且并发探针会互相收割同工作区的孤儿实例;现在 7.5 分钟,单实例后事故面消失）。逐路由记录页面错误/请求失败/外联,`--interact` 交互钩子驱动 load 到不了的状态（入场点击等）,`--eval` 逐路由采集（音频池普查在此搭车）,`--allow-external` 放行已登记的 EMBED 主机——允许主机上的 4xx 是它的离域行为（域名锁 Vimeo 实测）,报告不判红。与 probe 明确分工:sweep 管广度,probe 管深度。
