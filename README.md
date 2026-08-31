@@ -1,7 +1,7 @@
 # website-rebuild-skill
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
-[![Version](https://img.shields.io/badge/version-0.2.3-blue.svg)](CHANGELOG.md)
+[![Version](https://img.shields.io/badge/version-0.2.4-blue.svg)](CHANGELOG.md)
 [![Agent Skills](https://img.shields.io/badge/Agent%20Skills-compatible-brightgreen.svg)](https://agentskills.io/)
 [![Node](https://img.shields.io/badge/node-%E2%89%A522-339933.svg)](#快速开始)
 
@@ -34,7 +34,7 @@
 - **行号可溯源的逆向**——复刻里的每一行都能指回源站 bundle 的哪一行；bug 与怪写法照抄不修
 - **量化验收**——控制台 / 网络 / DOM / 几何 / **逐像素**五层自动比对，差异要么修掉、要么登记，不许糊过去
 - **源码化交付**——逐字移植的产物重写成人能读的工程（拆模块、按证据命名、补溯源头注），**复制到任何地方断网可跑**
-- **零依赖工具链**——50 个 Node 脚本（40 个工序脚本与验收门 + 7 个共用库 + 3 个源码化重构器），源码化之前整条流水线不装任何 npm 包
+- **零依赖工具链**——51 个 Node 脚本（41 个工序脚本与验收门 + 7 个共用库 + 3 个源码化重构器），源码化之前整条流水线不装任何 npm 包
 - **法务决定权归用户**——skill 只取证与呈交，产出默认私有 + noindex + 不部署
 
 ## 快速开始
@@ -115,6 +115,7 @@ cp -R skills/website-rebuild ~/.claude/skills/website-rebuild
 | **B 类：平台层剥离** | Shopify（平台 / 应用 / 上游主题 / 站点自研四层分离） | 两个 Shopify 店铺，其一是主题 fork 的定制店 |
 | **B 类：第三方资产桶 / headless CMS** | Storyblok（`/m/` 变换接口）、Strapi 上传桶全量镜像 | 一个 ~1,800 图的 CMS 桶 + 一个 864 MB 的 Strapi 桶 |
 | **B 类：序列化数据块展开** | Nuxt 等 SSG 把数据编码进页面的形态 | 一个 63.5 KB 的数据块（占文档 54%），展开为 566 KB 结构化数据并逐项比对 |
+| **X 类：失效站存档抢救** | Wayback CDX 枚举 → 锚点+时间窗选连贯捕获 → `id_` 原始字节 → 标准镜像;永久洞如实登记,同名异路捕获按推断回填并单列 | 两个死站(域名易主 / 平台回收)各救出一份带账镜像 |
 | **C2 类：声明式组织的现代全栈站** | Next.js App Router（webpack / Turbopack）、Nuxt 3 + Vite、R3F、Theatre.js——RSC flight 与 devalue 载荷、服务端图片端点、会话态预取都有对应处理 | 六个 C2 目标：115 路由全站（115/115 跨侧一致）、Three r182 WebGPU/TSL 站、Theatre.js WebGL 长镜头站、产品页（4 检查点像素全零）等 |
 
 ### 做不了的场景
@@ -123,7 +124,7 @@ cp -R skills/website-rebuild ~/.claude/skills/website-rebuild
 |---|---|---|
 | **C1** | 服务端组件站 | 行为源在 React RSC **服务端**组件流里，客户端只拿到渲染结果——没有可逐行转写的对象 |
 | **D** | 服务端行为站 | 行为主体在服务端（CMS、电商库存、A/B 分桶、个性化），**客户端没有可移植的目标**，也没有确定性的验收基准 |
-| **X** | 已消失的站 | 没有可镜像的对象。历年获奖站实测消失率约 **29%**——这也是"第一时间镜像"成为第一条纪律的原因 |
+| **X（无存档）** | 已消失且 Wayback 无覆盖的站 | 彻底没有可镜像的对象。⭐ **有存档的 X 站可以抢救**（见上表）；历年获奖站实测消失率约 **29%**——这也是"第一时间镜像"成为第一条纪律的原因 |
 
 三类各自的实测样本见下文[已验证过的网站](#已验证过的网站)。
 
@@ -186,8 +187,8 @@ cp -R skills/website-rebuild ~/.claude/skills/website-rebuild
 | Duolingo | [duolingo.com](https://www.duolingo.com/) | **C1** | RSC 流不下发可转写的行为源码 |
 | TechCrunch | [techcrunch.com](https://techcrunch.com/) | **D** | WordPress 内容站，行为主体在服务端 |
 | Airbnb | [airbnb.com](https://www.airbnb.com/) | **D** | 个性化注水 + 服务端数据，没有确定性的验收基准 |
-| darknetflix.io | — | **X** | 域名已易主，最终落点是无关站点 |
-| umamiland | — | **X** | 原站已消失，无可镜像的对象 |
+| darknetflix.io | — | **X→已抢救** | 域名易主;⭐ 已从 Wayback 救回(锚点 2020-07,8/15 路由复活,92 永久洞如实登记) |
+| umamiland | — | **X→已抢救** | 平台回收;⭐ 已从 Wayback 救回(**sweep 9/9 路由全清**,探针→种子迭代收敛) |
 
 ## 仓库结构
 
@@ -215,7 +216,7 @@ README.md                  # 本文件
 
 ## 路线图
 
-- **v0.2 已落地**：无容器 scope-hoisted 产物的语义源码层（拼接式分解，v0.2.0，两站验证含压缩形态）；声音作为验收面（v0.2.2）。**剩余**：失效站点的存档抢救；拼接式分解的下一档——部件按源模块**分组成目录**（场景/材质/时间轴），以及把 census 依赖图接进逆向笔记的自动化。
+- **v0.2 已落地**：无容器 scope-hoisted 产物的语义源码层（拼接式分解，v0.2.0，两站验证含压缩形态）；声音作为验收面（v0.2.2）；渲染广度门（v0.2.3）；失效站点的存档抢救（v0.2.4，两个死站实测）。**剩余**：拼接式分解的下一档——部件按源模块**分组成目录**（场景/材质/时间轴），以及把 census 依赖图接进逆向笔记的自动化。
 - **源码化的两块空白**：命名的还原率取决于代码本身留下多少线索——实测一个扁平站有 63% 的局部变量没有任何可依据的证据，一个模块化站有 27/46 个模块只能保留哈希 id。这不是欠账，**错名比哈希更糟，因为哈希会让人去看**。另一块是模块头目前只写事实与溯源，**"这个模块是干什么的"仍然需要人来写**——工具写不出，而写错比留白更糟。
 - **远期**：C1 类（RSC 服务端组件）的"重构式逆向"方法论——C2（声明式组织、源码随包下发）已在 v0.1.54 起落地并跑通多个目标，剩下的是行为源真正不下发的那一半。
 
@@ -223,7 +224,7 @@ README.md                  # 本文件
 
 版本随真实复刻项目递进：每个版本发布的功能与修复，都先在至少一个完整项目上验证过。
 
-完整记录见 **[CHANGELOG.md](CHANGELOG.md)**。最新版本 **v0.2.3**：渲染广度门 `sweep-routes`——全站路由一个浏览器扫完（122 路由 7.5 分钟），带交互钩子与逐路由采集。
+完整记录见 **[CHANGELOG.md](CHANGELOG.md)**。最新版本 **v0.2.4**：失效站点的存档抢救——`wayback-mirror` 把死站从 Internet Archive 救成标准镜像,两个死站实测复活。
 
 ## 贡献
 

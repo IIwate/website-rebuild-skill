@@ -134,6 +134,10 @@ const LEDGER_FILES = new Set([
   "netcapture.tsv",
   "external.txt",
   "urlpath-policy.json",
+  // Archival rescues (wayback-mirror.mjs) add two ledger companions: the
+  // permanent-holes register and the per-file capture provenance.
+  "wayback-holes.txt",
+  "wayback-provenance.json",
 ]);
 const TOOL_DIRS = ["_pretty/", "_scripts/"];
 const isBookkeeping = (rel) =>

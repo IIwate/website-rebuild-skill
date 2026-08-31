@@ -57,7 +57,7 @@ async function findChrome() {
 
 const args = process.argv.slice(2);
 const flag = (n, d) => { const i = args.indexOf("--" + n); return i >= 0 && args[i + 1] !== undefined ? args[i + 1] : d; };
-const KNOWN = new Set(["base", "routes", "pages", "wait", "interact", "interact-wait", "eval", "allow-external", "out", "cdp-port", "width", "height"]);
+const KNOWN = new Set(["base", "routes", "pages", "wait", "interact", "interact-wait", "eval", "allow-external", "allow-errors", "out", "cdp-port", "width", "height"]);
 for (const a of args) if (a.startsWith("--") && !KNOWN.has(a.slice(2))) {
   console.error(`FATAL — unknown flag ${a}. Known: ${[...KNOWN].map((f) => "--" + f).join(" ")}`);
   process.exit(2);
@@ -70,6 +70,12 @@ const INTERACT = flag("interact", null);
 const INTERACT_WAIT = Number(flag("interact-wait", "4000"));
 const EVAL = flag("eval", null);
 const ALLOW_EXTERNAL = new Set((flag("allow-external", "") || "").split(",").map((s) => s.trim()).filter(Boolean));
+// --allow-errors <regex>: a REGISTERED page-error pattern (deviation/quirk
+// table entry) counted and reported but not fatal. Exists for judgment calls a
+// dead-site rescue cannot settle against a live origin (e.g. Vue Router's
+// NavigationDuplicated on locale routes) — same contract as --allow-external:
+// what is registered stays visible, what is not stays red.
+const ALLOW_ERRORS = flag("allow-errors", null) ? new RegExp(flag("allow-errors", null)) : null;
 const OUT = flag("out", null);
 const W = Number(flag("width", "1280")), H = Number(flag("height", "800"));
 
@@ -253,6 +259,12 @@ for (const route of routes) {
     evalResult = String(r?.result?.value ?? "");
   }
 
+  let allowedErrors = 0;
+  if (ALLOW_ERRORS) {
+    const keep = pageErrors.filter((e) => !ALLOW_ERRORS.test(e));
+    allowedErrors = pageErrors.length - keep.length;
+    pageErrors = keep;
+  }
   const extStr = [...external].map(([h, n]) => `${h}(x${n})`).join(",");
   const allowedStr = [...allowedExternal].map(([h, n]) => `${h}(x${n})`).join(",");
   const bad = pageErrors.length + failures.length + external.size + lifecycle.length;
@@ -274,7 +286,7 @@ for (const route of routes) {
     for (const e of pageErrors.slice(0, 3)) console.log(`         ${e.slice(0, 140)}`);
     for (const f of failures.slice(0, 5)) console.log(`         ${f.slice(0, 140)}`);
   } else {
-    console.log(`  ok   ${route}${allowedStr ? `  (allowed: ${allowedStr}${allowedFailures.length ? `, ${allowedFailures.length} failing off-origin` : ""})` : ""}${evalResult ? `  ${evalResult.slice(0, 80)}` : ""}`);
+    console.log(`  ok   ${route}${allowedStr ? `  (allowed: ${allowedStr}${allowedFailures.length ? `, ${allowedFailures.length} failing off-origin` : ""})` : ""}${allowedErrors ? `  (${allowedErrors} allowed error(s))` : ""}${evalResult ? `  ${evalResult.slice(0, 80)}` : ""}`);
   }
 }
 
