@@ -467,6 +467,26 @@ export function createRefExtractor({ origin, originHost, assetHosts, onOffHost }
         } catch {}
       }
     }
+    // 6. DOCUMENT-RELATIVE attribute refs: src="./content/x/thumb.png",
+    // href="content/3.project/.../1.jpg", data-retina="…". Old-school sites
+    // (hand-written PHP-era HTML) spell most of their asset space this way,
+    // and shapes 1–5 are all blind to it: absolute, protocol-relative,
+    // ROOT-relative, srcset, CSS url() — none begins without a scheme or a
+    // slash. Measured on a 2018 rescue: every project-gallery thumb and
+    // lightbox image (`./content/…/thumb.png`, `…/1.jpg`) was invisible to
+    // the closure gate, which then reported ∅ over a mirror missing the whole
+    // gallery. The attr= anchor keeps JS operator soup out; addIfAsset's
+    // extension gate keeps page links out; resolution is against the DOCUMENT
+    // URL, exactly as the browser resolves it.
+    if (baseUrl) {
+      for (const m of text.matchAll(/(?:src|href|poster|data-[a-z0-9-]+)\s*=\s*["']((?:\.\/)?[a-zA-Z0-9_][^"'<>\s]*?\.[a-z0-9]{2,5}(?:\?[^"']*)?)["']/gi)) {
+        const v = m[1];
+        if (/^(?:https?:|\/|#|data:|mailto:|tel:|javascript:)/i.test(v)) continue;
+        try {
+          addIfAsset(new URL(v, baseUrl).href, urls);
+        } catch {}
+      }
+    }
   };
 
   return function extractAssetUrls(text, baseUrl) {

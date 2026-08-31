@@ -1,7 +1,7 @@
 # website-rebuild-skill
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
-[![Version](https://img.shields.io/badge/version-0.2.5-blue.svg)](CHANGELOG.md)
+[![Version](https://img.shields.io/badge/version-0.2.6-blue.svg)](CHANGELOG.md)
 [![Agent Skills](https://img.shields.io/badge/Agent%20Skills-compatible-brightgreen.svg)](https://agentskills.io/)
 [![Node](https://img.shields.io/badge/node-%E2%89%A522-339933.svg)](#快速开始)
 
@@ -225,7 +225,7 @@ README.md                  # 本文件
 
 版本随真实复刻项目递进：每个版本发布的功能与修复，都先在至少一个完整项目上验证过。
 
-完整记录见 **[CHANGELOG.md](CHANGELOG.md)**。最新版本 **v0.2.5**：存档抢救淬火——停车页验尸与逐候选回退、拼写孪生归一、三个死站实测复活(第三站为"原地被停车页替换"型)。
+完整记录见 **[CHANGELOG.md](CHANGELOG.md)**。最新版本 **v0.2.6**:引用提取第六形态(文档相对拼写——老派站的整个画廊曾对闭包门隐形)+ 驱动器须匹配站点输入通道(wheel 站要用 WheelEvent 实驱)。
 
 ## 贡献
 
