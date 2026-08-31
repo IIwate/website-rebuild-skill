@@ -124,7 +124,7 @@ for (const m of all) {
     // a computed require. Count it as examined rather than skipping it — skipping
     // deflates coverage into a false FAIL — but tally it separately, so "nothing
     // to look at" never reads as "looked and found nothing".
-    else if (/(?:function\s*)?\(\s*\w*\s*(?:,\s*\w+\s*)?\)\s*(?:=>|\{)/.test(head)) noReq = true;
+    else if (/(?:function\s*)?(?:\(\s*\w*\s*(?:,\s*\w+\s*)?\)|\w+)\s*(?:=>|\{)/.test(head)) noReq = true;
   }
   if (!R && !noReq) continue;
   examined++;
@@ -167,7 +167,7 @@ for (const m of all) {
     // them as edges the site is ACCOUNTED FOR, and leaving it on the review list
     // just trains the reader to skip the list.
     const argText = body.slice(hit.index + hit[0].length, k);
-    const lits = [...argText.matchAll(/["']([0-9a-f]{16,}|\d{1,6})["']/g)].map((x) => x[1]).filter((v) => KNOWN.has(v));
+    const lits = [...argText.matchAll(/["']((?:[0-9a-f]{16,}|\d{1,6})|\.{1,2}\/[^"'`\s]+)["']/g)].map((x) => x[1]).filter((v) => KNOWN.has(v));
     const recorded = lits.length > 0 && lits.every((v) => m.requires.map(String).includes(v));
     (recorded ? resolved : dynamic).push({
       id: String(m.id), line: lineNo, lits,

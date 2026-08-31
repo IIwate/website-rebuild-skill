@@ -5,8 +5,8 @@
  *
  * A webpack container hands you the module boundaries for free, so the hard
  * part of M(n+1) moves: on a flat bundle the question is "where does this cut",
- * here it is "what is this thing called". The ids are content hashes and carry
- * nothing.
+ * here it is "what is this thing called". Hash and ordinal ids carry nothing;
+ * path-keyed containers retain their readable path ids.
  *
  * ⛔ This tool PROPOSES. It does not decide. Every proposal carries the tier and
  * the literal evidence string it came from, so a name can be checked against the
@@ -62,20 +62,26 @@ const byId = new Map(MAP.modules.map((m) => [m.id, m]));
 // container ONCE and take the function nodes it actually contains.
 const FILE = parse(SRC, { sourceType: "unambiguous", errorRecovery: true });
 const NODES = new Map();
+const ID_SHAPE = /^(?:[0-9a-f]{16,}|\d{1,6})$/i;
+const PATH_ID_SHAPE = /^\.{1,2}\//;
 traverse(FILE, {
   ObjectProperty(p) {
     const k = p.node.key;
-    // ⛔ Three key forms, and all three occur: a minifier quotes a key only when
+    // ⛔ Four key forms occur: a minifier quotes a key only when
     // it must. `"02b5c2be…":` is quoted because it starts with a digit,
     // `a738138e…:` is a bare identifier, and `14:` is a NUMBER — and 14 happens
     // to be the entry module. Accepting only the long-hex form silently drops
     // it, and the failure surfaces far away as "candidates is not iterable".
+    // Path-keyed webpack containers use a fourth form such as "./src/app.js".
     // This is the third time a numeric module id has cost time on this target.
     const id = k.type === "StringLiteral" ? String(k.value)
       : k.type === "NumericLiteral" ? String(k.value)
       : k.type === "Identifier" ? k.name
       : null;
-    if (!id || !/^[0-9a-f]{16,}$|^\d{1,6}$/.test(id)) return;
+    // String-keyed webpack containers can use relative module paths as ids.
+    // Keep those ids available to naming and recursive module verification just
+    // like hash and ordinal ids.
+    if (!id || (!ID_SHAPE.test(id) && !PATH_ID_SHAPE.test(id))) return;
     const v = p.node.value;
     if (v.type === "FunctionExpression" || v.type === "ArrowFunctionExpression") NODES.set(id, p.get("value"));
   },

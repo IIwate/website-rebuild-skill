@@ -318,7 +318,13 @@ export function serveCandidates(pathname, search, policy = DEFAULT_POLICY) {
   // The SAME flatten the writer used — one function, not a second copy of the
   // rule (flattenPathTail states why).
   const flat = flattenPathTail(pathname);
-  if (flat !== pathname) out.push(flat);
+  if (flat !== pathname) {
+    // A flattened path is the writer's filename. Apply the query suffix to that
+    // filename before the bare fallback, otherwise a transformed asset with a
+    // query can never resolve to the file localRelPath() wrote.
+    if (suffix) out.push(withQuerySuffix(flat, suffix));
+    out.push(flat);
+  }
   if (suffix) {
     // ⛔ For a DIRECTORY-style path the crawler and the server used to disagree
     // about the ORDER of two operations — attach the query suffix, and append
