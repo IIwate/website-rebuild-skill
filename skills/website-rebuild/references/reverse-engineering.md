@@ -46,7 +46,9 @@ Step 0 依据"81 处 `requestAnimationFrame`、0 处 `gsap`"判为"自研命令�
 | 形态 | 识别 | 工具 | 单位 |
 |---|---|---|---|
 | **扁平拼接** | 几百个顶层 `class`/`const`/`function`，共享一个作用域 | `layer-map`（分层表） | 行号区间 |
-| **模块化打包**（webpack/rollup/Turbopack 运行时） | `!function(m){…}([…])` 或 `({…})`，**顶层声明数 = 0** | `scripts/module-map.mjs` | **模块** |
+| **Flat-IIFE** | 一个 IIFE 包住共享闭包与启动尾部，声明住在**壳内**而非顶层 | 切片基线 + 四桶归属门（`readable-source.md` §3.0.7）；⛔ `module-map` / `closure` 的空结果不是"没有模块"的证据 | 行号区间 + ownership map |
+| **无容器 scope-hoisted**（Vite/esbuild） | 顶层 `import`/`export` + 数百源模块拼进同一作用域，**没有工厂容器** | `scripts/census-bundles.mjs` → `scripts/slice-esm.mjs` → `scripts/verify-reassembly.mjs`（`readable-source.md` §3.0.6） | chunk + 声明切片与拼接顺序 |
+| **模块化打包**（webpack/rollup/Turbopack 运行时） | `!function(m){…}([…])` 或 `({…})`，**顶层声明数 = 0** | `scripts/module-map.mjs` → `scripts/closure.mjs` | **模块** |
 | **多 chunk** | 跨文件 import/export 重命名 | 分层表 + 跨 chunk 重命名表（§2.1） | 行号区间 + 别名表 |
 
 #### 0.5.1 ⛔ 两种模块容器语法，一个读错会**安静地**给你一张小得离谱的表【airpodspro】【v0-optimus】

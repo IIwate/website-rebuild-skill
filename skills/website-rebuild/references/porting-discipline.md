@@ -195,6 +195,12 @@ rogier 在实现里嵌入 68 处 mode 字符串，把"当前遵循哪条源码�
 - **同类实践【samsy】**：`src/data/` 下 works.json（25 条）、cityLayout.json（bundle L65917-66615 逐字反解，35 处摆放）、animations.json（1.64MB）、mixamoRig.json、preloaderFrames.json。
 - 为什么不手抄：手抄错误无法审计也无法重放；脚本抽取可重跑、可交叉校验，且连源站的错误都保真。
 
+### 3.1 ⭐ 受限字面量可用轻量状态机抽取【ilithya】
+
+当目标是由**唯一锚点**定位的数据数组或对象字面量，且已确认语法只含普通引号、转义与括号嵌套时，可以用字符级括号深度 + 引号/转义状态机截取；锚点不唯一、括号不闭合或越过预定边界一律 FATAL。生成物带 `AUTO-GENERATED` 标记，并登记源区间、源 hash 与重放命令；必须有 `--check` 或等价的新鲜度门，消费方只 import 生成数据，不再保留第二份手抄常量。
+
+⛔ **这是对"已验证语法子集里的一个数据字面量"的许可，不是通用 JavaScript 解析器**，也**不得**用于模块边界判定、顶层声明识别或任何形态判形（那些走 `readable-source.md` §3.0.6 / §3.0.7 的工具与门）。遇到模板字面量、正则、注释歧义、计算表达式或未知语法，改用 tokenizer/parser 或直接 FATAL；不得继续给状态机补猜测分支。
+
 ## 4. 三张登记表制度
 
 REBUILD_PLAN 固定维护三张表（lando 定型，各项目同构【lando】【kimi】【noomo】【samsy】）：

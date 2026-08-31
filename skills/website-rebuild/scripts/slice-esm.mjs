@@ -31,10 +31,11 @@
  * File-grouping policy (presentation only — reassembly ignores it):
  *   a new file starts at each top-level `class X` / `const X = class` /
  *   license banner (`/*!`), or a named `function X` of >= --fn-lines lines;
- *   the leading import run becomes 000-imports.js, a trailing `export {…}`
- *   becomes the last part. Everything between anchors belongs to the anchor
- *   before it. Names are the declaration's own identifiers — tier-1 literal
- *   evidence, never invented (a wrong name is worse than a hash).
+ *   the leading import run becomes 000-imports.js (a chunk that opens with no
+ *   import is named after its own first declaration instead), a trailing
+ *   `export {…}` becomes the last part. Everything between anchors belongs to
+ *   the anchor before it. Names are the declaration's own identifiers — tier-1
+ *   literal evidence, never invented (a wrong name is worse than a hash).
  *
  *   node scripts/slice-esm.mjs --in src/site/_nuxt/DqcYvDA3.js \
  *        --out src/readable/DqcYvDA3 [--fn-lines 12]
@@ -188,7 +189,15 @@ for (const i of cuts) {
 const base = path.basename(IN).replace(/\.m?js$/, "");
 const outDir = path.resolve(OUT);
 const bounds = [0, ...anchors.map((a) => a.off), SRC.length];
-const names = ["imports", ...anchors.map((a) => a.name)];
+// The preamble is only "imports" when it actually opens with one. A chunk with
+// no import statements still has a preamble — it holds whatever declaration
+// preceded the first anchor, and calling that file 000-imports.js names it
+// after something it does not contain, which is the wrong-name-is-worse-than-a-
+// hash failure this tool exists to avoid. Fall back to the declaration's own
+// identifier, then to a neutral label.
+const head = declOf(0);
+const preamble = head.kind === "import" ? "imports" : (head.name || "preamble");
+const names = [preamble, ...anchors.map((a) => a.name)];
 const kinds = ["preamble", ...anchors.map((a) => a.kind)];
 const seen = new Map();
 const parts = [];
