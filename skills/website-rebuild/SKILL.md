@@ -3,14 +3,14 @@ name: website-rebuild
 description: 1:1 rebuild of award-winning creative websites (WebGL / scroll-animation / portfolio sites). Evidence-driven pipeline - mirror-first forensics, line-number-traceable reverse engineering of minified bundles, verbatim porting, quantitative verification gates. Use when user asks to "复刻网站", "重建网站", "1:1 rebuild", "clone this site", or provides a URL of a creative/award site to reproduce.
 compatibility: Requires Node 22+ (bundled scripts use built-in WebSocket to talk to CDP), npx, and a local Chrome/Chromium for headless comparison. POSIX shell optional - the Step 0 probe protocol has a zero-dependency Node equivalent (scripts/fingerprint.mjs) for shells without curl/cmp/tr/perl (e.g. Windows PowerShell). Agent-agnostic - works in any Agent Skills-compatible runtime.
 metadata:
-  version: "0.1.71"
+  version: "0.1.73"
 ---
 
 # Website Rebuild（获奖创意站 1:1 复刻）
 
 把一个获奖创意网站（WebGL / 滚动叙事 / 作品集站）以**取证式方法**复刻为可独立运行、可验证还原度的工程。不是"看着像"的仿制——是以源站 bundle 为唯一规格书、以量化验收门收口的逐行为移植。
 
-本方法论提炼自六个连续实践项目（工期从 6.5 周收敛到 1 天），并经 43 站边界探测实测校准适用范围。
+本方法论提炼自六个连续实践项目（工期从 6.5 周收敛到 1 天），后经 **19 个完整复刻**持续回填、43 站边界探测实测校准适用范围（清单见仓库 README「已验证过的网站」）。
 
 ## 使用前提与授权 ⛔ 必读
 
@@ -151,7 +151,7 @@ Step 0 → M(n) 全程不装任何东西；**复刻项目要到 M(n+1) 才获得
 | `scripts/verify-refs-served.mjs` | **引用可达门**:把产出字节里的每一条资源引用**逐条问服务器**(一次 GET,不开浏览器)。⭐ 关键在于**问服务器,而不是再实现一遍它的解析**——一个自己走镜像的离线检查就是第二份 url→path 实现,而第二份实现就是一次等着被报成窟窿的分歧(实测它把 28 张在场的图报成缺失,只因不知道服务器的查询变体回退)。⚠ 它看不见运行时拼出来的 URL,那是资源级探针的活(§1.6 class 4) | M2+ 起每 commit |
 | `scripts/verify-offline.mjs` | **零外联门的静态一半**：枚举产出字节里每个外部绝对 URL 并逐条裁决（§1.6 的四类断言面里，资源级探针看不见的那三类） | M0.5 起每 commit |
 | `scripts/beautify-bundle.mjs` | js-beautify@1.15.1 钉死展开 bundle 到 `_pretty/` 并生成再生成说明。⛔ **撞名响亮告警 + 单射断言**——两个不同目录下的 `main.built.js` 曾静默互相覆盖，而 `_pretty/` 是全项目唯一溯源坐标系，覆盖之后每个行号都指向错误的文件 | M1 |
-| `scripts/module-map.mjs` | **模块化 bundle 的分层表**：spawn 钉死的 `acorn --tokenize`（零依赖），逐模块给出行区间、`requires`、导出名。**认两种容器**：webpack 对象容器与 **Turbopack 扁平列表**（后者把导出名直接写在容器里，M(n+1) 命名因此几乎全是 tier-1 证据）。⛔ 认不出容器即 FATAL；⛔⛔ **认出来的还必须解释得了这个文件**——行覆盖率 <50%、或 require 形状的调用有过半**落在所有已识别模块之外**，一律 FATAL：读错容器时工具会「成功」（实测对一个真有 20 个工厂的 chunk 报了 2 个模块）。⚠ 早前那条判据是「依赖边不足 require 调用数的 25%」，**分子分母不同尺**（宽松模式把 `h("words")` 也数成 require），挡住过一次完全正确的读取（79 对 18，23%）——**挡住正确读取的守卫会训练人绕过守卫**（`verification-gates.md` §0.24.2）。⛔ **Turbopack 容器有 PROLOGUE**（开头一串没有工厂的裸依赖 id）与**一体多名**（多个 id 共用一个工厂），两者漏掉都不在加载期报错、而在求值期抛 `the module factory is not available`，静态门全绿；map 里分别记为 `chunkDeps` 与 `aliases`。⛔ **容器可以重复定义同一个 id**——实测 597 条属性只有 569 个不同模块，且其中 4 条被遮蔽的定义**实现不同**；语义是**对象字面量后者胜出**，工具必须去重并报告，否则每份文档记的模块数都是错的，而下游拿到哪一份取决于迭代顺序。⛔ **fork 补**：一条 require 的字面量要过**两道判据而不是一道**——形状决定它是不是 id（内容哈希或小序号），是否在本容器里决定它进哪本账。只用「在不在容器里」过滤，会把真实的**跨 chunk 依赖静默丢掉**（对一个自己缩短过的输入做断言）；完全不过滤，则 `n(new Error("http status code: " + s))` 里那句话会被记成依赖，`closure.mjs` 随后红在一个不存在的 id 上。现在 `requires` 只收本容器内的（闭包门断言的就是这一集），容器外但形状像 id 的记进 `crossChunkRequires` 并**打印出来**——等有了全站合并 map，这一集自然清空 | M1（模块化打包产物） |
+| `scripts/module-map.mjs` | **模块化 bundle 的分层表**：spawn 钉死的 `acorn --tokenize`（零依赖），逐模块给出行区间、`requires`、导出名。**认两种容器**：webpack 对象容器与 **Turbopack 扁平列表**（后者把导出名直接写在容器里，M(n+1) 命名因此几乎全是 tier-1 证据）。⛔ 认不出容器即 FATAL；⛔⛔ **认出来的还必须解释得了这个文件**——行覆盖率 <50%、或 require 形状的调用有过半**落在所有已识别模块之外**，一律 FATAL：读错容器时工具会「成功」（实测对一个真有 20 个工厂的 chunk 报了 2 个模块）。⚠ 早前那条判据是「依赖边不足 require 调用数的 25%」，**分子分母不同尺**（宽松模式把 `h("words")` 也数成 require），挡住过一次完全正确的读取（79 对 18，23%）——**挡住正确读取的守卫会训练人绕过守卫**（`verification-gates.md` §0.24.2）。⛔ **Turbopack 容器有 PROLOGUE**（开头一串没有工厂的裸依赖 id）与**一体多名**（多个 id 共用一个工厂），两者漏掉都不在加载期报错、而在求值期抛 `the module factory is not available`，静态门全绿；map 里分别记为 `chunkDeps` 与 `aliases`。⛔ **容器可以重复定义同一个 id**——实测 597 条属性只有 569 个不同模块，且其中 4 条被遮蔽的定义**实现不同**；语义是**对象字面量后者胜出**，工具必须去重并报告，否则每份文档记的模块数都是错的，而下游拿到哪一份取决于迭代顺序。⛔ **fork 补**：一条 require 的字面量要过**两道判据而不是一道**——形状决定它是不是 id（内容哈希或小序号），是否在本容器里决定它进哪本账。只用「在不在容器里」过滤，会把真实的**跨 chunk 依赖静默丢掉**（对一个自己缩短过的输入做断言）；完全不过滤，则 `n(new Error("http status code: " + s))` 里那句话会被记成依赖，`closure.mjs` 随后红在一个不存在的 id 上。现在 `requires` 只收本容器内的（闭包门断言的就是这一集），容器外但形状像 id 的记进 `externalRequires` 并**打印出来**（形状判据含**三种**拼法：内容哈希、小序号，以及**字符串键容器里的 `./…` 路径 id**——后者只在容器自身按路径拼 id 时才认，数字容器里的 `./assets/x.svg` 是资源 URL 不是依赖）——等有了全站合并 map，这一集自然清空 | M1（模块化打包产物） |
 | `scripts/closure.mjs` | 从种子模块算**传递依赖闭包**，是竖切边界的唯一依据。⛔ **未知种子 ID 一律 FATAL** 并给出 did-you-mean——静默丢弃会产出一个“小一号但看似合理”的切片，失败推迟到运行时 | M2+（模块化打包产物） |
 | `scripts/verify-tween.mjs` | **竖切的数值门**：同一关键帧规格喂两侧、逐点比补间值与缓动曲线。比像素门**早得多**判红，且失败会带上产生它的输入。⛔ 用例的字段名与值域必须从源码抄——第一版凭直觉写，六个用例全落在同一条曲线上、全绿、零区分力 | M2+（有补间/时间轴引擎时） |
 | `scripts/harvest-cases.mjs` | **从源站活引擎采用例**：驱动源站到 N 个状态，逐状态记录它自己对象里的数值（站点侧写在 `harvest.config.mjs`，样例见 `harvest.config.example.mjs`）。手写用例编码的是**你相信引擎的参数是什么**——六个手写用例曾全落在同一条曲线上、全绿。⛔ 只产出 A 侧，必须配 `verify-harvest.mjs`。⚠ 采**解析完的数值**而非源文本 | M2+（源站引擎可达时） |

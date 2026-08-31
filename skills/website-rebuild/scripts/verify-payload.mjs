@@ -45,6 +45,13 @@ const A = (flag("a", "") || "").replace(/\/+$/, "");
 const B = (flag("b", "") || "").replace(/\/+$/, "");
 const ROUTES = flag("routes", "/").split(",").filter(Boolean);
 const DUMP = flag("dump", null);
+// --allow-absent: a hand-built SSG can carry NO data island at all — content
+// lives in the markup, which the shell byte gate already covers. Opt-in, per
+// project, AFTER verifying the absence (grep for window.__* / self.__* /
+// json islands): agreement-on-absence passes, but one side having a payload
+// the other lacks still fails. Without the flag, absence stays loud — a
+// payload shape this gate doesn't recognize yet must not pass as "none".
+const ALLOW_ABSENT = args.includes("--allow-absent");
 
 if (!A) {
   console.error("usage: verify-payload.mjs --a <base> [--b <base>] --routes /,/x [--dump dir]");
@@ -217,7 +224,24 @@ for (const route of ROUTES) {
     continue;
   }
   const foundA = sideA.found;
-  if (!foundA) { fail(`${route} — no known SSG payload shape found`); continue; }
+  if (!foundA) {
+    if (!ALLOW_ABSENT) { fail(`${route} — no known SSG payload shape found`); continue; }
+    // ⛔ ABSENCE MUST AGREE ACROSS SIDES, and B is asked THE SAME WAY A was —
+    // through payloadOf, against B's own document. A bare `extract(htmlB)` here
+    // sees only inline shapes, so a side that EXTERNALIZES its payload reads as
+    // "no island" and the two sides are declared in agreement while one of them
+    // is serving a payload file the other has never heard of. That is the
+    // wrong-shape match this file already met once, rebuilt inside the excuse.
+    if (B) {
+      const resB0 = await tryGet(B, route);
+      if (resB0.error) { fail(`${route} — side B: ${resB0.error}`); continue; }
+      const sideB0 = await payloadOf(B, resB0.text);
+      if (sideB0.error) { fail(`${route} — side B: ${sideB0.error}\n         B's document names ${sideB0.at}, so B has to serve it.`); continue; }
+      if (sideB0.found) { fail(`${route} — side A has no payload but side B carries a ${sideB0.found.shape} island`); continue; }
+    }
+    console.log(`--- ${route}  [no payload island — declared absent, sides agree] ---`);
+    continue;
+  }
 
   let dataA;
   try {

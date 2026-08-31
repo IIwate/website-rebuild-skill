@@ -121,11 +121,28 @@ for (let i = 0; i + 6 < T.length; i++) {
 // when it must, so `"02b5c2be…":` and `a738138e…:` and `14:` are the same
 // thing. Accepting only the quoted form found 376 of 597 modules and the miss
 // was invisible — every id it dropped simply never appeared downstream.
+// ⚠ The factory is not always the `function` keyword. Webpack emits ARROW
+// factories under newer targets: `"./src/x.js":(t,e,s)=>{…}` — and a
+// single-param arrow can drop the parens entirely (`e=>{…}`). Accepting only
+// `function` found 4 of 12 modules here, and the plausibility gate below
+// (436/436 requires unexplained) is what surfaced it. An arrow candidate is
+// accepted only when the `(…)` closes straight into `=>`, so a parenthesized
+// value expression cannot pose as a factory.
 const props = [];
 for (let i = 0; i + 2 < T.length; i++) {
   if (!KEY.has(lab(i)) || lab(i + 1) !== ":") continue;
-  if (lab(i + 2) !== "function") continue;
-  props.push(i);
+  const l2 = lab(i + 2);
+  if (l2 === "function") { props.push(i); continue; }
+  if (l2 === "name" && lab(i + 3) === "=>") { props.push(i); continue; }
+  if (l2 === "(") {
+    let d = 0, k = i + 2;
+    for (; k < T.length; k++) {
+      const l = lab(k);
+      if (l === "(") d++;
+      else if (l === ")") { d--; if (d === 0) break; }
+    }
+    if (lab(k + 1) === "=>") props.push(i);
+  }
 }
 
 // Group by enclosing brace depth so a stray `{ x: function(){} }` elsewhere in
@@ -326,7 +343,7 @@ const PATH_KEYED = [...KNOWN].some((id) => PATH_ID_SHAPE.test(id));
  *
  * ⭐ So: shape decides whether it is an id at all, membership decides which
  * ledger it lands in. `requires` stays closed over the map, which is what
- * closure.mjs asserts on; `crossChunkRequires` records the rest so the miss is
+ * closure.mjs asserts on; `externalRequires` records the rest so the miss is
  * REPORTED rather than either dropped or fatal. When a site-wide map exists
  * (cold-audit-modules.mjs reads `MAP.chunks`), those ids are simply in KNOWN and
  * this set empties on its own.
@@ -339,10 +356,10 @@ const PATH_KEYED = [...KNOWN].some((id) => PATH_ID_SHAPE.test(id));
  * @param keyKind the literal's token type ("string" | "num") — the container's
  *   own spelling of ids, not a guess from the value.
  */
-const addRequire = (v, keyKind, requires, crossChunk) => {
+const addRequire = (v, keyKind, requires, externalRequires) => {
   if (KNOWN.has(v)) requires.add(v);
-  else if (ID_SHAPE.test(v)) crossChunk.add(v);
-  else if (keyKind === "string" && PATH_KEYED && PATH_ID_SHAPE.test(v)) crossChunk.add(v);
+  else if (ID_SHAPE.test(v)) externalRequires.add(v);
+  else if (keyKind === "string" && PATH_KEYED && PATH_ID_SHAPE.test(v)) externalRequires.add(v);
 };
 
 const mods = [];
@@ -394,7 +411,9 @@ for (const { id, fi, aliases = [] } of entries) {
   const reqName = isTurbo ? null : (params[2] ?? null);
   const ctxName = isTurbo ? (params[0] ?? null) : null;
   const requires = new Set();
-  const crossChunk = new Set();
+  // Edges that LEAVE this container — see addRequire for the two judgements
+  // that decide what lands here rather than in `requires`.
+  const externalRequires = new Set();
   const exportNames = new Set();
   let exportsAssigned = 0;
   for (let k = b; k < end; k++) {
@@ -403,7 +422,7 @@ for (const { id, fi, aliases = [] } of entries) {
       const method = val(k + 2);
       if ((method === "i" || method === "r") && lab(k + 3) === "(" && lab(k + 4) === "num") {
         // Turbopack spells ids as ordinals; `lab(k + 4)` is "num" by the guard.
-        addRequire(String(val(k + 4)), "num", requires, crossChunk);
+        addRequire(String(val(k + 4)), "num", requires, externalRequires);
         continue;
       }
       if (method === "s" && lab(k + 3) === "(") {
@@ -437,7 +456,7 @@ for (const { id, fi, aliases = [] } of entries) {
         if (l === "(" || l === "[" || l === "{" || l === "${") d++;
         else if (l === ")" || l === "]" || l === "}") { d--; if (d === 0) { k = j; break; } }
         else if (d >= 1 && (l === "string" || l === "num")) {
-          addRequire(String(val(j)), l, requires, crossChunk);
+          addRequire(String(val(j)), l, requires, externalRequires);
         }
       }
       continue;
@@ -481,7 +500,7 @@ for (const { id, fi, aliases = [] } of entries) {
   // can hang them on a shadowed body — which makes slice-modules emit an alias
   // pointing at the wrong factory. Same failure text as the bug aliases exist to
   // fix ("the module factory is not available"), one level harder to trace.
-  mods.push({ id, aliases, startLine, endLine, startChar, endChar, lines: endLine - startLine + 1, requires: [...requires], crossChunkRequires: [...crossChunk], exportsAssigned, exportNames: [...exportNames].slice(0, 12) });
+  mods.push({ id, aliases, startLine, endLine, startChar, endChar, lines: endLine - startLine + 1, requires: [...requires], externalRequires: [...externalRequires], exportsAssigned, exportNames: [...exportNames].slice(0, 12) });
 }
 
 // ⛔ A container can define the same id more than once, and this one does: 597
@@ -556,13 +575,15 @@ if (containerKind === "TurbopackChunk" && turboDeps.length) {
 // JSON — and a dependency nobody prints is a dependency nobody ports.
 {
   const outbound = new Set();
-  for (const m of mods) for (const id of m.crossChunkRequires || []) outbound.add(id);
+  for (const m of mods) for (const id of m.externalRequires || []) outbound.add(id);
   if (outbound.size) {
     const shown = [...outbound].slice(0, 12).join(", ");
     console.log(`  ${outbound.size} require target(s) are NOT defined in this file — they live in other chunks:`);
     console.log(`    ${shown}${outbound.size > 12 ? ` … +${outbound.size - 12} more` : ""}`);
-    console.log(`  ⚠ recorded per module as \`crossChunkRequires\`, kept OUT of \`requires\` so the closure`);
-    console.log(`    stays closed. Porting any of them means mapping their chunk too.`);
+    console.log(`  ⚠ recorded per module as \`externalRequires\`, kept OUT of \`requires\` so the closure`);
+    console.log(`    stays closed. THE CHUNK DOES NOT RUN ALONE: a port must keep the chunks that`);
+    console.log(`    provide these (or their runtime) — see porting-discipline.md §2.6 on chunk-form`);
+    console.log(`    delivery, which is the shape to reach for instead of a standalone runtime.`);
   }
 }
 console.log("");

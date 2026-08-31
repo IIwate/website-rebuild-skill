@@ -52,7 +52,9 @@ const SRC = SRCTEXT.split("\n");
 
 const byId = new Map(MAP.modules.map((m) => [String(m.id), m]));
 const ids = CLO.modules.map(String);
-const files = (await readdir(MODDIR)).filter((f) => f.endsWith(".js"));
+// Recursive: a named tree carries directories (`vendor/swup/…/index.js`), and
+// a flat readdir silently reports "0 files" against a full closure.
+const files = (await readdir(MODDIR, { recursive: true })).filter((f) => f.endsWith(".js"));
 
 let fail = 0;
 console.log(`=== verify-module-map ===`);

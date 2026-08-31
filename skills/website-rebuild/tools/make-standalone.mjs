@@ -15,6 +15,7 @@
  *   node tools/make-standalone.mjs --shell site/airpods-pro/index.html --out src
  */
 import { readFile, writeFile, mkdir, readdir, cp, stat } from "node:fs/promises";
+import * as fssync from "node:fs";
 import path from "node:path";
 import { localRelPath, loadPolicy } from "../scripts/lib/urlpath.mjs";
 
@@ -47,6 +48,21 @@ const EXT_HOSTS_FLAG = flag("ext-hosts", "").split(",").map((x) => x.trim()).fil
 const ORIGIN_HOST_FLAG = flag("origin-host", "");
 // The deliverable's own name: the project directory unless told otherwise.
 const NAME = flag("name", path.basename(process.cwd()).replace(/-rebuild$/, "") + "-src");
+// --allow FILE — the registered-deviation list the mirror gates consume
+// (mirror/external.txt): a URL the ORIGIN ITSELF answers 404 is a recorded
+// deviation, not a hole for this tool to invent a file for. Exact pathname
+// match only, same contract as verify-refs-served.
+const ALLOW = new Set();
+{
+  const f = flag("allow", null);
+  if (f && fssync.existsSync(f)) {
+    for (const line of fssync.readFileSync(f, "utf8").split("\n")) {
+      const s = line.trim();
+      if (!s || s.startsWith("#")) continue;
+      try { ALLOW.add(new URL(s).pathname); } catch { if (s.startsWith("/")) ALLOW.add(s); }
+    }
+  }
+}
 const PUBLIC = path.join(OUT, "public");
 
 async function shellList(spec) {
@@ -147,6 +163,12 @@ for (const ref of refs) {
   // on disk that host's files live under `assets/<host>/…`. The two spellings
   // are the same asset, and only the server knew it — which is why 92 images
   // that are present were reported as holes in the deliverable.
+  // ⚠ A bare `/ext/<host>` with NO path is a LOCALIZED CONNECTION HINT — a
+  // preconnect/dns-prefetch whose href was a host root. A connection is not a
+  // file; reporting it as a hole tells the operator to mirror nothing. (The
+  // host's TLD also reads as a file extension to the page/asset classifier —
+  // `.com` passes /\.[a-z0-9]{2,5}$/ — so it lands on the ASSET side there.)
+  if (/^ext\/[^/]+\/?$/.test(bare)) continue;
   const extForm = /^ext\/([^/]+)\/(.*)$/.exec(bare);
   // ⚠ A STUBBED host's reference is answered by the SERVER (empty body), not by
   // a file — that is the entire point of --stub-ext-hosts. Reporting it as a
@@ -171,7 +193,7 @@ for (const ref of refs) {
     const s2 = await stat(c).catch(() => null);
     if (s2 && s2.isFile()) { from = c; st = s2; break; }
   }
-  if (!from) { missing.push(ref); continue; }
+  if (!from) { if (!ALLOW.has(ref.split("?")[0])) missing.push(ref); continue; }
 }
 
 // ⭐ When --shell named a DIRECTORY, that directory is the port's build output:

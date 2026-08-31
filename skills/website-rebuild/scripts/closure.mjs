@@ -69,7 +69,7 @@ console.log(`  ok   closed — every require resolves inside the set`);
 
 // ⭐ CLOSED IS NOT THE SAME AS COMPLETE. `requires` is closed over this map by
 // construction (module-map.mjs files an id it cannot resolve under
-// `crossChunkRequires` instead), so the assertion above can only ever speak
+// `externalRequires` instead), so the assertion above can only ever speak
 // about edges that stay inside the file. The edges that LEAVE it are the ones a
 // port trips over — the runtime throws "module N … the module factory is not
 // available" at evaluation time, from a slice that checked byte-identical.
@@ -80,7 +80,7 @@ console.log(`  ok   closed — every require resolves inside the set`);
 {
   const outbound = new Map();
   for (const id of mods) {
-    for (const t of byId.get(id).crossChunkRequires || []) {
+    for (const t of byId.get(id).externalRequires || []) {
       if (!outbound.has(t)) outbound.set(t, []);
       outbound.get(t).push(id);
     }

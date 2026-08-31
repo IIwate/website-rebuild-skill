@@ -12,7 +12,9 @@ parser（`@babel/parser` / `@babel/traverse`）。这里放的就是那个阶段
 
 | 工具 | 用途 |
 |---|---|
-| `name-modules.mjs` | 按 0–4 级证据给模块提名，并记下依据的那句话；无证据保留哈希 id |
+| `name-modules.mjs` | 按 0–4 级证据给模块提名，并记下依据的那句话；无证据保留哈希 id——**错名比哈希更糟，因为哈希会让人去看** |
+| `modules-to-src.mjs` | 把一份模块容器端口摊成可读树：每个模块一个文件（名字可带子目录）、带溯源头注（源 bundle 行区间 + 命名证据层级）、包装器形参作用域安全地重命名为 `(module, exports, require)`（webpack）或 `(ctx)`（Turbopack）。⛔ **不把 require 转成静态 import**——require 惰性且记忆化，ESM import 提升求值，转换会重排每个模块的顶层副作用。产出 `registry.js` + `runtime.js`（独立运行时）+ `index.js`；⚠ 跨 chunk require 的场景不用独立运行时，改用 **chunk 形交付**（见 `references/porting-discipline.md` §2.6） | 
+| `make-standalone.mjs` | 给 src/ 配齐离开仓库所需的一切：按账本把产出引用的资产复制进 `src/public/`（⭐ 到这一步"不复制"纪律**反转**——交付物的要求恰恰是"拷到哪都能跑"）、生成 `package.json`（build/serve 脚本烤入 ext/stub/origin 主机参数）、`--replaced` 指定被端口替换的源 bundle **不随行**（被替换物躺在替换者旁边，"跑的是哪个"就要靠实验回答）、`--allow` 消费 `external.txt` 豁免源站自身 404、`--own` 声明端口自有构建产物。裸 `/ext/<host>`（本地化的 preconnect）不算资产缺口 |
 | `demangle-modules.mjs` | 用 Babel Binding 做作用域安全的重命名；只改声明、引用和赋值的源码区间，不负责拆分模块或生成模块地图。输入/输出边界见 `references/readable-source.md` §3.2.2 |
 
 ⚠ 复制到复刻项目时放在项目的 `tools/` 下，与项目 `package.json` 的 devDependencies 一起走。

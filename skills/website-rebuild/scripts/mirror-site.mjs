@@ -352,6 +352,22 @@ for (let round = 1; round <= ROUNDS && assetQueue.size; round++) {
   await Promise.all(workers);
 }
 
+// ⚠ A carried-over FAILED row records "the origin refused this reference". If
+// no reference produced its URL this run — every attempted URL lands in
+// `fetched`, success or failure — the row memorializes a reference that no
+// longer exists (usually an extractor artifact a fix just removed), and
+// carrying it forward turns one buggy crawl into a permanent red mark.
+// Measured: 98 phantom `x.webp);--aspect` rows outliving the extractor fix
+// through two full re-crawls. Rows with a file on disk are never pruned here,
+// and a --seeds gap-fill never prunes at all: it visits only its seed list, so
+// "nothing referenced this URL" is not a fact a seeds run can establish.
+if (!SEEDS_FILE) {
+  let pruned = 0;
+  for (const [u, row] of Object.entries(manifest)) {
+    if (row && row.path === null && !fetched.has(u)) { delete manifest[u]; pruned++; }
+  }
+  if (pruned) console.log(`[ledger] pruned ${pruned} failed row(s) whose URL nothing referenced this run`);
+}
 await writeFile(
   join(OUT, 'mirror-manifest.json'),
   JSON.stringify({ origin: ORIGIN, mirroredAt: new Date().toISOString(), files: manifest }, null, 2)

@@ -343,7 +343,31 @@ export function createRefExtractor({ origin, originHost, assetHosts, onOffHost }
   const scan = (text, baseUrl, urls) => {
     // 1. absolute URLs
     for (const m of text.matchAll(/https?:\/\/[a-z0-9.-]+\/[^\s"'`\\<>{}|^\][]+/gi)) {
-      addIfAsset(decodeEntities(m[0]).replace(/[),.;:!]+$/, ""), urls);
+      // ⚠ Parens are handled by BALANCE, not by presence. A URL really can end
+      // in ")": Storyblok's `…filters:format(avif):quality(70)`. Blind trailing
+      // strips manufactured 1,593 phantom `…quality(70` URLs (v0.1.68's paren
+      // lesson, third location). And the match can OVERRUN a closing paren the
+      // URL never opened: inline `style="…url(https://…x.webp);--aspect:…"`
+      // yielded 98 phantom `x.webp);--aspect` URLs (fourth location) — the
+      // junk sits mid-string, so no trailing trim can reach it. One rule covers
+      // both: truncate at the first paren that closes more than the URL ever
+      // opened, left to right. The other trailing marks (, . ; : !) stay
+      // unconditional: sentence punctuation around a URL in prose, never path.
+      // ⚠ decodeEntities can INTRODUCE the very boundary chars the raw match
+      // excluded: `&quot;image&quot;:&quot;https://…x.webp&quot;,…` matches
+      // straight through, and only the decode turns &quot; back into `"`.
+      // Measured here: 98 phantom `x.webp","description":"…` URLs (fifth
+      // trailing-junk shape). The decoded string must re-obey the same
+      // character-class boundary the raw regex enforced.
+      let ref = decodeEntities(m[0]).split(/["'`\\<>{}|^\][\s]/)[0];
+      let depth = 0;
+      for (let i = 0; i < ref.length; i++) {
+        const c = ref[i];
+        if (c === "(") depth++;
+        else if (c === ")" && --depth < 0) { ref = ref.slice(0, i); break; }
+      }
+      while (",.;:!".includes(ref[ref.length - 1])) ref = ref.slice(0, -1);
+      addIfAsset(ref, urls);
     }
     // 2. protocol-relative (//host/path)
     for (const m of text.matchAll(/["'(]\/\/([a-z0-9.-]+\/[^\s"')<>]+)/gi)) {

@@ -221,6 +221,39 @@ export function withQuerySuffix(p, suffix) {
   return p + suffix;
 }
 
+// Extensions that make a NON-FINAL segment a file rather than a directory.
+// ⚠ A known list, not "any dotted segment": a version directory like
+// `/decoders/1.5.5/…` must NOT flatten, and a dot-anywhere rule would have
+// silently remapped every existing mirror that has one.
+const PATH_TAIL_EXT =
+  /^(.*?\.(?:jpe?g|png|gif|webp|avif|svg|ico|mp4|webm|mov|mp3|wav|pdf|css|js|mjs|json|woff2?|ttf|otf|glb|gltf|ktx2|wasm|zip))(\/.+)$/i;
+
+/**
+ * ⛔ A URL PATH CAN CONTINUE PAST A FILE. Storyblok's image service appends
+ * transforms UNDER the original's path: `…/team-hero.jpg` is the original and
+ * `…/team-hero.jpg/m/110x110/filters:format(avif):quality(70)` is a variant.
+ * A naive mapping needs `team-hero.jpg` to be a file and a directory at once,
+ * and the crawl fails both ways — ENOTDIR creating the variant after the
+ * original, EISDIR writing the original after a variant. Measured: every
+ * storyblok asset with transforms, ~1,700 entries.
+ *
+ * ⭐ Flatten the tail into the filename: everything after an extension-bearing
+ * non-final segment joins it with the reserved "@@" delimiter (the same
+ * convention query strings use). Injective — "@@" is reserved.
+ *
+ * ⛔ ONE FUNCTION, because the WRITER and the SERVER must not each carry their
+ * own copy of this rule. localRelPath() writes the flattened name; a request
+ * arrives in the SLASH spelling and serveCandidates() has to resolve it through
+ * the identical rule or the server 404s on a file the crawler wrote. Two
+ * regexes that start out identical are two regexes that drift (§2.1.1).
+ *
+ * Idempotent on already-flattened input: "@@" contains no "/", so a name that
+ * has been through here once has no tail left to match.
+ */
+export function flattenPathTail(pathname) {
+  return pathname.replace(PATH_TAIL_EXT, (m0, file, tail) => file + "@@" + tail.slice(1).replace(/\//g, "@@"));
+}
+
 /**
  * Mirror-relative path for an absolute URL. Origin pages land at
  * `<path>/index.html`, origin assets at `<path>`, every other host under
@@ -241,6 +274,19 @@ export function localRelPath(absUrl, originHost, policy = DEFAULT_POLICY) {
   // server and gate on the same answer (§2.1.1) — normalising downstream is how
   // they drifted in the first place.
   let clean = decodeURIComponent(u.pathname).replace(/\/{2,}/g, "/");
+  // A path that continues PAST a file is flattened into the filename — see
+  // flattenPathTail. The server resolves requests through the same function.
+  const flattened = flattenPathTail(clean);
+  // ⛔ A FLATTENED NAME IS A FILE, and the page/asset test below cannot see
+  // that: the flattened tail rarely ENDS in an extension
+  // (`…jpg@@m@@110x110@@filters:format(avif):quality(70)`), so the extension
+  // test calls it a page and appends "/index.html" — while serveCandidates
+  // offers the flattened name WITHOUT it. Writer and server would disagree on
+  // every transformed asset, which is the exact drift flattening exists to
+  // remove; the flatten only fires on a known asset extension, so having
+  // fired IS the evidence that this names a file.
+  const isFlattenedFile = flattened !== clean;
+  clean = flattened;
   if (u.hostname !== originHost) {
     if (clean.endsWith("/")) clean += "index";
     return "assets/" + u.hostname + withQuerySuffix(clean, suffix);
@@ -248,6 +294,7 @@ export function localRelPath(absUrl, originHost, policy = DEFAULT_POLICY) {
   if (clean === "/" || clean === "") return withQuerySuffix("index.html", suffix);
   let p = clean.replace(/^\/+/, "");
   if (p.endsWith("/")) p = p.slice(0, -1);
+  if (isFlattenedFile) return withQuerySuffix(p, suffix);
   // Extension-less origin URLs are pages; extensioned ones are assets.
   // ⚠ {1,12}, not {1,8}: `.webmanifest` is ELEVEN characters and the shorter cap
   // classified it as a page, so the crawler wrote the file as a DIRECTORY with an
@@ -268,6 +315,10 @@ export function localRelPath(absUrl, originHost, policy = DEFAULT_POLICY) {
 export function serveCandidates(pathname, search, policy = DEFAULT_POLICY) {
   const suffix = querySuffix(search, policy);
   const out = [];
+  // The SAME flatten the writer used — one function, not a second copy of the
+  // rule (flattenPathTail states why).
+  const flat = flattenPathTail(pathname);
+  if (flat !== pathname) out.push(flat);
   if (suffix) {
     // ⛔ For a DIRECTORY-style path the crawler and the server used to disagree
     // about the ORDER of two operations — attach the query suffix, and append

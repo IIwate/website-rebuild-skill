@@ -168,6 +168,26 @@ rogier 在实现里嵌入 68 处 mode 字符串，把"当前遵循哪条源码�
 
 探针脚本持有同一组 `source-<符号>-<行为>` 常量逐一比对——"实现遵循了哪条源码语义"从口头承诺变成自动回归项【rogier】。移植复杂状态机/渲染链时值得采用：写实现的同时就把语义锚点留给阶段 3 的验证门。
 
+### 2.5 端口怎么被加载，是端口的一部分：三种交付形态【milknetwork】【raycastkbd】【hubtown】
+
+移植完的代码要**替换**源站的某个产物进入页面，而"以什么身份进入"不是包装细节——选错形态的失败发生在运行时深处，栈指向端口、只字不提加载方式。三种形态,判别器是**模块容器与跨 chunk 依赖**：
+
+| 形态 | 适用 | 做法 |
+|---|---|---|
+| **独立运行时** | 端口的 require 闭包**自洽**（closure 门证明,且无跨 chunk id——看 module-map 的 `externalRequires`） | `modules-to-src.mjs` 产出的 `registry.js + runtime.js + index.js`,自带最小 require 实现,整包替换 |
+| **chunk 形交付** | 端口跨 chunk require 别的分包（vendor 拆分是 webpack 常态） | 端口以**真 chunk 身份** push 进页面原有的加载器（`(self.webpackChunk<name>=…\|\|[]).push([["main"], modules, startup])`）;**原 runtime 与 vendor 分包逐字节不动**,跨 chunk require 经真运行时解析。⛔ startup 必须**转写原 chunk 的启动尾**——`t.O(0, [vendor 名列表], () => entry)` 的延迟门保证入口在 vendor 注册完才跑,丢了这道门,app 会在 gsap 存在之前开始动画（与 Turbopack chunk 序言同族的加载序破坏） |
+| **verbatim 分层** | Vite/Turbopack 等 scope-hoisted 无容器产物,没有可整体替换的模块清单 | 不重打包:移植件以原名放 `site/`,其余原件留镜像经 `--fallback-root` 分层伺服 |
+
+**实证（milknetwork）**：main chunk 的 15 个模块闭包门报"自洽",但 module-map 的 `externalRequires` 列出 10 个跨 chunk id（gsap/three/swiper 全在 vendor 分包）——独立运行时形态在 app 第一次动画时必然 `module ./node_modules/gsap/index.js is not in the registry`。按 chunk 形交付后,原 runtime + 三个 vendor 原件不动,像素逐档与带宽全同。**闭包"自洽"只对本 chunk 的注册表成立,它说不出这个 chunk 能不能独自运行**——先看 `externalRequires`,再选形态。
+
+### 2.6 chunk 形交付的入口文件规范
+
+（承 §2.5 第二行。）入口文件唯一的职责是**转写**,不是发明:
+
+1. `import { modules } from "./registry.js"` —— 模块工厂原样,键为原 id;
+2. push 的三元组 `[[chunk 名], modules, startup]` 里,chunk 名与 startup **逐 token 对照原 bundle 尾部抄**（`t.O` 的 vendor 名列表、入口 id、双入口时的求值顺序——milknetwork 的 startup 同时跑 `index.js` 与 `index.scss` 两个入口,漏后者会掉 CSS 注册）;
+3. 文件头注声明"startup TRANSCRIBED from 原 bundle 尾部"并贴原文——这是 §2.1 行号区间映射在入口文件上的形态。
+
 ## 3. 数据资产：脚本从 bundle 抽取入库，禁止手抄
 
 - **规则**：数据类资产（i18n、文案、布局表、动画配置、作品清单）写脚本从 bundle 抽成 JSON 入库；**生成物不手改**，要改就改脚本重跑。

@@ -13,6 +13,7 @@
  * cannot see a URL assembled at runtime; that is the resource-level probe's job
  * (verification-gates.md §1.6 class 4).
  */
+import { existsSync, readFileSync } from "node:fs";
 import { readdir, readFile } from "node:fs/promises";
 import path from "node:path";
 import { joinFlightPushes, decodeEntities, decodeUrlEscapes } from "./lib/extract-refs.mjs";
@@ -21,6 +22,22 @@ const args = process.argv.slice(2);
 const flag = (n, d) => { const i = args.indexOf("--" + n); return i >= 0 ? args[i + 1] : d; };
 const BASE = flag("base", "http://127.0.0.1:6376").replace(/\/$/, "");
 const DIR = path.resolve(flag("dir", "site"));
+
+// --allow FILE — the SAME registered-deviation list verify-mirror consumes
+// (mirror/external.txt): a URL the ORIGIN ITSELF cannot answer (its own 404)
+// is a deviation to record, not a hole this port must invent a file for.
+// Matching is exact, on the excused URL's pathname; no prefix wildcards here.
+const ALLOW = new Set();
+{
+  const f = flag("allow", null);
+  if (f && existsSync(f)) {
+    for (const line of readFileSync(f, "utf8").split("\n")) {
+      const s = line.trim();
+      if (!s || s.startsWith("#")) continue;
+      try { ALLOW.add(new URL(s).pathname); } catch { if (s.startsWith("/")) ALLOW.add(s); }
+    }
+  }
+}
 
 const files = [];
 await (async function walk(d) {
@@ -71,7 +88,7 @@ await Promise.all(Array.from({ length: LANES }, async () => {
     let code = 0;
     try { code = (await fetch(BASE + ref, { method: "GET", headers: { range: "bytes=0-0" } })).status; } catch { code = -1; }
     n++;
-    if (code >= 400 || code < 0) bad.push(`${code} ${ref}`);
+    if ((code >= 400 || code < 0) && !ALLOW.has(ref.split("?")[0])) bad.push(`${code} ${ref}`);
   }
 }));
 
