@@ -28,7 +28,7 @@ const args = process.argv.slice(2);
 const flag = (n, d) => { const i = args.indexOf("--" + n); return i >= 0 && args[i + 1] !== undefined ? args[i + 1] : d; };
 const DIR = path.resolve(flag("dir", "mirror/_nuxt"));
 const OUT = path.resolve(flag("out", "docs/bundle-census.json"));
-const KNOWN = new Set(["dir", "out"]);
+const KNOWN = new Set(["dir", "out", "md"]);
 for (const a of args) if (a.startsWith("--") && !KNOWN.has(a.slice(2))) {
   console.error(`FATAL — unknown flag ${a}. Known: ${[...KNOWN].map((f) => "--" + f).join(" ")}`);
   process.exit(2);
@@ -79,3 +79,28 @@ for (const c of rows.slice(0, 12)) {
 }
 if (rows.length > 12) console.log(`  … ${rows.length - 12} more`);
 console.log(`  -> ${path.relative(process.cwd(), OUT)}`);
+// --md: the chunk graph as a REVERSE-NOTES section — the coordinates page a
+// container-less (Vite) target gets in place of module-map output. Import
+// clauses ride along verbatim: the aliases in them are tier-1 naming
+// evidence (\`ap as Vector2\`), which is exactly what engine-notes cites.
+const MD = flag("md", null);
+if (MD) {
+  const lines = [
+    "# chunk 依赖图(census-bundles 生成 — 无容器产物的坐标页)",
+    "",
+    `来源 \`${path.relative(process.cwd(), DIR)}\`,${chunks.length} 个 chunk。sha256 是逆向笔记引用行号时的坐标钉;import 别名是一级命名证据。`,
+    "",
+    "| chunk | 行数 | 字节 | 导出 | 引入(来源 ← 别名样本) |",
+    "|---|---|---|---|---|",
+  ];
+  for (const c of [...chunks].sort((a, b) => b.lines - a.lines)) {
+    const imps = c.imports.map((i) => {
+      const al = (i.clause || "").match(/\b\w+ as (\w+)/g);
+      return `\`${i.source.replace(/^\.\//, "")}\`${al ? " ← " + al.slice(0, 3).map((x) => x.split(" as ")[1]).join(",") : ""}`;
+    }).join("<br>");
+    lines.push(`| \`${c.file}\` | ${c.lines.toLocaleString()} | ${c.bytes.toLocaleString()} | ${c.exports.length} | ${imps || "—"} |`);
+  }
+  lines.push("", `sha 钉:见 \`${path.relative(process.cwd(), OUT)}\` 逐 chunk 的 sha256 字段。`);
+  await (await import("node:fs/promises")).writeFile(path.resolve(MD), lines.join("\n") + "\n");
+  console.log(`  -> ${MD}`);
+}

@@ -1,0 +1,9 @@
+{
+  "name": "website-rebuild-skill-repo",
+  "private": true,
+  "type": "module",
+  "description": "Repo harness only — the skill itself lives in skills/website-rebuild and stays zero-dependency.",
+  "scripts": {
+    "test": "node selftest/run.mjs"
+  }
+}

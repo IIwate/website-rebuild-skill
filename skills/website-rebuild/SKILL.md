@@ -3,14 +3,14 @@ name: website-rebuild
 description: 1:1 rebuild of award-winning creative websites (WebGL / scroll-animation / portfolio sites). Evidence-driven pipeline - mirror-first forensics, line-number-traceable reverse engineering of minified bundles, verbatim porting, quantitative verification gates. Use when user asks to "复刻网站", "重建网站", "1:1 rebuild", "clone this site", or provides a URL of a creative/award site to reproduce.
 compatibility: Requires Node 22+ (bundled scripts use built-in WebSocket to talk to CDP), npx, and a local Chrome/Chromium for headless comparison. POSIX shell optional - the Step 0 probe protocol has a zero-dependency Node equivalent (scripts/fingerprint.mjs) for shells without curl/cmp/tr/perl (e.g. Windows PowerShell). Agent-agnostic - works in any Agent Skills-compatible runtime.
 metadata:
-  version: "0.2.5"
+  version: "0.2.8"
 ---
 
 # Website Rebuild（获奖创意站 1:1 复刻）
 
 把一个获奖创意网站（WebGL / 滚动叙事 / 作品集站）以**取证式方法**复刻为可独立运行、可验证还原度的工程。不是"看着像"的仿制——是以源站 bundle 为唯一规格书、以量化验收门收口的逐行为移植。
 
-本方法论提炼自六个连续实践项目（工期从 6.5 周收敛到 1 天），后经 **21 个完整复刻**持续回填、43 站边界探测实测校准适用范围。
+本方法论提炼自六个连续实践项目（工期从 6.5 周收敛到 1 天），后经 **21 个完整复刻 + 3 个死站存档抢救**持续回填、43 站边界探测实测校准适用范围。
 
 ## 使用前提与授权 ⛔ 必读
 
