@@ -9,7 +9,7 @@
 
 它不是"做一个看起来很像的页面"。它把源站的实现当作规格书：先把整站抓成只读证据，再从压缩过的代码里逐行还原逻辑，最后用一整套自动验收门证明"复刻侧和源站在做同一件事"——包括逐像素比对。
 
-遵循 [Agent Skills 开放规范](https://agentskills.io/)，为**任何支持 skills 的智能体**设计。Claude Code / Claude Desktop 只是其中之一，任何实现该规范的 agent runtime 都能加载（skill 内的提问方式与脚本调用会按运行时能力自适应，不绑定特定产品）。
+遵循 [Agent Skills 开放规范](https://agentskills.io/)，为**任何支持 skills 的智能体**设计。跨运行时不是口号而是实测：验证清单里既有 Claude Code 跑完的目标，也有 **Codex 全程跑完**的目标（Hashgraph VC，166/166 响应字节一致）——同一份 skill 目录，放进哪个 runtime 都能走完整条管线。
 
 ## 目录
 
@@ -25,6 +25,7 @@
 - [更新记录](#更新记录)
 - [贡献](#贡献)
 - [许可](#许可)
+- [友情链接](#友情链接)
 
 ## 特性
 
@@ -63,7 +64,7 @@ cp -R skills/website-rebuild ~/.claude/skills/website-rebuild
 
 **过程中它会来问你**：复刻范围（整站还是指定页面）、**做到哪一级**（L1 镜像存档 / L2 工程化复刻 / L3 源码化——梯子单调，选低不亏，以后随时续跑升级）、外部依赖怎么处置、以及所有涉及"能不能公开"的判断。这些是**你的决定**，agent 不会替你做。
 
-**大概要多久**：单页创意站约 1–3 天（数十次提交）；多场景、重 WebGL 的站按周计。agent 会在开工前给出难度评级与预估。
+**大概要多久**：工期随版本一路收敛——早期项目按周计，现在中小型站（几十条路由以内）**一次会话内无人值守跑完**判级到源码化全程，重 WebGL / 自研引擎的站约 1–3 天。agent 会在开工前给出难度评级与预估。
 
 ## 它怎么工作
 
@@ -77,13 +78,13 @@ cp -R skills/website-rebuild ~/.claude/skills/website-rebuild
 | **移植** | 逐行还原到你自己的工程里，每处改动都标注源码出处 | 可运行的复刻工程 + 逐条登记的差异表 |
 | **验收** | 自动比对两侧：控制台、网络、DOM、几何、像素 | 量化报告；差异要么被修掉，要么被登记，**不许糊过去** |
 | **收口** | 逐模块清点有无遗漏，并整理版权事实 | 审计记录 + 一份待你裁定的部署评估 |
-| **源码化** | 把逐字移植的产物重写成人能读的工程：拆模块、给变量命名、补注释、复制资产 | 一个**可以复制到任何地方独立运行**的源码工程 |
+| **源码化** | 把逐字移植的产物变成人能读的工程：拆模块、给变量命名、补注释、复制资产（无模块容器的产物走**拼接式分解**——切成语义命名的部件，按序拼回逐字节等于原件） | 一个**可以复制到任何地方独立运行**的源码工程，且每次启动前自动做逐文件字节自证 |
 
-**它盯着的是"对不对"，不是"像不像"**。最近一个自研 WebGL 引擎站的复刻，三条路由做到了**跨侧逐像素一致**（`meanAbsDiff 0.00`），最终产出 389 个源码模块、中位数 18 行。
+**它盯着的是"对不对"，不是"像不像"**。一个自研 WebGL 引擎站的复刻，三条路由做到了**跨侧逐像素一致**（`meanAbsDiff 0.00`），最终产出 389 个源码模块、中位数 18 行；一个 44.9 万行的 Nuxt/Vite 站，拆成 2,043 个语义命名部件后**逐字节重拼一致**。
 
 ⭐ **最后一步是"源码化"，而它必须排在最后。** 重构最怕改完不知道有没有坏；这里在动手之前已经有了一个逐像素精确的裁判，所以每一次拆分、每一次改名都能被证死。**没有裁判的重构是盲改。**
 
-⭐ **skill 的终点也在这里：到"人能读懂的真实"为止。** 拿产出去做你自己的项目（脚手架、fork、二次创作）是**你的工程,不是它的阶段**——它不替你起名字、写故事、换内容,因为那些决定只有你自己能做。但它留了一样别处没有的东西:交付物自带的字节清单与重拼门,让你 fork 之后**精确地知道自己每一步偏离了源站什么**。交接指南见 [`beyond-the-rebuild.md`](skills/website-rebuild/references/beyond-the-rebuild.md)。
+⭐ **skill 的终点也在这里：到"人能读懂的真实"为止。** 拿产出去做你自己的项目（脚手架、fork、二次创作）是**你的工程，不是它的阶段**——它不替你起名字、写故事、换内容，因为那些决定只有你自己能做。但它留了一样别处没有的东西：交付物自带的字节清单与重拼门，让你 fork 之后**精确地知道自己每一步偏离了源站什么**。交接指南见 [`beyond-the-rebuild.md`](skills/website-rebuild/references/beyond-the-rebuild.md)。
 
 ### 全程遵守的六条纪律
 
@@ -110,10 +111,11 @@ cp -R skills/website-rebuild ~/.claude/skills/website-rebuild
 | **静态构建器产物** | Astro / Nuxt SSG / Webflow 导出壳 / Vite / webpack | 单页站、SSG 站、导出壳站各若干 |
 | **各种代码形态** | 压缩、混淆、未混淆都可以 | 全混淆 47k 行；未混淆 974 行；还有完全没有 bundle、逻辑写在模板内联块里的站 |
 | **多语言 / RTL 站** | 双语路由成对对账、`dir=rtl` 布局、PJAX 转场 | 一个 en/ar 122 路由站（首个 RTL 样本） |
+| **音频行为站** | 声音作为验收面：音频引擎池普查（全量 loaded、零音频 404、零外联）、运行时拼 URL 的音频族"池子即账本"采集 | 一个 98 音效池的游戏音频工作室站（主题音乐 + 逐控件交互音效，双编码） |
 | **B 类：平台层剥离** | Shopify（平台 / 应用 / 上游主题 / 站点自研四层分离） | 两个 Shopify 店铺，其一是主题 fork 的定制店 |
 | **B 类：第三方资产桶 / headless CMS** | Storyblok（`/m/` 变换接口）、Strapi 上传桶全量镜像 | 一个 ~1,800 图的 CMS 桶 + 一个 864 MB 的 Strapi 桶 |
 | **B 类：序列化数据块展开** | Nuxt 等 SSG 把数据编码进页面的形态 | 一个 63.5 KB 的数据块（占文档 54%），展开为 566 KB 结构化数据并逐项比对 |
-| **C2 类：声明式组织的现代全栈站** | Next.js App Router（webpack / Turbopack）、Nuxt 3 + Vite、R3F、Theatre.js——RSC flight 与 devalue 载荷、服务端图片端点、会话态预取都有对应处理 | 一个 115 路由全站（115/115 跨侧一致）、一个产品页（4 检查点像素全零）、一个 Theatre.js WebGL 长镜头站 |
+| **C2 类：声明式组织的现代全栈站** | Next.js App Router（webpack / Turbopack）、Nuxt 3 + Vite、R3F、Theatre.js——RSC flight 与 devalue 载荷、服务端图片端点、会话态预取都有对应处理 | 六个 C2 目标：115 路由全站（115/115 跨侧一致）、Three r182 WebGPU/TSL 站、Theatre.js WebGL 长镜头站、产品页（4 检查点像素全零）等 |
 
 ### 做不了的场景
 
@@ -171,8 +173,8 @@ cp -R skills/website-rebuild ~/.claude/skills/website-rebuild
 | Hubtown | [hubtown.co.in](https://hubtown.co.in/) | Unseen Studio 出品的全屏 WebGL 长镜头站（Nuxt 3 + three.js + **Theatre.js**），授权动画状态随包下发的 C2 范本；landing 像素差落在同侧噪声带内 |
 | ON.energy | [www.on.energy](https://www.on.energy/) | 能源公司官网（Nuxt 3 + WebGL GLB 场景 + **Storyblok headless CMS**），首个 CMS 资产桶全量镜像样本（原图 + `/m/` 变换变体约 1,800 图）；55/55 路由零报错，滚动 9 档对拍 8 档精确零、页顶视频钉帧后归零 |
 | Milk Network | [milknetwork.com](https://milknetwork.com/) | 沙特品牌代理官网（webpack + GSAP + swup PJAX + **Strapi CMS 桶**），首个**双语 RTL** 站（en/ar 122 路由成对）；main 的 15 模块全量源码化并以 **chunk 形交付**（原 runtime/vendor 原件不动）；滚动对拍 cross 与 band 逐档数值全同，动画完结态精确零 |
-| Hashgraph VC | [hashgraphvc.com](https://hashgraphvc.com/) | 风投官网（Nuxt 3 + Three r182 **WebGPU/TSL** + Theatre + Sanity CMS），⭐ **首个由非 Claude runtime（Codex）全程执行**的复刻——验证了 Agent Skills 跨运行时可移植性；166/166 响应字节一致、6 路由载荷 10,458 叶一致、多检查点像素差 0，交付以逐文件 sha256 钉死、构建时逐字节复核；也是 **v0.2.0 拼接式分解**的诞生地——44.9 万行 / 33 chunk 切成 **2,043 个语义命名部件,逐字节重拼一致** |
-| Overworld Audio | [overworldaudio.com](https://overworldaudio.com/) | 游戏音频工作室官网（Nuxt 3 + THREE/Theatre + **Howler**），⭐ **声音第一次成为验收面**——入场后 **98/98 音效池全量 loaded、零音频 404**（运行时拼 URL 的音频族对静态提取整类不可见,"池子即账本"采集法的诞生地）;拼接式分解过压缩形态考验（20 chunk/435 部件重拼一致）,交付物 379/379 字节自证;robots 为 Content-Signal 形态,已呈交用户裁决 |
+| Hashgraph VC | [hashgraphvc.com](https://hashgraphvc.com/) | 风投官网（Nuxt 3 + Three r182 **WebGPU/TSL** + Theatre + Sanity CMS），⭐ **首个由非 Claude runtime（Codex）全程执行**的复刻——验证了 Agent Skills 跨运行时可移植性；166/166 响应字节一致、6 路由载荷 10,458 叶一致、多检查点像素差 0，交付以逐文件 sha256 钉死、构建时逐字节复核；也是 **v0.2.0 拼接式分解**的诞生地——44.9 万行 / 33 chunk 切成 **2,043 个语义命名部件，逐字节重拼一致** |
+| Overworld Audio | [overworldaudio.com](https://overworldaudio.com/) | 游戏音频工作室官网（Nuxt 3 + THREE/Theatre + **Howler**），⭐ **声音第一次成为验收面**——入场后 **98/98 音效池全量 loaded、零音频 404**（运行时拼 URL 的音频族对静态提取整类不可见，"池子即账本"采集法的诞生地）；拼接式分解通过压缩形态考验（20 chunk / 435 部件重拼一致），交付物 379/379 字节自证；robots 为 Content-Signal 形态，已呈交用户裁决 |
 
 ### 只做过判级的边界样本
 
@@ -213,7 +215,7 @@ README.md                  # 本文件
 
 ## 路线图
 
-- **v0.2 已落地的第一项**：无容器 scope-hoisted 产物的语义源码层（拼接式分解,v0.2.0 / hashgraphvc）。**剩余**：失效站点的存档抢救;拼接式分解的下一档——部件按源模块**分组成目录**（场景/材质/时间轴）,以及把 census 依赖图接进逆向笔记的自动化。
+- **v0.2 已落地**：无容器 scope-hoisted 产物的语义源码层（拼接式分解，v0.2.0，两站验证含压缩形态）；声音作为验收面（v0.2.2）。**剩余**：失效站点的存档抢救；拼接式分解的下一档——部件按源模块**分组成目录**（场景/材质/时间轴），以及把 census 依赖图接进逆向笔记的自动化。
 - **源码化的两块空白**：命名的还原率取决于代码本身留下多少线索——实测一个扁平站有 63% 的局部变量没有任何可依据的证据，一个模块化站有 27/46 个模块只能保留哈希 id。这不是欠账，**错名比哈希更糟，因为哈希会让人去看**。另一块是模块头目前只写事实与溯源，**"这个模块是干什么的"仍然需要人来写**——工具写不出，而写错比留白更糟。
 - **远期**：C1 类（RSC 服务端组件）的"重构式逆向"方法论——C2（声明式组织、源码随包下发）已在 v0.1.54 起落地并跑通多个目标，剩下的是行为源真正不下发的那一半。
 
@@ -221,7 +223,7 @@ README.md                  # 本文件
 
 版本随真实复刻项目递进：每个版本发布的功能与修复，都先在至少一个完整项目上验证过。
 
-完整记录见 **[CHANGELOG.md](CHANGELOG.md)**。最新版本 **v0.2.2**：声音成为验收面(音频普查判据 + 池子即账本采集法)+ Content-Signal robots 读法。
+完整记录见 **[CHANGELOG.md](CHANGELOG.md)**。最新版本 **v0.2.2**：声音成为验收面（音频普查判据 + "池子即账本"采集法）+ Content-Signal robots 读法。
 
 ## 贡献
 
