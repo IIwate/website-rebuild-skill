@@ -235,3 +235,8 @@ README.md                  # 本文件
 本项目基于 [MIT License](LICENSE) 发布。
 
 **许可管的是这个 skill 本身，不管你拿它去复刻什么。** 复刻他人网站涉及的版权与合规判断由使用者自行承担——skill 内的授权前提（`SKILL.md`「使用前提与授权」）与本文的[版权一节](#关于版权能不能做和该不该公开是两回事)，才是关于**用途**的约束。
+
+## 友情链接
+
+- [linux.do](https://linux.do/u/80yan9/)
+- [v2ex](https://www.v2ex.com/member/Boyang)
