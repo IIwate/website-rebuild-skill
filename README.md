@@ -1,7 +1,7 @@
 # website-rebuild-skill
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
-[![Version](https://img.shields.io/badge/version-0.1.73-blue.svg)](CHANGELOG.md)
+[![Version](https://img.shields.io/badge/version-0.1.74-blue.svg)](CHANGELOG.md)
 [![Agent Skills](https://img.shields.io/badge/Agent%20Skills-compatible-brightgreen.svg)](https://agentskills.io/)
 [![Node](https://img.shields.io/badge/node-%E2%89%A522-339933.svg)](#快速开始)
 
@@ -218,7 +218,7 @@ README.md                  # 本文件
 
 版本随真实复刻项目递进：每个版本发布的功能与修复，都先在至少一个完整项目上验证过。
 
-完整记录见 **[CHANGELOG.md](CHANGELOG.md)**。最新版本 **v0.1.73**：webpack 箭头工厂支持、跨 chunk 依赖记录、双语 RTL 站样本落地。
+完整记录见 **[CHANGELOG.md](CHANGELOG.md)**。最新版本 **v0.1.74**：自证型交付物——自足副本自带字节清单,每次 check/build/serve 先重验。
 
 ## 贡献
 

@@ -108,6 +108,10 @@
 
 - **v0.1.72**：支持 Storyblok 式图片变换 URL（`/x.jpg/m/110x110/filters:...` 这类"文件名后还有路径"的形态）——URL 落盘时对已知资产扩展名后的路径段拍平，伺服端对同形态请求做同一变换回查；修复绝对 URL 提取时以括号收尾的地址被误剪（如 `quality(70)`）；`verify-refs-served` 与 `make-standalone` 新增 `--allow`，接受与镜像门同一份豁免清单（源站自身 404 的引用不再逼门变红）。
 
+## 自证型交付物（v0.1.74）
+
+- **v0.1.74**：`make-standalone` 生成的自足副本现在自带**字节清单**（逐文件 sha256，对落盘后的字节钉死）与零依赖校验器 `verify-bytes.mjs`；生成的 `npm run check / build / serve` 每次先重验清单，副本在任何机器上都能自证"这仍是验收过的那份字节"（被静默编辑或位腐坏的文件当场判红），端口自有构建产物列为 unpinned；`serve` 拒绝伺服 `.git` 路径段（防误配 root 时泄漏仓库对象库）。
+
 ## webpack 箭头工厂与双语站（v0.1.73）
 
 - **v0.1.73**：模块图谱与冷审支持 webpack 箭头工厂（`"key":(t,e,s)=>{}`，新编译目标的产物）；模块图谱新增跨 chunk 依赖记录（`externalRequires`）——依赖 vendor 分包的 chunk 不再被闭包误判为自洽；引用提取修复两类越界（内联 `url(...)` 尾随 CSS 声明、实体解码引入的引号边界）；爬虫台账修剪无人引用的陈旧失败行；`verify-mirror` 将"另一种已知图片格式挂错扩展名"降为线索（源站自身的标注习惯）；`verify-payload` 新增 `--allow-absent`（无数据岛的纯标记 SSG，两侧一致缺席才放行）；模块落源支持带目录的模块名；`make-standalone` 不再把本地化的 preconnect 裸主机当资产缺口。
