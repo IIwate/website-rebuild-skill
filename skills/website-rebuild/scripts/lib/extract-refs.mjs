@@ -478,10 +478,20 @@ export function createRefExtractor({ origin, originHost, assetHosts, onOffHost }
     // gallery. The attr= anchor keeps JS operator soup out; addIfAsset's
     // extension gate keeps page links out; resolution is against the DOCUMENT
     // URL, exactly as the browser resolves it.
-    if (baseUrl) {
+    // Two guards, both measured on the first retro-audit of this shape:
+    // ① the value must CONTAIN a slash — HTML data-attributes carry
+    //   dot-separated non-URLs (\`data-ease="power2.inOut"\`, version strings
+    //   like \`5.3.11\`) that wear an extension convincingly; a document-
+    //   relative asset reference in practice always crosses a directory.
+    // ② documents only — a relative string inside a JS chunk resolves against
+    //   the CHUNK URL, which is a guess, not how any loader resolves it
+    //   (import maps and __vite__mapDeps are shape territory elsewhere);
+    //   CSS already has shape 5 with correct base semantics.
+    if (baseUrl && !/\.(m?js|css)($|\?)/i.test(baseUrl)) {
       for (const m of text.matchAll(/(?:src|href|poster|data-[a-z0-9-]+)\s*=\s*["']((?:\.\/)?[a-zA-Z0-9_][^"'<>\s]*?\.[a-z0-9]{2,5}(?:\?[^"']*)?)["']/gi)) {
         const v = m[1];
         if (/^(?:https?:|\/|#|data:|mailto:|tel:|javascript:)/i.test(v)) continue;
+        if (!v.includes("/")) continue;
         try {
           addIfAsset(new URL(v, baseUrl).href, urls);
         } catch {}
