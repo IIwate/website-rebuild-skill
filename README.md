@@ -2,7 +2,7 @@
 
 ## Differences from Upstream
 
-This fork is merged up to and including upstream v0.2.5. This file records only the fork-specific differences that still remain.
+This fork is merged up to and including upstream v0.2.8. This file records only the fork-specific differences that still remain.
 
 ### Engineering additions
 
