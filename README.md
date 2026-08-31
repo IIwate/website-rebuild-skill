@@ -1,7 +1,7 @@
 # website-rebuild-skill
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
-[![Version](https://img.shields.io/badge/version-0.2.4-blue.svg)](CHANGELOG.md)
+[![Version](https://img.shields.io/badge/version-0.2.5-blue.svg)](CHANGELOG.md)
 [![Agent Skills](https://img.shields.io/badge/Agent%20Skills-compatible-brightgreen.svg)](https://agentskills.io/)
 [![Node](https://img.shields.io/badge/node-%E2%89%A522-339933.svg)](#快速开始)
 
@@ -189,6 +189,7 @@ cp -R skills/website-rebuild ~/.claude/skills/website-rebuild
 | Airbnb | [airbnb.com](https://www.airbnb.com/) | **D** | 个性化注水 + 服务端数据，没有确定性的验收基准 |
 | darknetflix.io | — | **X→已抢救** | 域名易主;⭐ 已从 Wayback 救回(锚点 2020-07,8/15 路由复活,92 永久洞如实登记) |
 | umamiland | — | **X→已抢救** | 平台回收;⭐ 已从 Wayback 救回(**sweep 9/9 路由全清**,探针→种子迭代收敛) |
+| jiouhe.com | — | **X→已抢救** | 原地替换(域名活着,应答停车页);⭐ 锚 2018 救回,**0 永久洞、0/0/0**,滚轮帧动画完整复活——停车页验尸与拼写孪生归一的诞生地 |
 
 ## 仓库结构
 
@@ -224,7 +225,7 @@ README.md                  # 本文件
 
 版本随真实复刻项目递进：每个版本发布的功能与修复，都先在至少一个完整项目上验证过。
 
-完整记录见 **[CHANGELOG.md](CHANGELOG.md)**。最新版本 **v0.2.4**：失效站点的存档抢救——`wayback-mirror` 把死站从 Internet Archive 救成标准镜像,两个死站实测复活。
+完整记录见 **[CHANGELOG.md](CHANGELOG.md)**。最新版本 **v0.2.5**：存档抢救淬火——停车页验尸与逐候选回退、拼写孪生归一、三个死站实测复活(第三站为"原地被停车页替换"型)。
 
 ## 贡献
 

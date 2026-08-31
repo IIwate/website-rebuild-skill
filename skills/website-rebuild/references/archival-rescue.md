@@ -28,6 +28,16 @@ X 类(原站已消失)占历年获奖站约 29%。站死了,但 Internet Archive
 所以它在 `wayback-holes.txt` 里单列 **FILLED BY ALIAS** 段(referencedAs ⇐ archivedAs
 @timestamp),provenance 记 `aliasOf`,**逐个目验**,永不冒充原路径的真捕获。
 
+## 1.5 ⛔ 铁律:抢救项目里永远不要对原域跑 mirror-site
+
+死域的"死"有两种应答形态:3xx(跳走)与 **200(停车页夺舍)**。redirect:manual 纪律
+只挡得住前者;停车页直接 200 应答,mirror-site 会**用停车字节覆写救回的真身,并把账
+同步更新——五道门全绿地完成一次污染**(实测:Rakko 停车页覆写已救回的 2018 根页,
+唯一的目击者是后来探针里冒出的 `cdn.rakkoid.com` 外联)。抢救项目的一切补种走
+`wayback-mirror --seeds`;活的第三方 CDN(字体/jquery)也**问档案要当年的字节**,
+不要问活 CDN 要今天的。verify-mirror 的 interstitial 表现已内置停车签名族,
+但它只能事后抓——不犯是纪律,抓到是底网。
+
 ## 2. 礼貌是功能
 
 web.archive.org 对高频访问限流(429/503)。默认 2 worker + 350ms 间隔 + 指数退避;

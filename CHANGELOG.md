@@ -1,5 +1,9 @@
 # 更新记录
 
+## 停车页与拼写孪生（v0.2.5）
+
+- **v0.2.5**：存档抢救经第三个死站（jiouhe.com@2018,"原地替换"型:域名活着,应答的是停车页）淬火:`wayback-mirror` 抓取段新增**停车页验尸 + 逐候选回退**（停车服务 200 应答,状态码滤不掉——每份字节对停车签名族检查,命中则退到同 URL 次近捕获;⛔ 域可以死在窗口里）;选择段按 `canonicalUrl` 归一去重**拼写孪生**（`:80` 显式默认端口、`f.eot?` 空查询 IE hack、尾斜杠——各自都会两 URL 撞一路径,账描述败者）;洞查账同样走规范化（别名回填不再把 `?` 拼写塞回账本）;seeds 模式接受显式 `--window-days` 回溯（稳定文件只在自己被抓的那天有捕获——2018 的页合法依赖唯一捕获在 2015 的 JS,放宽即登记）。`verify-mirror` interstitial 表新增**域名停车族**（Sedo/Rakko/generic for-sale——停车页是"URL 下不是这个站"的 interstitial）。⛔ 新铁律入 `archival-rescue.md`:**抢救项目永不对原域跑 mirror-site**——200 型停车会覆写救回的真身且账同步更新,五门全绿地完成污染(实测,被一条外联当场戳穿)。jiouhe 终态:0 永久洞、单页全站 0/0/0、滚轮帧动画机器完整复活,并与用户当年的手工恢复版结构互验一致。
+
 ## 失效站点的存档抢救（v0.2.4）
 
 - **v0.2.4**：X 类不再等于"做不了"——新增 `wayback-mirror`:从 Internet Archive 把死站救成**标准镜像**（CDX 枚举 → 锚点+时间窗选连贯捕获,auto 锚点让抢注者时代的 301 洪水靠状态码+窗口出局 → `id_` 旗抓原始字节,绝不镜像被注入改写的回放页 → 与 mirror-site 同构的账本 + `wayback-provenance.json` 逐文件捕获坐标）。⛔ **洞是既成事实,登记即交付**:`wayback-holes.txt` 同时是 verify-mirror 的豁免清单;⭐ **别名回填**（同名异路捕获按推断回填,字节合理性校验挡住 SPA catch-all 假捕获,单列 FILLED BY ALIAS）;**seeds 模式**（探针/sweep 的 404 清单当种子问档案要,`web/<锚点>id_/` 自动落到最近捕获——死站版的抓包补录,迭代到不动点）。配套:`serve` 文本改写门改为账本 content-type 优先（无扩展名落盘的字体 CSS 曾绕过改写外呼）;`sweep-routes` 新增 `--allow-errors`（登记的怪癖放行不判红——死站无源可对拍时的判断登记通道）;新指南 `references/archival-rescue.md`。实测两个死站:darknetflix.io（2020 SOTY,8/15 路由复活,92 永久洞如实登记——含 7 个任何时代都未被捕获的懒 chunk）与 umamiland.withgoogle.com（Google 体验站,**9/9 路由全清**,探针→种子三轮迭代收敛,窗口放宽决策登记在案）。

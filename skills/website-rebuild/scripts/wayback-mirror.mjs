@@ -43,7 +43,7 @@
 import { mkdir, writeFile, readFile } from "node:fs/promises";
 import { createHash } from "node:crypto";
 import path from "node:path";
-import { localRelPath } from "./lib/urlpath.mjs";
+import { localRelPath, canonicalUrl } from "./lib/urlpath.mjs";
 import { createRefExtractor, isTextRefSource } from "./lib/extract-refs.mjs";
 
 const args = process.argv.slice(2);
@@ -101,7 +101,13 @@ try { carriedProv = JSON.parse(await readFile(path.join(OUT, "wayback-provenance
 if (SEEDS_FILE) {
   const anchor = flag("anchor", null) !== "auto" && flag("anchor", null) ? flag("anchor", null) : (carriedProv.anchor || null);
   if (!anchor) { console.error("FATAL — seeds mode needs --anchor or an existing wayback-provenance.json."); process.exit(2); }
-  const aMs = tsToMs(anchor), wMs = (carriedProv.windowDays || WINDOW_DAYS) * 86400000;
+  // Window precedence in seeds mode: an EXPLICIT --window-days beats the stored
+// one — the stored window bounds the base selection, but a seed hunt may need
+// to reach an asset captured at its own (much earlier) date: a stable file is
+// crawled once and never again, so a 2018 page can legitimately depend on a
+// JS whose only capture is 2015. The reach-back is a decision; record it.
+const aMs = tsToMs(anchor), wMs = (args.includes("--window-days") ? WINDOW_DAYS : (carriedProv.windowDays || WINDOW_DAYS)) * 86400000;
+if (args.includes("--window-days")) { carriedProv.seedWindowDays = WINDOW_DAYS; carriedProv.seedWindowNote = carriedProv.seedWindowNote || "seeds reach-back widened explicitly; per-file capture timestamps in files{} show the drift"; }
   const seeds = (await readFile(path.resolve(SEEDS_FILE), "utf8")).split("\n").map((x) => x.trim()).filter((x) => x.startsWith("http"));
   console.log(`  seeds mode: ${seeds.length} URL(s), anchor ${anchor}`);
   const manifest2 = carried;
@@ -176,14 +182,24 @@ console.log(`  anchor ${ANCHOR} (±${WINDOW_DAYS}d window)`);
 // `warc/revisit` row has no bytes of its own — but an in-window 200 with a
 // real digest exists whenever the URL was truly there; revisits are skipped
 // and the earlier identical capture wins through normal selection.
+// ⛔ SPELLING TWINS COLLIDE ON DISK. The archive stores `http://x/` and
+// `http://x:80/` as two originals; `f.eot` and `f.eot?` (the IE eot hack)
+// likewise — each pair maps to ONE local path, and whichever fetch lands last
+// wins while the ledger describes the loser. Dedup on the CANONICAL spelling
+// (lib/urlpath.canonicalUrl — default ports, hash) plus a bare trailing "?",
+// keeping the capture closest to the anchor; the KEPT row keeps its canonical
+// original so the ledger and the disk agree by construction.
+const canon = (u) => canonicalUrl(u).replace(/\?$/, "");
 const byUrl = new Map();
 for (const c of captures) {
   if (c.status !== "200" && !(INCLUDE_3XX && /^3\d\d$/.test(c.status))) continue;
   if (c.mimetype === "warc/revisit") continue;
   if (Math.abs(tsToMs(c.timestamp) - anchorMs) > windowMs) continue;
-  const prev = byUrl.get(c.original);
-  if (!prev || Math.abs(tsToMs(c.timestamp) - anchorMs) < Math.abs(tsToMs(prev.timestamp) - anchorMs)) byUrl.set(c.original, c);
+  const key = canon(c.original);
+  if (!byUrl.has(key)) byUrl.set(key, []);
+  byUrl.get(key).push({ ...c, original: key });
 }
+for (const [, arr] of byUrl) arr.sort((a, b) => Math.abs(tsToMs(a.timestamp) - anchorMs) - Math.abs(tsToMs(b.timestamp) - anchorMs));
 // ⛔ TRAILING-SLASH TWINS COLLIDE. A live crawl sees `/en` 301 to `/en/` and
 // fetches one; the archive holds BOTH as 200 documents, and both map to
 // en/index.html — whichever fetch lands last wins, and the ledger then
@@ -195,7 +211,7 @@ for (const [u] of [...byUrl]) {
   if (!u.endsWith("/") && byUrl.has(u + "/")) { collapsedVariants.push(u); byUrl.delete(u); }
 }
 if (collapsedVariants.length) console.log(`  collapsed ${collapsedVariants.length} trailing-slash twin(s) (slash form kept)`);
-let chosen = [...byUrl.values()];
+let chosen = [...byUrl.values()]; // each entry: candidate list, nearest-to-anchor first
 if (LIMIT > 0) chosen = chosen.slice(0, LIMIT);
 console.log(`  ${chosen.length} distinct URL(s) selected in-window (of ${captures.length} capture rows)`);
 
@@ -204,16 +220,31 @@ const manifest = {};
 const failures = [];
 let done = 0, bytes = 0;
 let idx = 0;
+// ⛔ A DOMAIN CAN DIE INSIDE THE WINDOW. Parking services answer 200, so the
+// status filter cannot see them, and a parked capture nearest the anchor WINS
+// selection — measured: a root page whose 2018-12 "200" was a Sedo lot while
+// the real site lived eight months earlier in the same window. Every fetched
+// body is checked against parking signatures; a hit falls back to the
+// NEXT-nearest candidate of the same URL (up to 4), then registers a failure.
+const PARKING = /sedoparking|parkingcrew|hugedomains|dan\.com\/buy|domain (is )?for sale|buy this domain|\u58f2\u308a\u51fa\u3057\u4e2d/i;
 await Promise.all(Array.from({ length: WORKERS }, async () => {
   while (idx < chosen.length) {
-    const c = chosen[idx++];
-    const rawUrl = `https://web.archive.org/web/${c.timestamp}id_/${c.original}`;
-    const r = await politeFetch(rawUrl);
-    await sleep(350);
-    if (!r || r.status >= 400) { failures.push(`${r?.status ?? "ERR"} ${c.original} @${c.timestamp}`); continue; }
-    // id_ replay may itself 3xx (capture of a redirect); record, don't follow.
-    if (r.status >= 300) { failures.push(`REPLAY ${r.status} ${c.original} @${c.timestamp}`); continue; }
-    const buf = Buffer.from(await r.arrayBuffer());
+    const cands = chosen[idx++];
+    let picked = null, buf = null, r = null;
+    for (const cc of cands.slice(0, 4)) {
+      const rawUrl = `https://web.archive.org/web/${cc.timestamp}id_/${cc.original}`;
+      r = await politeFetch(rawUrl);
+      await sleep(350);
+      if (!r || r.status >= 400 || r.status >= 300) continue;
+      const b = Buffer.from(await r.arrayBuffer());
+      if (PARKING.test(b.subarray(0, 8192).toString("utf8"))) {
+        failures.push(`PARKED ${cc.original} @${cc.timestamp} — skipped, trying earlier capture`);
+        continue;
+      }
+      picked = cc; buf = b; break;
+    }
+    if (!picked) { const c0 = cands[0]; failures.push(`${r?.status ?? "ERR"} ${c0.original} @${c0.timestamp}`); continue; }
+    const c = picked;
     const rel = localRelPath(c.original, ORIGIN_HOST);
     const p = path.join(OUT, rel);
     await mkdir(path.dirname(p), { recursive: true });
@@ -270,7 +301,7 @@ for (const [u, m] of Object.entries(manifest)) {
   const buf = await readFile(p);
   if (!isTextRefSource({ url: u, contentType: m.type, head: buf })) continue;
   for (const ref of extract(buf.toString("utf8"), u)) {
-    if (manifest[ref]) continue;
+    if (manifest[ref] || manifest[canon(ref)]) continue;
     // ⚠ A site references itself under www./bare spellings interchangeably,
     // and the Wayback urlkey treats them as one — so must the hole register:
     // an unregistered cross-spelling hole fails closure while looking foreign.
