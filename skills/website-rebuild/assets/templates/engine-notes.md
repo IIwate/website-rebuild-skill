@@ -13,6 +13,8 @@
 
 ---
 
+<!-- 无容器(Vite)目标:先跑 census-bundles --md docs/chunk-graph.md,把 chunk 依赖图与别名证据挂进本笔记的坐标系。 -->
+
 ## 第一部分：源站事实
 
 ### 1. bundle 区段地图

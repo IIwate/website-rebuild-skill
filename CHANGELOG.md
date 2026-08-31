@@ -1,5 +1,9 @@
 # 更新记录
 
+## 目录分组与 chunk 图谱(v0.2.8)
+
+- **v0.2.8**:拼接式分解的下一档落地——新增 `group-parts`:平铺部件按**字面证据**(共享标识符 token)折进域目录;前导规则只认大写类族(Camera*/Wave* → camera/ wave/),小写动词族拒分(字面但糊的桶比平铺更藏东西),压缩名 chunk 证据不足即整体保持平铺;**先按新布局重拼验 sha 再动盘**。`census-bundles` 新增 `--md`:chunk 依赖图直接生成逆向笔记坐标页(import 别名样本随行——一级命名证据)。实测 hashgraphvc:场景 chunk 151 件 → scene/camera/wave/sun/cascade/sky 等 24 个域目录,33 chunk / 2,043 件重拼仍逐字节一致;overworld 的压缩名入口正确地整体拒分。v0.2 路线图至此全部落地。
+
 ## 冒烟自检与 CI（v0.2.7）
 
 - **v0.2.7**：仓库获得可一键运行的护栏——`npm test`(`selftest/run.mjs`,零依赖、离线、秒级):全部 55 个脚本语法解析、零依赖门、共享库的**实测教训 fixture**(逐条标注为哪个版本流过血:查询变体不坍缩、Storyblok 拍平不误伤带点目录、括号配平、实体解码边界、srcset 逐候选、模板字面量拒收、第六形态双闸、拼写孪生归一)、verify-mirror 微型镜像端到端(自洽必绿,坏一个字节必红)、SKILL.md 引用完整性。附 GitHub Actions workflow(push/PR 自动跑)。测试住仓库根 `selftest/`,skill 载荷不带一行测试代码。

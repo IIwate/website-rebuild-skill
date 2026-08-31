@@ -1,7 +1,7 @@
 # website-rebuild-skill
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
-[![Version](https://img.shields.io/badge/version-0.2.7-blue.svg)](CHANGELOG.md)
+[![Version](https://img.shields.io/badge/version-0.2.8-blue.svg)](CHANGELOG.md)
 [![Agent Skills](https://img.shields.io/badge/Agent%20Skills-compatible-brightgreen.svg)](https://agentskills.io/)
 [![Node](https://img.shields.io/badge/node-%E2%89%A522-339933.svg)](#快速开始)
 
@@ -217,7 +217,7 @@ README.md                  # 本文件
 
 ## 路线图
 
-- **v0.2 已落地**：无容器 scope-hoisted 产物的语义源码层（拼接式分解，v0.2.0，两站验证含压缩形态）；声音作为验收面（v0.2.2）；渲染广度门（v0.2.3）；失效站点的存档抢救（v0.2.4，两个死站实测）。**剩余**：拼接式分解的下一档——部件按源模块**分组成目录**（场景/材质/时间轴），以及把 census 依赖图接进逆向笔记的自动化。
+- **v0.2 已全部落地**:拼接式分解(v0.2.0)及其目录分组与 chunk 图谱(v0.2.8)、三级终点与交接边界(v0.2.1)、声音验收面(v0.2.2)、渲染广度门(v0.2.3)、存档抢救(v0.2.4–0.2.6)、冒烟自检 CI(v0.2.7)。
 - **源码化的两块空白**：命名的还原率取决于代码本身留下多少线索——实测一个扁平站有 63% 的局部变量没有任何可依据的证据，一个模块化站有 27/46 个模块只能保留哈希 id。这不是欠账，**错名比哈希更糟，因为哈希会让人去看**。另一块是模块头目前只写事实与溯源，**"这个模块是干什么的"仍然需要人来写**——工具写不出，而写错比留白更糟。
 - **远期**：C1 类（RSC 服务端组件）的"重构式逆向"方法论——C2（声明式组织、源码随包下发）已在 v0.1.54 起落地并跑通多个目标，剩下的是行为源真正不下发的那一半。
 
@@ -225,7 +225,7 @@ README.md                  # 本文件
 
 版本随真实复刻项目递进：每个版本发布的功能与修复，都先在至少一个完整项目上验证过。
 
-完整记录见 **[CHANGELOG.md](CHANGELOG.md)**。最新版本 **v0.2.7**:`npm test` 冒烟自检 + GitHub Actions——55 脚本语法、零依赖门、共享库实测教训 fixture、微型镜像端到端。
+完整记录见 **[CHANGELOG.md](CHANGELOG.md)**。最新版本 **v0.2.8**:目录分组(字面证据折域目录,重拼门护航)+ census chunk 图谱直出逆向笔记——v0.2 路线图全部落地。
 
 ## 贡献
 

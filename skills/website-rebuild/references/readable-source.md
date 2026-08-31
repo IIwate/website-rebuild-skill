@@ -334,6 +334,8 @@ webpack 容器把边界写下来了(§3.0.1 只剩"叫什么");Vite/esbuild scop
 实测(hashgraphvc,Nuxt3+Vite,33 chunk / 44.9 万行):2,043 个部件,33/33 逐字节重拼一致,
 18.9 万行的 worker chunk 拆出 751 件,3.2 万行的场景 chunk 拆出 CameraSplineSystem /
 WebGPUWaveSimulation / Gerstner / createInitSpectrumMaterial 等 151 件——全部是代码自己的名字。
+⭐ **目录分组(tools/group-parts.mjs)**:平铺部件可按共享标识符 token 折进域目录——前导规则只认大写开头的类族(小写动词族是字面但糊的桶),先按新布局重拼验 sha 再动盘;压缩名 chunk 证据不足即保持平铺,与命名同一条纪律:**分错比不分更糟**。census 的 chunk 依赖图(--md)是这一层的坐标页。
+
 ⚠ 本节与 §3.1 分工:§3.1 管**容器/扁平 port 重写为真 ESM 树**(粒度三约束),本节管
 "重写不可行"的那一形状;两者都以"先有裁判,再动手"为前提。
 
