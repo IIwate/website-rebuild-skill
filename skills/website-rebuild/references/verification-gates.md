@@ -679,7 +679,8 @@ grep -n "<那条正则/那张常量表>" scripts/*.mjs # 除 lib/ 外应当零�
 | 外壳构建 | `verify-payload` | SSG 载荷求值展开后按叶路径比对（不是比字节） | `--allow-absent`（无数据岛站，两侧一致缺席才放行） |
 | 产出静态面 | `verify-offline` | 字节里的外部绝对 URL 普查，逐 host 对 `external.txt`（§1.6 静态半边） | external.txt 的 LINK/EMBED/stub 行 |
 | 产出静态面 | `verify-refs-served` | 每条资产引用由**真服务器**应答（§2.1.1：问服务器，不重实现映射） | `--allow mirror/external.txt`（源站自身 404） |
-| 运行时 | `probe --no-external` | CLEAN + 零外联的资源级半边（§1.5 / §1.6） | probe 输出里逐条归属 |
+| 运行时 | `probe --no-external` | CLEAN + 零外联的资源级半边（§1.5 / §1.6），**深度**：单路由走查/截图/长观察 | probe 输出里逐条归属 |
+| 运行时 | `sweep-routes` | 渲染**广度**：全路由一个浏览器逐一 0 错误/0 失败/0 外联，可带交互钩子与逐路由采集（§1.7 音频普查在此搭车） | `--allow-external`（已登记 EMBED 主机；其上的 4xx 报告不判红） |
 | 像素 | `pixelcompare` / `pixel-walk` | 位置 × 状态两维检查点（§1.3.1），跨侧对同侧带宽（§1.3.2），重复帧点名（§4.8） | 带宽由 `--self` 实测,不许手挑 |
 | 像素前置 | `frame-census` | 帧里有东西（§4.3：byte-equal 不证明测的是想测的画面） | — |
 | M(n) 关账 | `cold-audit-modules` | bundle 模块清单对账 + 检查覆盖率自报（§0.24.0） | 未移植模块须无人 require |

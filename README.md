@@ -1,7 +1,7 @@
 # website-rebuild-skill
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
-[![Version](https://img.shields.io/badge/version-0.2.2-blue.svg)](CHANGELOG.md)
+[![Version](https://img.shields.io/badge/version-0.2.3-blue.svg)](CHANGELOG.md)
 [![Agent Skills](https://img.shields.io/badge/Agent%20Skills-compatible-brightgreen.svg)](https://agentskills.io/)
 [![Node](https://img.shields.io/badge/node-%E2%89%A522-339933.svg)](#快速开始)
 
@@ -34,7 +34,7 @@
 - **行号可溯源的逆向**——复刻里的每一行都能指回源站 bundle 的哪一行；bug 与怪写法照抄不修
 - **量化验收**——控制台 / 网络 / DOM / 几何 / **逐像素**五层自动比对，差异要么修掉、要么登记，不许糊过去
 - **源码化交付**——逐字移植的产物重写成人能读的工程（拆模块、按证据命名、补溯源头注），**复制到任何地方断网可跑**
-- **零依赖工具链**——49 个 Node 脚本（39 个工序脚本与验收门 + 7 个共用库 + 3 个源码化重构器），源码化之前整条流水线不装任何 npm 包
+- **零依赖工具链**——50 个 Node 脚本（40 个工序脚本与验收门 + 7 个共用库 + 3 个源码化重构器），源码化之前整条流水线不装任何 npm 包
 - **法务决定权归用户**——skill 只取证与呈交，产出默认私有 + noindex + 不部署
 
 ## 快速开始
@@ -223,7 +223,7 @@ README.md                  # 本文件
 
 版本随真实复刻项目递进：每个版本发布的功能与修复，都先在至少一个完整项目上验证过。
 
-完整记录见 **[CHANGELOG.md](CHANGELOG.md)**。最新版本 **v0.2.2**：声音成为验收面（音频普查判据 + "池子即账本"采集法）+ Content-Signal robots 读法。
+完整记录见 **[CHANGELOG.md](CHANGELOG.md)**。最新版本 **v0.2.3**：渲染广度门 `sweep-routes`——全站路由一个浏览器扫完（122 路由 7.5 分钟），带交互钩子与逐路由采集。
 
 ## 贡献
 

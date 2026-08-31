@@ -1,5 +1,9 @@
 # 更新记录
 
+## 渲染广度门（v0.2.3）
+
+- **v0.2.3**：新增 `sweep-routes`——全站渲染广度门：**全部路由,一个浏览器**（此前是逐路由起一个 Chrome 的手搓循环:122 路由约 40 分钟,且并发探针会互相收割同工作区的孤儿实例;现在 7.5 分钟,单实例后事故面消失）。逐路由记录页面错误/请求失败/外联,`--interact` 交互钩子驱动 load 到不了的状态（入场点击等）,`--eval` 逐路由采集（音频池普查在此搭车）,`--allow-external` 放行已登记的 EMBED 主机——允许主机上的 4xx 是它的离域行为（域名锁 Vimeo 实测）,报告不判红。与 probe 明确分工:sweep 管广度,probe 管深度。
+
 ## 音频输出面与 Content-Signal(v0.2.2)
 
 - **v0.2.2**:**声音成为验收面**——新增音频普查判据(驱动入声音上下文后,音频引擎池内全量 loaded + 零音频 404 + 零外联,三侧一致;headless 的 suspended 属自动播放策略不判红),并确立"池子即账本"的镜像采集法(从 Howler 池倒出全部 src 作种子,实测不猜——运行时拼接的音频 URL 族对静态提取整类不可见);`legal-and-deploy` 新增 **Cloudflare Content-Signal** 托管 robots 的读法(匹配语义不变、信号按用途归类、⛔ 意图如实呈交不许消化);`census-bundles` 锚定类扩为 `^ \n ; }`(压缩 chunk 的 `;import`/`}export{` 中缝形态曾骗过行首锚定);`make-standalone` 不再对无自有构建的项目报幻影 unpinned 路径。实测 overworldaudio.com:98/98 Howl、20 chunk/435 部件重拼一致、379/379 字节自证。

@@ -3,7 +3,7 @@ name: website-rebuild
 description: 1:1 rebuild of award-winning creative websites (WebGL / scroll-animation / portfolio sites). Evidence-driven pipeline - mirror-first forensics, line-number-traceable reverse engineering of minified bundles, verbatim porting, quantitative verification gates. Use when user asks to "复刻网站", "重建网站", "1:1 rebuild", "clone this site", or provides a URL of a creative/award site to reproduce.
 compatibility: Requires Node 22+ (bundled scripts use built-in WebSocket to talk to CDP), npx, and a local Chrome/Chromium for headless comparison. POSIX shell optional - the Step 0 probe protocol has a zero-dependency Node equivalent (scripts/fingerprint.mjs) for shells without curl/cmp/tr/perl (e.g. Windows PowerShell). Agent-agnostic - works in any Agent Skills-compatible runtime.
 metadata:
-  version: "0.2.2"
+  version: "0.2.3"
 ---
 
 # Website Rebuild（获奖创意站 1:1 复刻）
@@ -99,7 +99,7 @@ metadata:
 
 **M2+ — 严格溯源移植**。加载 [references/porting-discipline.md](references/porting-discipline.md)，并按分支路由表加载对应场景指南。每个移植文件头部注明源行号区间；GLSL/魔数/数据逐字提取；数据资产脚本抽取入库不手抄。
 
-**M(n-1) — 对拍验收**。加载 [references/verification-gates.md](references/verification-gates.md) 与 [references/determinism.md](references/determinism.md)。⚠ **归因残差之前先建自比带宽**（`pixelcompare --self`，逐侧 ≥4 次、交错跑）——没有带宽的残差一律 UNCLASSIFIED，而 UNCLASSIFIED 是失败不是通过。门型选择：有 SSR/静态 HTML 产物先建字节门 → DOM 静态场景冻结熵源走 byte-equal → 活场景（WebGL/视频/随机相位）降级量化指标 + 噪声归类 → 数据驱动动画补数值探针门 → CLEAN 门全程兜底。判定时序 bug 前先校准探针（[references/environment-traps.md](references/environment-traps.md)）。
+**M(n-1) — 对拍验收**。加载 [references/verification-gates.md](references/verification-gates.md) 与 [references/determinism.md](references/determinism.md)。全站渲染**广度**用 `scripts/sweep-routes.mjs`（全路由一个浏览器,逐路由 0 错误/0 失败/0 外联 + 交互钩子与逐路由采集）,单路由**深度**才用 `probe.mjs`——⛔ 不要手搓逐路由起 Chrome 的循环,成本按浏览器启动次数计,且并发探针会互相收割孤儿。⚠ **归因残差之前先建自比带宽**（`pixelcompare --self`，逐侧 ≥4 次、交错跑）——没有带宽的残差一律 UNCLASSIFIED，而 UNCLASSIFIED 是失败不是通过。门型选择：有 SSR/静态 HTML 产物先建字节门 → DOM 静态场景冻结熵源走 byte-equal → 活场景（WebGL/视频/随机相位）降级量化指标 + 噪声归类 → 数据驱动动画补数值探针门 → CLEAN 门全程兜底。判定时序 bug 前先校准探针（[references/environment-traps.md](references/environment-traps.md)）。
 
 **M(n) — 收口**。冷头评审：对 bundle 顶层类/模块清单逐一核对落点（功能测试测不出整块遗漏，只有清单式核对能）。加载 [references/legal-and-deploy.md](references/legal-and-deploy.md) 完成版权**取证**并把决定**呈交用户**——在用户决定之前按安全默认执行（**私有 + noindex + 不部署**），公开前必须逐资产取证、显著标注非官方复刻。
 
