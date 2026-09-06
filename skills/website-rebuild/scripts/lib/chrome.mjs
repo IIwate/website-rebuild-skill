@@ -64,6 +64,11 @@
  *       node scripts/lib/chrome.mjs --reap     # reap the orphans it lists
  *
  * Zero dependencies (Node 22+ builtins only).
+ *
+ * 中文规格（自 scripts/README.md 迁入，v0.3.21；本表另一拼写：`lib/chrome.mjs`）
+ * 无头浏览器生命周期（**进程组**收割 + 全退出路径 + 启动前孤儿自检；漏子进程会抬高参照侧自比带宽，把像素门调松）与 CDP 载荷硬顶常量。`node scripts/lib/chrome.mjs --all/--reap` 可查/回收残留
+ * **浏览器/子进程生命周期注册表**（见本文件顶部一节）：`detached` 进程组启动、SIGTERM→SIGKILL 分级收割、六条退出路径全覆盖、临时 user-data-dir 即身份、启动前同角色**孤儿**自检并响亮回收；另收 CDP 载荷硬顶的实测常量与降级建议（`shotCeilingAdvice`）。`spawnReaped` 供非 Chrome 的子进程（被测服务）复用；v0.3.18 起也是 **`findChrome()` 与 `headlessArgs()` 的唯一出处**（此前三份候选路径表 + 一处写死的 macOS 路径）。带 CLI：列出/回收本机实例
+ * `node scripts/lib/chrome.mjs --all`；脚本内 `import { preflightChrome, launchChrome } from "./lib/chrome.mjs"`
  */
 import { execFileSync, spawn } from "node:child_process";
 import { accessSync, mkdtempSync, readdirSync, rmSync, statSync } from "node:fs";
@@ -72,6 +77,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { assertPortFree, labelPort, portSlot } from "./ports.mjs";
+import { cli } from "./cli.mjs";
 
 export const PROFILE_PREFIX = "wrs-chrome";
 
@@ -116,7 +122,7 @@ export const CHROME_CANDIDATES = Object.freeze([
  * Find the first runnable Chrome executable path from candidate list.
  * Throws a fatal descriptive Error if none can be found.
  */
-export function findChrome() {
+export async function findChrome() {
   for (const c of CHROME_CANDIDATES) {
     try {
       accessSync(c);
@@ -172,13 +178,41 @@ export function listInstances({ role = null, slot = portSlot() } = {}) {
     const dir = r.command.slice(at + "--user-data-dir=".length).split(/\s/)[0];
     found.push({ ...r, profile: dir, ...(parseProfileName(path.basename(dir)) || {}) });
   }
-  const pids = new Set(found.map((f) => f.pid));
+  markOrphans(found);
+  return found;
+}
+
+/**
+ * Decide `orphan` for every matched process, in place. Exported for the
+ * selftest; listInstances() is the only production caller.
+ *
+ * Orphaned = the BROWSER this process belongs to has lost its launcher. Walk up
+ * the matched tree (renderer -> zygote/helper -> browser main) to its ROOT — the
+ * matched process whose parent is NOT one of ours — and ask whether that parent
+ * is gone: reparented to pid 1, or no longer in the process table. Every member
+ * of the tree inherits the root's answer.
+ * ⛔ NOT "its parent is another matched Chrome". That predicate marked every
+ * renderer of a LIVE sibling browser — same role, other side, the concurrent
+ * mirror + rebuild probe that lib/ports.mjs exists to allow — as an orphan: a
+ * false LEFTOVER report, a reap that could not touch them (a renderer is not a
+ * group leader, so the group signal finds nothing) and then a "survived
+ * SIGKILL" warning about processes that were never leaked. A renderer whose
+ * browser has a live owner is that owner's business, exactly like the browser.
+ */
+export function markOrphans(found) {
+  const byPid = new Map(found.map((f) => [f.pid, f]));
+  const rootOf = (f) => {
+    const seen = new Set();
+    let cur = f;
+    while (byPid.has(cur.ppid) && !seen.has(cur.pid)) {
+      seen.add(cur.pid);
+      cur = byPid.get(cur.ppid);
+    }
+    return cur;
+  };
   for (const f of found) {
-    // Orphaned = the script that launched it is gone (reparented to pid 1), or
-    // its parent is another matched Chrome process (a renderer of a leaked
-    // browser), or the parent no longer exists at all. Anything else has a live
-    // owner and is somebody's business, not the sweeper's.
-    f.orphan = f.ppid === 1 || pids.has(f.ppid) || !isAlive(f.ppid);
+    const root = rootOf(f);
+    f.orphan = root.ppid === 1 || !isAlive(root.ppid);
   }
   return found;
 }
@@ -514,6 +548,8 @@ export function shotLikelyTooBig({ w, h, format }) {
 // --- CLI --------------------------------------------------------------------
 
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+  // Only the CLI mode validates argv; importers never pay for it.
+  cli({ bools: ["all", "reap"], file: import.meta.url });
   const argv = process.argv.slice(2);
   const all = argv.includes("--all");
   const doReap = argv.includes("--reap");
@@ -544,3 +580,21 @@ if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.me
   console.log(left.length ? `${left.length} survived SIGKILL: ${left.map((l) => l.pid).join(", ")}` : "all orphans reaped.");
   process.exit(left.length ? 1 : 0);
 }
+
+/**
+ * The headless flag set every CDP script starts from. Tools add their own on top
+ * (viewport, autoplay, GL backend); these are the ones that must never differ
+ * between the two sides of a comparison — throttling and backgrounding flags
+ * change what a frame contains.
+ */
+export const headlessArgs = ({ port, width = 1280, height = 800, sentinelUrl }) => [
+  "--headless=new",
+  `--remote-debugging-port=${port}`,
+  "--no-first-run",
+  "--disable-background-timer-throttling",
+  "--disable-renderer-backgrounding",
+  "--disable-backgrounding-occluded-windows",
+  "--mute-audio",
+  `--window-size=${width},${height}`,
+  ...(sentinelUrl ? [sentinelUrl] : []),
+];

@@ -19,20 +19,23 @@
  * verify-reassembly.mjs, and the mirror gate already proved the bytes).
  *
  *   node scripts/census-bundles.mjs --dir mirror/_nuxt --out docs/bundle-census.json
+ *
+ * 中文规格（自 scripts/README.md 迁入，v0.3.21；本表另一拼写：`census-bundles.mjs`）
+ * **无容器产物的 chunk 级坐标账本**：scope-hoisted 输出没有容器可读（module-map 用不上），逐 chunk 记 sha256/字节/行数 + ESM import/export 边——chunk 图是 require 边在上一层的对应物;import 别名（`ap as Vector2`）本身就是一级命名证据。源自 hashgraphvc 复刻（Codex runtime）的项目内实现,泛化收编
+ * `node census-bundles.mjs --dir mirror/_nuxt --out docs/bundle-census.json [--md docs/chunk-graph.md]`(--md 生成逆向笔记用的 chunk 依赖图 markdown,别名样本随行)
  */
 import { readdir, readFile, writeFile, mkdir } from "node:fs/promises";
-import { createHash } from "node:crypto";
 import path from "node:path";
+import { cli } from "./lib/cli.mjs";
+import { sha256 } from "./lib/hash.mjs";
+
+cli({ known: ["dir", "out", "md"], bools: [], file: import.meta.url });
 
 const args = process.argv.slice(2);
 const flag = (n, d) => { const i = args.indexOf("--" + n); return i >= 0 && args[i + 1] !== undefined ? args[i + 1] : d; };
 const DIR = path.resolve(flag("dir", "mirror/_nuxt"));
 const OUT = path.resolve(flag("out", "docs/bundle-census.json"));
-const KNOWN = new Set(["dir", "out", "md"]);
-for (const a of args) if (a.startsWith("--") && !KNOWN.has(a.slice(2))) {
-  console.error(`FATAL — unknown flag ${a}. Known: ${[...KNOWN].map((f) => "--" + f).join(" ")}`);
-  process.exit(2);
-}
+// Unknown flags are rejected by lib/cli.mjs (the one argv contract) before anything here runs.
 
 const names = (await readdir(DIR)).filter((n) => /\.m?js$/.test(n)).sort();
 if (!names.length) { console.error(`FATAL — no .js chunks under ${DIR}.`); process.exit(2); }
@@ -61,7 +64,7 @@ for (const name of names) {
   if (/(?:^|[\n;}])export default /.test(src)) exportNames.push("default");
   chunks.push({
     file: name,
-    sha256: createHash("sha256").update(buf).digest("hex"),
+    sha256: sha256(buf),
     bytes: buf.length,
     lines: src.split("\n").length,
     imports,

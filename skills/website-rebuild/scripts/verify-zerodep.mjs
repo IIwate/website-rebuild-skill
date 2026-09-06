@@ -12,9 +12,17 @@
  * checking it, fails silently — and the check costs almost nothing.
  *
  *   node scripts/verify-zerodep.mjs [--dir scripts] [--tools tools]
+ *
+ * 中文规格（自 scripts/README.md 迁入，v0.3.21；本表另一拼写：`verify-zerodep.mjs`）
+ * **依赖分界门**：`scripts/` 下不许出现 node: 之外的 import，且没有任何门 import `tools/`。⚠ 存在的理由是这条纪律**被违反了八个版本**都没人发现——它的原文就写在被违反的文件上方三行。**只写在文档里、没有东西去查的规矩会安静失效**
+ * 依赖分界门：`scripts/` 下不许出现 node: 之外的 import，且没有任何门 import `tools/`。存在的理由是这条纪律**被违反了八个版本没人发现**
+ * `node scripts/verify-zerodep.mjs`
  */
 import { readdir, readFile } from "node:fs/promises";
 import path from "node:path";
+import { cli } from "./lib/cli.mjs";
+
+cli({ known: ["dir", "tools"], bools: [], file: import.meta.url });
 
 const args = process.argv.slice(2);
 const flag = (n, d) => { const i = args.indexOf("--" + n); return i >= 0 && args[i + 1] !== undefined ? args[i + 1] : d; };

@@ -9,17 +9,26 @@
  *
  *   node scripts/build-site.mjs --config scripts/shell-config.mjs
  *   node scripts/build-site.mjs --config scripts/shell-config.mjs --check
+ *   node scripts/build-site.mjs [--config scripts/shell-config.mjs] [--mirror mirror] [--out site] [--check]
  *
  *   --check   rebuild into site.check/ and diff against site/; exits non-zero on
  *             any difference. This is what makes "just regenerate it" a safe
  *             instruction rather than a hope.
  *
  * Config shape and every rule about it: scripts/shell-config.example.mjs.
+ *
+ * 中文规格（自 scripts/README.md 迁入，v0.3.21；本表另一拼写：`build-site.mjs`）
+ * **策略 A 构建层**：按 `shell-config.mjs` 的登记变换表从镜像生成 `site/`，逐条命中下限 + `--check` 可复现性 + 目的断言（下限说明变换还活着，目的断言说明它达成了目的）
+ * **策略 A 构建层**：从只读镜像按 `shell-config.mjs` 登记的变换生成 `site/`——内置 T-LOCALIZE（绝对 URL → 根相对 / `/ext/<host>/`，⭐ `__NUXT_DATA__` 等 devalue 数据岛自动豁免）与 T-NOINDEX，站点专用变换逐条带 id / 偏差号 / 命中计数；`floors` 是逐变换命中下限（防"变换静默没生效"），`purposeChecks` 断言目的本身（防"命中了但换个拼写还在"），`extras` 把端口构建产物复制进 site/。镜像神圣不改
+ * `node build-site.mjs --out site`（配置样例见同目录 `shell-config.example.mjs`）
  */
 import { mkdir, readFile, writeFile, rm, readdir } from "node:fs/promises";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { transformPage, transformIds } from "./lib/shell-build.mjs";
+import { cli } from "./lib/cli.mjs";
+
+cli({ known: ["config", "mirror", "out"], bools: ["check"], file: import.meta.url });
 
 const args = process.argv.slice(2);
 const flag = (n, d) => {
@@ -58,7 +67,7 @@ for (const page of PAGES) {
   for (const [k, n] of sub) subTotals.set(k, (subTotals.get(k) || 0) + n);
 
   // ⛔ THE DATA-ISLAND CARVE-OUT IS A TRADE, AND THIS IS THE HALF THAT SHIPS.
-  // Holding `__NUXT_DATA__` back from localisation (§4.18) protects the fields
+  // Holding `__NUXT_DATA__` back from localisation (payload-gates.md §6) protects the fields
   // the app PARSES — and preserves every other absolute URL in the island with
   // them. That is the class this table's shape 6 was written for: 11 media-host
   // URLs once survived every other spelling inside a serialised payload and the

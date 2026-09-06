@@ -29,10 +29,20 @@
  * entries you name and says so.
  *
  *   node scripts/cold-audit-modules.mjs --map docs/module-map.json \
- *        --closure docs/app-closure.json [--entry 14]
+ *        --closure docs/app-closure.json
+ *
+ * 中文规格（自 scripts/README.md 迁入，v0.3.21；本表另一拼写：`cold-audit-modules.mjs`）
+ * Reconciles owning module ids, including aliases and cross-chunk edges in a
+ * site-wide map. Container identity selects the factory signature; classic
+ * and arrow factories are supported. Report n/N examined, count factories
+ * without require bindings separately, and fail coverage below 80% even when
+ * computed-require candidates are also reported for review.
  */
 import { readFile } from "node:fs/promises";
 import path from "node:path";
+import { cli } from "./lib/cli.mjs";
+
+cli({ known: ["map", "closure"], bools: [], file: import.meta.url });
 
 const args = process.argv.slice(2);
 const flag = (n, d) => { const i = args.indexOf("--" + n); return i >= 0 && args[i + 1] !== undefined ? args[i + 1] : d; };
@@ -42,17 +52,36 @@ const CLO = JSON.parse(await readFile(path.resolve(flag("closure", "docs/app-clo
 // and a site-wide map (merged from per-chunk maps) tags every module with the
 // chunk it lives in. Read each module's own chunk; a single-file map still
 // works unchanged (no `chunk` field -> MAP.source).
+// ⭐ A MERGED map (tools/merge-module-maps.mjs) tags a module with `locations[]`
+// — one entry per chunk it is packed into, each carrying its own `source` path
+// and line/char span — instead of a flat `chunk` + `startLine`. This audit used
+// to accept only the flat shape and to name the file `<chunk>.pretty.js` beside
+// MAP.source, so a merged darkroom map (339 modules / 60 chunks) needed a
+// flattening pass plus a directory of symlinks just to be read (darkroom §F-9).
+// Normalize once: the canonical location (first) supplies chunk/source/lines.
+for (const m of MAP.modules) {
+  if (Array.isArray(m.locations) && m.locations.length && m.startLine == null) {
+    const loc = m.locations[0];
+    Object.assign(m, { chunk: loc.chunk, source: loc.source, startLine: loc.startLine, endLine: loc.endLine, startChar: loc.startChar, endChar: loc.endChar });
+  }
+}
 const srcCache = new Map();
 const srcOf = async (m) => {
-  const file = m.chunk ? path.join(path.dirname(path.resolve(MAP.source)), `${m.chunk}.pretty.js`) : path.resolve(MAP.source);
+  // A module that names its own source file wins; otherwise the flat-map
+  // convention (`<chunk>.pretty.js` beside MAP.source) still applies.
+  const file = m.source ? path.resolve(m.source)
+    : m.chunk ? path.join(path.dirname(path.resolve(MAP.source)), `${m.chunk}.pretty.js`) : path.resolve(MAP.source);
   if (!srcCache.has(file)) srcCache.set(file, (await readFile(file, "utf8")).split("\n"));
   return srcCache.get(file);
 };
-const SRC = MAP.chunks ? null : await srcOf({});
+const SRC = (MAP.chunks || MAP.modules.some((m) => m.source)) ? null : await srcOf({});
 
 const ported = new Set(CLO.modules.map(String));
 const all = MAP.modules;
 const byId = new Map(all.map((m) => [String(m.id), m]));
+for (const m of all) for (const a of m.aliases || []) if (!byId.has(String(a))) byId.set(String(a), m);
+const requiresOf = (m) => [...new Set([...(m.requires || []), ...(m.externalRequires || [])]
+  .map((id) => String(byId.get(String(id))?.id ?? id)))];
 const missing = all.filter((m) => !ported.has(String(m.id)));
 
 console.log(`=== cold-audit-modules ===`);
@@ -65,7 +94,7 @@ console.log(`  unaccounted for  ${missing.length}\n`);
 // cannot be computed statically.
 let dynamic = [];
 const resolved = [];
-const KNOWN = new Set(all.map((m) => String(m.id)));
+const KNOWN = new Set(byId.keys());
 // ⛔⛔ COUNT WHAT WAS ACTUALLY EXAMINED. This check reported
 // "no call site resembles a require with a computed id" after scanning ZERO of
 // 20 modules: its signature probe only matched webpack's `function(m, e, r)`,
@@ -115,6 +144,10 @@ for (const m of all) {
   if (TURBO) {
     const tsig = head.match(/(?:\(\s*(\w+)[^)]*\)|(\b\w+))\s*=>/);
     if (tsig) { R = tsig[1] || tsig[2]; viaCtx = true; }
+    else {
+      const tfn = head.match(/function\s*\(\s*(\w+)\s*\)\s*\{/);
+      if (tfn) { R = tfn[1]; viaCtx = true; }
+    }
   } else {
     // webpack: the require is the THIRD parameter, in both the `function` and
     // the arrow spelling.
@@ -130,7 +163,7 @@ for (const m of all) {
   examined++;
   if (noReq) { noReqCount++; continue; }
   // For Turbopack the call shape is `ctx.i(` / `ctx.r(`, not `ctx(`.
-  const re = viaCtx ? new RegExp(`\\b${R}\\.[ir]\\s*\\(`, "g") : new RegExp(`\\b${R}\\s*\\(`, "g");
+  const re = viaCtx ? new RegExp(`\\b${R}\\.[irA]\\s*\\(`, "g") : new RegExp(`\\b${R}\\s*\\(`, "g");
   for (const hit of body.matchAll(re)) {
     const after = body.slice(hit.index + hit[0].length, hit.index + hit[0].length + 60);
     // Literal string or number -> static. `R.d(`, `R.n(` etc are runtime helpers
@@ -168,7 +201,7 @@ for (const m of all) {
     // just trains the reader to skip the list.
     const argText = body.slice(hit.index + hit[0].length, k);
     const lits = [...argText.matchAll(/["']((?:[0-9a-f]{16,}|\d{1,6})|\.{1,2}\/[^"'`\s]+)["']/g)].map((x) => x[1]).filter((v) => KNOWN.has(v));
-    const recorded = lits.length > 0 && lits.every((v) => m.requires.map(String).includes(v));
+    const recorded = lits.length > 0 && lits.every((v) => requiresOf(m).includes(String(byId.get(v).id)));
     (recorded ? resolved : dynamic).push({
       id: String(m.id), line: lineNo, lits,
       snippet: (R + "(" + after).replace(/\s+/g, " ").slice(0, 70),
@@ -229,7 +262,7 @@ if (missing.length) {
   console.log(`\n  ${missing.length} module(s) not in the port. Each needs a reason, not a shrug:\n`);
   console.log(`    ${"id".padEnd(22)} ${"lines".padStart(6)}  ${"requires".padStart(8)}  required-by`);
   for (const m of missing.sort((a, b) => b.lines - a.lines)) {
-    const requiredBy = all.filter((x) => x.requires.map(String).includes(String(m.id))).map((x) => String(x.id));
+    const requiredBy = all.filter((x) => requiresOf(x).includes(String(m.id))).map((x) => String(x.id));
     const inPort = requiredBy.filter((r) => ported.has(r));
     console.log(`    ${String(m.id).padEnd(22)} ${String(m.lines).padStart(6)}  ${String(m.requires.length).padStart(8)}  ${requiredBy.length === 0 ? "(nobody)" : `${requiredBy.length}, ${inPort.length} of them ported`}`);
     // ⛔ A module nothing requires is dead. A module a PORTED module requires is
@@ -239,7 +272,7 @@ if (missing.length) {
       dynamic.push({ id: m.id, line: m.startLine, snippet: "required by a ported module but absent from the closure" });
     }
   }
-  const orphans = missing.filter((m) => !all.some((x) => x.requires.map(String).includes(String(m.id))));
+  const orphans = missing.filter((m) => !all.some((x) => requiresOf(x).includes(String(m.id))));
   console.log(`\n  ${orphans.length}/${missing.length} are required by NOTHING in the bundle — dead code the packer kept.`);
 }
 

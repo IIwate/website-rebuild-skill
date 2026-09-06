@@ -27,7 +27,7 @@
  *
  *   2. One side was missing a prerequisite action. A value read 0 on the port
  *      and 1080 on the mirror because the field is filled by a resize handler
- *      the probe page never triggers (verification-gates.md §0.25). ⭐ This is
+ *      the probe page never triggers (gate-case-design.md §4). ⭐ This is
  *      the gate EARNING ITS KEEP: one-sided, 0 looks like the answer.
  *
  *   3. The two sides differ in measurement conditions, not in behaviour. Page
@@ -46,7 +46,7 @@
  * under `info`.
  *
  *   node scripts/verify-crossside.mjs --a <mirror-url> --b <port-url> \
- *        --config scripts/crossside.config.mjs
+ *        --config scripts/crossside.config.mjs [--probe scripts/probe.mjs]
  *
  * The config module supplies what is target-specific:
  *
@@ -56,10 +56,18 @@
  *   export function build(cases) { return `...JS returning {out:{case:value}}...`; }
  *
  * See crossside.config.example.mjs.
+ *
+ * 中文规格（自 scripts/README.md 迁入，v0.3.21；本表另一拼写：`verify-crossside.mjs`）
+ * **跨侧门**：同一份输入同时喂镜像与移植，逐条比结果（站点侧写在 `crossside.config.mjs`，样例见 `crossside.config.example.mjs`）。用在源站**公开了接缝**时——bundle 没有模块注册表也可能有 `window.<Name> =` 这类模块顶层副作用，抓住编排层的那一个接缝，覆盖面远大于它的体积。⛔ 两侧**串行**求值，且每次运行给两侧取指纹、**URL 相同直接 FATAL**——并发探针会让第二个接到第一个拉起的浏览器，把一侧量两遍并报告**完美一致**。⛔ 用例分 `judged`（条件无关，逐字必须相同）与 `info`（条件相关，只打印但两侧都得解析得出来）
+ * 跨侧门：同一份输入同时喂镜像与移植并逐条比对。⛔ 两侧**串行**求值 + 每次取指纹，URL 相同直接 FATAL（并发探针会把一侧量两遍并报告完美一致）。用例分 `judged`（条件无关，必须相同）与 `info`（条件相关，只打印但两侧都得解析）
+ * `node scripts/verify-crossside.mjs --a <mirror> --b <port> --config scripts/crossside.config.mjs`
  */
 import { spawn } from "node:child_process";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
+import { cli } from "./lib/cli.mjs";
+
+cli({ known: ["a", "b", "config", "probe"], bools: [], file: import.meta.url });
 
 const args = process.argv.slice(2);
 const flag = (n, d) => { const i = args.indexOf("--" + n); return i >= 0 && args[i + 1] !== undefined ? args[i + 1] : d; };

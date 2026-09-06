@@ -92,6 +92,10 @@
 // one: the gate stays green, holding a real file up as evidence for a claim
 // about a different one. Escape flavour and escape depth are unbounded; the
 // shape list is not.
+//
+// 中文规格（自 scripts/README.md 迁入，v0.3.21；本表另一拼写：`lib/extract-refs.mjs`）
+// **唯一的资产引用提取器 + 唯一的"什么算文本"判定**，爬虫与 `verify-mirror.mjs` 的闭包门共用——门若自带一份正则，就会继承被审爬虫的盲区，然后报出一个"引用集 − 磁盘集 = ∅"的假绿。五种写法：绝对 / 协议相对 / 根相对属性（含 `poster`/`content`/`data-src` 等懒加载拼写）/ **`srcset` 逐候选** / CSS `url()`。`srcset` 是逗号分隔候选表，只有第一条前面有引号，引号锚定的正则一组只看得见 1/5 条，而账本看上去是齐的。**五种写法各跑两遍：原文一遍、解码归一后再一遍**（D-T10）——绝对 URL 的字符类排除反斜杠是**故意**的（匹配必须停在转义边界），代价是**用转义拼写的 URL 根本不会开始匹配**：`https:\/\/host\/path`（Liquid `\| json` / `json_encode`）、JSON 套 JSON 的 `https:\\/\\/…`、`/`、属性里的 `&#x2F;` 整类隐形。**因果链是这条脚本存在的理由本身**：发现侧正则残缺 → 引用集少一整类 → 闭包门在那个短了的集合上算差集 → **报"= ∅"并且是绿的**（门没有失败，它在一个已经错了的输入上正确地跑了；与"镜像要有自己的门"同族）。修法不是补两条正则而是**整套写法在解码视图上重跑一遍**，因为转义会与其它写法**复合**（JSON 里嵌 HTML 的转义 `srcset` 候选表，要同时看穿 `\"` 与 `\/`）。⛔ v0.3.15（raycastkbd）：**srcset 候选按构造是资产，`?url=` 图片代理是资产**——`addIfAsset` 的"同源无扩展名 = 页面"规则曾把 `/_next/image?url=…&w=640` 整族丢掉：srcset 形态找到 42 条、同一函数里全部丢弃、闭包报 ∅，盘上只有浏览器碰巧要过的 19 条且是 `*/*` 回退字节。现在 srcset 候选带 `{asset:true}` 直通，`[?&]url=` 的同源无扩展名 URL 视为资产，`<img src="/_next/image?…">` 这类裸属性另有 4a 形态；`/about?tab=2` 仍是页面
+// `import { createRefExtractor } from "./lib/extract-refs.mjs"`
 
 // WHICH FILES GET SCANNED AT ALL — a gate's INPUT, not its assertion
 // 【objectarchive N13 / D-T12】
@@ -126,6 +130,24 @@
 // Over-inclusion is the safe direction: scanning a binary as text costs one
 // wasted regex pass, while skipping a text file costs a class of references
 // that nothing downstream can recover.
+
+/**
+ * What a file EXTENSION looks like, as a RegExp source fragment — the ONE
+ * spelling every "does this URL end in an extension" test below builds on.
+ * ⚠ {1,12}, the same cap lib/urlpath.mjs uses to decide page-vs-asset when it
+ * maps a URL to disk. The extractor carried its own `{2,5}` in five places, so
+ * `/site.webmanifest` (11), `/x.jsonld` (6) and `/x.geojson` (7) were "pages"
+ * here — never queued as assets — while the mapper called them assets; the
+ * closure gate shared the blind spot and reported ∅. Two copies of one rule
+ * drift; this is the copy, and urlpath.mjs's inline test cites it.
+ */
+export const EXT = "[a-z0-9]{1,12}";
+// Compiled once; the shapes below are built from EXT, never spelled again.
+const EXT_END = new RegExp(`\\.${EXT}$`, "i");
+const EXT_END_OR_QUERY = new RegExp(`\\.${EXT}($|\\?)`, "i");
+const ROOT_ATTR_RE = new RegExp(`(?:src|href|poster|content|data-src|data-poster|data-bg)=["'](\\/(?!\\/)[^"']+?\\.${EXT}(?:\\?[^"']*)?)["']`, "gi");
+const ROOT_LITERAL_RE = new RegExp(`["'](\\/(?!\\/)[A-Za-z0-9_\\-./@]+\\.${EXT})(\\?[^"']*)?["']`, "gi");
+const RELATIVE_ATTR_RE = new RegExp(`(?:src|href|poster|data-[a-z0-9-]+)\\s*=\\s*["']((?:\\.\\/)?[a-zA-Z0-9_][^"'<>\\s]*?\\.${EXT}(?:\\?[^"']*)?)["']`, "gi");
 
 /** Extensions whose bytes are text worth rescanning for references. */
 export const TEXT_REF_EXT =
@@ -318,7 +340,10 @@ export function createRefExtractor({ origin, originHost, assetHosts, onOffHost }
   const offHost = typeof onOffHost === "function" ? onOffHost : () => {};
   const ORIGIN = String(origin || "").replace(/\/+$/, "");
 
-  const addIfAsset = (rawUrl, urls) => {
+  // `asset: true` — the CALLER knows this is an asset (a srcset candidate is an
+  // image by construction), so the page-vs-asset heuristic below must not
+  // second-guess it.
+  const addIfAsset = (rawUrl, urls, { asset = false } = {}) => {
     // ⛔ A TEMPLATE PREFIX IS NOT AN ADDRESS. A URL assembled at runtime —
     //     `https://cdn.jsdelivr.net/npm/${pkg}@${ver}/dist/x.wasm`
     // scans statically as everything up to the first `${`, and that fragment is
@@ -329,9 +354,15 @@ export function createRefExtractor({ origin, originHost, assetHosts, onOffHost }
     if (/\$\{|\$$/.test(rawUrl)) return;
     try {
       const u = new URL(rawUrl);
-      if (!hosts.has(u.hostname)) return void offHost(u.hostname, u.href);
-      // Same-origin URLs without an extension are pages, not assets.
-      if (u.hostname === originHost && !/\.[a-z0-9]{2,5}($|\?)/i.test(u.pathname)) return;
+      if (!hosts.has(u.hostname)) return void offHost(u.hostname, u.href, { asset });
+      // Same-origin URLs without an extension are pages, not assets —
+      // ⛔ UNLESS the caller vouched for it (srcset candidate) or the URL is an
+      // image-optimiser PROXY: `/_next/image?url=…&w=640&q=75` has no extension
+      // and never will, yet it is the byte the browser paints. This rule
+      // silently dropped every such rung for eight versions while the srcset
+      // shape below "found" them — raycastkbd: 42 rungs in the HTML, 19 on
+      // disk, closure ∅ throughout.
+      if (!asset && u.hostname === originHost && !looksLikeAsset(u.href)) return;
       u.hash = "";
       urls.add(u.href);
     } catch {}
@@ -341,6 +372,16 @@ export function createRefExtractor({ origin, originHost, assetHosts, onOffHost }
   // then decoded (see header — escaped spellings compose with every shape, so
   // the shapes are re-run rather than duplicated).
   const scan = (text, baseUrl, urls) => {
+    // ⚠ Root-relative means relative to the DOCUMENT'S host, not the site's.
+    // A playlist mirrored from video.twimg.com that says "/ext_tw_video/…"
+    // means video.twimg.com/ext_tw_video/… — the browser resolves it against
+    // the document it came from. Joining ORIGIN unconditionally re-homed 42
+    // real HLS refs onto the origin and the closure gate demanded files from
+    // a host that never served them (measured on rauchg, cross-host fMP4 HLS).
+    let DOC_ORIGIN = ORIGIN;
+    if (baseUrl) {
+      try { DOC_ORIGIN = new URL(baseUrl).origin; } catch {}
+    }
     // 1. absolute URLs
     for (const m of text.matchAll(/https?:\/\/[a-z0-9.-]+\/[^\s"'`\\<>{}|^\][]+/gi)) {
       // ⚠ Parens are handled by BALANCE, not by presence. A URL really can end
@@ -379,10 +420,8 @@ export function createRefExtractor({ origin, originHost, assetHosts, onOffHost }
     // also start with "/", and without it they get joined onto ORIGIN as
     // https://host//host/path — 77 phantom 404s on the first Shopify target
     // (racingshop-rebuild). Shape 2 already handled those.
-    for (const m of text.matchAll(
-      /(?:src|href|poster|content|data-src|data-poster|data-bg)=["'](\/(?!\/)[^"']+?\.[a-z0-9]{2,5}(?:\?[^"']*)?)["']/gi,
-    )) {
-      addIfAsset(ORIGIN + decodeEntities(m[1]), urls);
+    for (const m of text.matchAll(ROOT_ATTR_RE)) {
+      addIfAsset(DOC_ORIGIN + decodeEntities(m[1]), urls);
     }
     // 3b. root-relative paths as PLAIN STRING LITERALS, not in an attribute.
     // Shape 3 requires src=/href=/poster=…, which is right for markup and blind
@@ -401,8 +440,8 @@ export function createRefExtractor({ origin, originHost, assetHosts, onOffHost }
     // Deliberately still requires a file EXTENSION: without it every route
     // string ("/about", "/works/x") becomes a phantom asset. Route strings are
     // the page queue's business, not the asset extractor's.
-    for (const m of text.matchAll(/["'](\/(?!\/)[A-Za-z0-9_\-./@]+\.[a-z0-9]{2,5})(\?[^"']*)?["']/gi)) {
-      addIfAsset(ORIGIN + decodeEntities(m[1] + (m[2] || "")), urls);
+    for (const m of text.matchAll(ROOT_LITERAL_RE)) {
+      addIfAsset(DOC_ORIGIN + decodeEntities(m[1] + (m[2] || "")), urls);
     }
     // 4. srcset / imagesrcset candidate lists — one entry per candidate, not
     // one per attribute (see header).
@@ -410,10 +449,19 @@ export function createRefExtractor({ origin, originHost, assetHosts, onOffHost }
       for (const cand of decodeEntities(m[1]).split(",")) {
         const ref = cand.trim().split(/\s+/)[0];
         if (!ref) continue;
-        if (ref.startsWith("//")) addIfAsset("https:" + ref, urls);
-        else if (/^https?:\/\//i.test(ref)) addIfAsset(ref, urls);
-        else if (ref.startsWith("/")) addIfAsset(ORIGIN + ref, urls);
+        // A srcset candidate is an image by construction — vouch for it, or the
+        // extensionless-proxy rungs (`/_next/image?url=…`) die in addIfAsset.
+        if (ref.startsWith("//")) addIfAsset("https:" + ref, urls, { asset: true });
+        else if (/^https?:\/\//i.test(ref)) addIfAsset(ref, urls, { asset: true });
+        else if (ref.startsWith("/")) addIfAsset(DOC_ORIGIN + ref, urls, { asset: true });
       }
+    }
+    // 4a. The same proxy in a plain src/href/poster attribute (no srcset):
+    // `<img src="/_next/image?url=…&w=1080">`, `<link rel="preload" as="image"
+    // href="/_next/image?…">`. Extensionless, so shape 3 never sees it; the
+    // `url=` rule in addIfAsset admits it and keeps `/about?x=1` a page.
+    for (const m of text.matchAll(/\b(?:src|href|poster|data-src)=["'](\/(?!\/)[^"'\s]*\?[^"'\s]*)["']/gi)) {
+      addIfAsset(DOC_ORIGIN + decodeEntities(m[1]), urls);
     }
     // 4b. A REFERENCE NESTED IN ANOTHER URL'S QUERY. An image-optimisation
     // endpoint names its subject in a parameter:
@@ -441,7 +489,7 @@ export function createRefExtractor({ origin, originHost, assetHosts, onOffHost }
       let inner = raw;
       try { inner = decodeURIComponent(inner); } catch {}
       if (/^https?:\/\//i.test(inner)) addIfAsset(inner, urls);
-      else if (inner.startsWith("/") && /\.[a-z0-9]{2,5}$/i.test(inner.split("?")[0])) addIfAsset(ORIGIN + inner, urls);
+      else if (inner.startsWith("/") && EXT_END.test(inner.split("?")[0])) addIfAsset(DOC_ORIGIN + inner, urls);
     }
 
     // 4c. RELATIVE MODULE SPECIFIERS in JS. Vite writes its chunk manifest as
@@ -488,7 +536,7 @@ export function createRefExtractor({ origin, originHost, assetHosts, onOffHost }
     //   (import maps and __vite__mapDeps are shape territory elsewhere);
     //   CSS already has shape 5 with correct base semantics.
     if (baseUrl && !/\.(m?js|css)($|\?)/i.test(baseUrl)) {
-      for (const m of text.matchAll(/(?:src|href|poster|data-[a-z0-9-]+)\s*=\s*["']((?:\.\/)?[a-zA-Z0-9_][^"'<>\s]*?\.[a-z0-9]{2,5}(?:\?[^"']*)?)["']/gi)) {
+      for (const m of text.matchAll(RELATIVE_ATTR_RE)) {
         const v = m[1];
         if (/^(?:https?:|\/|#|data:|mailto:|tel:|javascript:)/i.test(v)) continue;
         if (!v.includes("/")) continue;
@@ -547,7 +595,7 @@ const TELEMETRY_HOST = /googletagmanager|google-analytics|doubleclick|facebook|c
 export const looksLikeAsset = (href) => {
   try {
     const u = new URL(href);
-    return /\.[a-z0-9]{2,5}($|\?)/i.test(u.pathname + (u.search || ""));
+    return EXT_END.test(u.pathname) || /[?&]url=/i.test(u.search);
   } catch {
     return false;
   }
@@ -573,7 +621,7 @@ export const looksLikeAsset = (href) => {
 export function createOffHostCensus() {
   const seen = new Map(); // host -> { n, sample, assetSample }
   return {
-    onOffHost(host, href) {
+    onOffHost(host, href, { asset = false } = {}) {
       let e = seen.get(host);
       if (!e) seen.set(host, (e = { n: 0, sample: href, assetSample: null }));
       e.n += 1;
@@ -586,7 +634,7 @@ export function createOffHostCensus() {
       // and says nothing about it — the precise failure this census exists to
       // end, rebuilt one level up. Keep the first asset-SHAPED reference too,
       // and judge on that.
-      if (!e.assetSample && looksLikeAsset(href)) e.assetSample = href;
+      if (!e.assetSample && (asset || looksLikeAsset(href))) e.assetSample = href;
     },
     get size() {
       return seen.size;

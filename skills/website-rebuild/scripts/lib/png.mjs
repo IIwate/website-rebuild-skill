@@ -17,6 +17,11 @@
 // during the M5.10 diagnosis. decodePng therefore now NORMALIZES its output to
 // RGBA (channels always 4, alpha 255): linear hashing stays valid and per-pixel
 // indexing can no longer be silently wrong.
+//
+// 中文规格（自 scripts/README.md 迁入，v0.3.21；本表另一拼写：`lib/png.mjs`）
+// 零依赖 PNG 编解码
+// 零依赖 PNG 编解码 + 图像统计/比对（恒输出 RGBA——kimi M7.3 colorType 事故的防呆）
+// `import { decodePng, encodePng, compare, imageStats } from "./lib/png.mjs"`
 
 import zlib from "node:zlib";
 

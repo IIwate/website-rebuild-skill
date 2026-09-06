@@ -39,11 +39,18 @@
  *
  *   node scripts/slice-esm.mjs --in src/site/_nuxt/DqcYvDA3.js \
  *        --out src/readable/DqcYvDA3 [--fn-lines 12]
+ *
+ * 中文规格（自 scripts/README.md 迁入，v0.3.21；本表另一拼写：`slice-esm.mjs`）
+ * **拼接式分解切片器**（无容器 scope-hoisted 产物的语义源码层,`readable-source.md` §3.0.6）：把一个 ESM chunk 切成按声明命名的部件文件,**按序拼接逐字节等于原件**——不重写,求值顺序与作用域构造性不变。切点只在可证明安全处（深度 0 + 前 token `;`/`}` + 后 token 起始声明）,漏切只更粗、错切不可能;文件名取声明自己的标识符（一级证据）;写盘前先自证重拼
+ * `node slice-esm.mjs --in src/site/_nuxt/X.js --out src/readable/X`
  */
 import { readFile, writeFile, mkdir, rm } from "node:fs/promises";
 import { spawnSync } from "node:child_process";
-import { createHash } from "node:crypto";
 import path from "node:path";
+import { cli } from "./lib/cli.mjs";
+import { sha256 } from "./lib/hash.mjs";
+
+cli({ known: ["in", "out", "fn-lines"], bools: [], file: import.meta.url });
 
 const ACORN_VERSION = "8.14.0"; // PINNED — token shapes are the contract.
 
@@ -56,15 +63,10 @@ if (!IN || !OUT) {
   console.error("usage: slice-esm.mjs --in <chunk.js> --out <dir> [--fn-lines 12]");
   process.exit(2);
 }
-const KNOWN = new Set(["in", "out", "fn-lines"]);
-for (const a of args) if (a.startsWith("--") && !KNOWN.has(a.slice(2))) {
-  console.error(`FATAL — unknown flag ${a}. Known: ${[...KNOWN].map((f) => "--" + f).join(" ")}`);
-  process.exit(2);
-}
+// Unknown flags are rejected by lib/cli.mjs (the one argv contract) before anything here runs.
 
 const SRC = await readFile(path.resolve(IN), "utf8");
-const sha = (s) => createHash("sha256").update(s).digest("hex");
-const CHUNK_SHA = sha(SRC);
+const CHUNK_SHA = sha256(SRC);
 
 // Tokenize with the same pinned-npx pattern as module-map.mjs — never a
 // hand-rolled lexer (a regex literal containing a quote once desynced one by
@@ -211,13 +213,13 @@ for (let k = 0; k + 1 < bounds.length; k++) {
   parts.push({
     file: `${String(parts.length).padStart(3, "0")}-${nm}.js`,
     kind: kinds[k], start: s, end: e, startLine: lineOf(s),
-    lines: text.split("\n").length, bytes: Buffer.byteLength(text), sha256: sha(text), text,
+    lines: text.split("\n").length, bytes: Buffer.byteLength(text), sha256: sha256(text), text,
   });
 }
 
 // ⭐ Prove reassembly BEFORE writing: the tool never emits a decomposition it
 // cannot put back together.
-if (sha(parts.map((p) => p.text).join("")) !== CHUNK_SHA) {
+if (sha256(parts.map((p) => p.text).join("")) !== CHUNK_SHA) {
   console.error("FATAL — reassembled slices do not hash back to the input. Nothing written.");
   process.exit(5);
 }

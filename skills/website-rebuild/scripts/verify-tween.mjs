@@ -21,12 +21,20 @@
  * need live layout the probe page does not have, and applying the SAME override
  * to both cannot mask a difference between them (REBUILD_PLAN §6 D6).
  *
- *   node scripts/verify-tween.mjs --a <urlA> --b <urlB> [--tol 1e-9]
+ *   node scripts/verify-tween.mjs --a <urlA> --b <urlB> [--tol 1e-9] [--probe scripts/probe.mjs]
  *   node scripts/verify-tween.mjs --a <urlA> --record docs/tween-baseline.json
+ *
+ * 中文规格（自 scripts/README.md 迁入，v0.3.21；本表另一拼写：`verify-tween.mjs`）
+ * **竖切的数值门**：同一关键帧规格喂两侧、逐点比补间值与缓动曲线。比像素门**早得多**判红，且失败会带上产生它的输入。⛔ 用例的字段名与值域必须从源码抄——第一版凭直觉写，六个用例全落在同一条曲线上、全绿、零区分力
+ * **tween 切片的数值门**：像素裁判需要整页建完、来得太晚，而错的缓动曲线到达时长得像"风格差异"——对切出的 tween 子系统直接数值断言
+ * `node verify-tween.mjs`
  */
 import { readFile, writeFile, mkdir } from "node:fs/promises";
 import path from "node:path";
 import { spawn } from "node:child_process";
+import { cli } from "./lib/cli.mjs";
+
+cli({ known: ["a", "b", "record", "tol", "probe"], bools: [], file: import.meta.url });
 
 const args = process.argv.slice(2);
 const flag = (n, d) => { const i = args.indexOf("--" + n); return i >= 0 && args[i + 1] !== undefined ? args[i + 1] : d; };

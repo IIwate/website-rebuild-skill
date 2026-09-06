@@ -39,20 +39,31 @@
  *   node scripts/wayback-mirror.mjs --origin https://darknetflix.io \
  *        [--hosts cdn.example.com] [--anchor 20200626202014 | auto]
  *        [--window-days 365] [--out mirror] [--workers 2] [--include-3xx]
+ *        [--limit N] [--seeds urls.txt]
+ *
+ * 中文规格（自 scripts/README.md 迁入，v0.3.21；本表另一拼写：`wayback-mirror.mjs`）
+ * **X 类抢救:死站 → 标准镜像**(`references/archival-rescue.md`)。CDX 枚举 → 锚点+时间窗逐 URL 选连贯捕获(auto 锚点 = 根页 200 最密年代取中位,抢注者时代的 301 垃圾靠状态码+窗口出局)→ `id_` 旗抓**原始字节**(绝不镜像被注入改写的回放 HTML)→ 产出与 mirror-site 同构的 mirror/ + 账本 + `wayback-provenance.json`(逐文件捕获时间戳/digest,死站的坐标系)。⛔ **洞是既成事实**:登记进 `wayback-holes.txt`(即 verify-mirror 的 --allow-missing 清单);⭐ **别名回填**——洞的同名文件在窗口内有捕获时抓来存到被引用路径,单列 FILLED BY ALIAS 段,推断不冒充捕获。默认 2 worker + 350ms + 指数退避:**抢救不是竞速**
+ * `node wayback-mirror.mjs --origin https://dead.example --anchor auto --window-days 365`
  */
 import { mkdir, writeFile, readFile } from "node:fs/promises";
-import { createHash } from "node:crypto";
 import path from "node:path";
+import { sha256 } from "./lib/hash.mjs";
+// Same three ledgers as mirror-site.mjs, written by the same code (lib/ledger.mjs).
+import { readManifest, writeManifest, writeInventory, writeRedirects } from "./lib/ledger.mjs";
 import { localRelPath, canonicalUrl } from "./lib/urlpath.mjs";
 import { createRefExtractor, isTextRefSource } from "./lib/extract-refs.mjs";
+import { cli } from "./lib/cli.mjs";
+
+// An unknown flag is FATAL, not ignored; the check (and --help) lives in
+// lib/cli.mjs, the one argv contract every script shares.
+cli({
+  known: ["origin", "hosts", "anchor", "window-days", "out", "workers", "limit", "seeds"],
+  bools: ["include-3xx"],
+  file: import.meta.url,
+});
 
 const args = process.argv.slice(2);
 const flag = (n, d) => { const i = args.indexOf("--" + n); return i >= 0 && args[i + 1] !== undefined ? args[i + 1] : d; };
-const KNOWN = new Set(["origin", "hosts", "anchor", "window-days", "out", "workers", "include-3xx", "limit", "seeds"]);
-for (const a of args) if (a.startsWith("--") && !KNOWN.has(a.slice(2))) {
-  console.error(`FATAL — unknown flag ${a}. Known: ${[...KNOWN].map((f) => "--" + f).join(" ")}`);
-  process.exit(2);
-}
 
 const ORIGIN = (flag("origin", "") || "").replace(/\/$/, "");
 if (!ORIGIN) { console.error("usage: wayback-mirror.mjs --origin https://dead.example [--hosts cdn.x] [--anchor auto] ..."); process.exit(2); }
@@ -65,7 +76,6 @@ const INCLUDE_3XX = args.includes("--include-3xx");
 const LIMIT = Number(flag("limit", "0")); // 0 = no limit; for dry recon runs
 const SEEDS_FILE = flag("seeds", null);
 
-const sha256 = (buf) => createHash("sha256").update(buf).digest("hex");
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const tsToMs = (ts) => Date.parse(`${ts.slice(0, 4)}-${ts.slice(4, 6)}-${ts.slice(6, 8)}T${ts.slice(8, 10) || "00"}:${ts.slice(10, 12) || "00"}:${ts.slice(12, 14) || "00"}Z`);
 
@@ -87,8 +97,9 @@ async function politeFetch(url, { tries = 5 } = {}) {
 
 // Carry over an existing ledger (same promise as mirror-site.mjs: a gap-fill
 // that forgets what it is being added to is not the same ledger).
-let carried = {};
-try { carried = JSON.parse(await readFile(path.join(OUT, "mirror-manifest.json"), "utf8")).files || {}; } catch {}
+// (lib/ledger.mjs: absent -> null; a manifest that exists but is not one throws
+// rather than being silently replaced.)
+const carried = ((await readManifest(OUT)) || { files: {} }).files;
 let carriedProv = {};
 try { carriedProv = JSON.parse(await readFile(path.join(OUT, "wayback-provenance.json"), "utf8")); } catch {}
 
@@ -137,8 +148,8 @@ if (args.includes("--window-days")) { carriedProv.seedWindowDays = WINDOW_DAYS; 
     carriedProv.files = carriedProv.files || {}; carriedProv.files[u] = { timestamp: landedTs, digest: null, seeded: true };
     got++;
   }
-  await writeFile(path.join(OUT, "mirror-manifest.json"), JSON.stringify({ origin: ORIGIN, mirroredAt: new Date().toISOString(), waybackAnchor: anchor, waybackWindowDays: carriedProv.windowDays || WINDOW_DAYS, files: manifest2 }, null, 2));
-  await writeFile(path.join(OUT, "inventory.tsv"), ["SHA256", "BYTES", "PATH", "URL"].join("\t") + "\n" + Object.entries(manifest2).map(([u, m]) => [m.sha256, m.bytes, m.path, u].join("\t")).join("\n") + "\n");
+  await writeManifest(OUT, { origin: ORIGIN, waybackAnchor: anchor, waybackWindowDays: carriedProv.windowDays || WINDOW_DAYS, files: manifest2 });
+  await writeInventory(OUT, manifest2);
   await writeFile(path.join(OUT, "wayback-provenance.json"), JSON.stringify(carriedProv, null, 2));
   console.log(`Done (seeds): ${got}/${seeds.length} rescued from the archive; ${seeds.length - got} have no in-window capture (register as holes).`);
   process.exit(0);
@@ -261,14 +272,13 @@ console.log(`  fetched ${done}/${chosen.length}; ${failures.length} failure(s)`)
 
 // ---- 5. ledgers (same shape as mirror-site.mjs) ----------------------------
 await mkdir(OUT, { recursive: true });
-await writeFile(path.join(OUT, "mirror-manifest.json"), JSON.stringify({
-  origin: ORIGIN, mirroredAt: new Date().toISOString(),
-  waybackAnchor: ANCHOR, waybackWindowDays: WINDOW_DAYS,
-  files: Object.fromEntries(Object.entries(manifest).map(([u, m]) => [u, { path: m.path, bytes: m.bytes, sha256: m.sha256, type: m.type }])),
-}, null, 2));
-await writeFile(path.join(OUT, "inventory.tsv"),
-  ["SHA256", "BYTES", "PATH", "URL"].join("\t") + "\n" + Object.entries(manifest).map(([u, m]) => [m.sha256, m.bytes, m.path, u].join("\t")).join("\n") + "\n");
-await writeFile(path.join(OUT, "redirects.tsv"), "CODE\tFROM\tTO\n");
+// The manifest rows carry only the crawler's fields; capture provenance goes
+// to wayback-provenance.json below.
+const ledgerFiles = () => Object.fromEntries(Object.entries(manifest).map(([u, m]) => [u, { path: m.path, bytes: m.bytes, sha256: m.sha256, type: m.type }]));
+await writeManifest(OUT, { origin: ORIGIN, waybackAnchor: ANCHOR, waybackWindowDays: WINDOW_DAYS, files: ledgerFiles() });
+await writeInventory(OUT, manifest);
+// An archive rescue records no redirects: header only, so serve's reader finds the ledger it expects.
+await writeRedirects(OUT, []);
 await writeFile(path.join(OUT, "wayback-provenance.json"), JSON.stringify({
   anchor: ANCHOR, windowDays: WINDOW_DAYS, hosts: HOSTS,
   files: Object.fromEntries(Object.entries(manifest).map(([u, m]) => [u, m.wayback])),
@@ -293,7 +303,13 @@ const extract = createRefExtractor({
   origin: ORIGIN,
   originHost: ORIGIN_HOST,
   assetHosts: LEDGER_HOSTS,
-  onOffHost: (u) => { try { const h = new URL(u).host; offHostCensus.set(h, (offHostCensus.get(h) || 0) + 1); } catch {} },
+  // ⛔ The extractor's contract is onOffHost(host, href) — a BARE host, not a
+  // URL. The first version here did `new URL(u).host` on it, which THROWS on a
+  // bare host, and the catch {} swallowed every call: the census printed
+  // nothing for a page that references fonts.googleapis.com and player.vimeo.com
+  // (measured on first-launch.com — the fonts were only caught by reading the
+  // HTML by hand). A silent catch around an interface is how a census dies.
+  onOffHost: (host) => { offHostCensus.set(host, (offHostCensus.get(host) || 0) + 1); },
 });
 const holeRefs = new Map(); // url -> [referrers]
 for (const [u, m] of Object.entries(manifest)) {
@@ -368,13 +384,8 @@ for (const [holeUrl] of [...holeRefs]) {
 if (aliasFilled.size) {
   console.log(`  alias-filled ${aliasFilled.size} hole(s) from same-basename in-window captures`);
   // Re-write the ledgers with the filled entries included.
-  await writeFile(path.join(OUT, "mirror-manifest.json"), JSON.stringify({
-    origin: ORIGIN, mirroredAt: new Date().toISOString(),
-    waybackAnchor: ANCHOR, waybackWindowDays: WINDOW_DAYS,
-    files: Object.fromEntries(Object.entries(manifest).map(([u, m]) => [u, { path: m.path, bytes: m.bytes, sha256: m.sha256, type: m.type }])),
-  }, null, 2));
-  await writeFile(path.join(OUT, "inventory.tsv"),
-    ["SHA256", "BYTES", "PATH", "URL"].join("\t") + "\n" + Object.entries(manifest).map(([u, m]) => [m.sha256, m.bytes, m.path, u].join("\t")).join("\n") + "\n");
+  await writeManifest(OUT, { origin: ORIGIN, waybackAnchor: ANCHOR, waybackWindowDays: WINDOW_DAYS, files: ledgerFiles() });
+  await writeInventory(OUT, manifest);
   await writeFile(path.join(OUT, "wayback-provenance.json"), JSON.stringify({
     anchor: ANCHOR, windowDays: WINDOW_DAYS, hosts: HOSTS,
     files: Object.fromEntries(Object.entries(manifest).map(([u, m]) => [u, m.wayback])),

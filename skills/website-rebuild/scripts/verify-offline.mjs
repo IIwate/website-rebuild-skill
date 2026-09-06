@@ -25,7 +25,16 @@
  * Usage:
  *   node scripts/verify-offline.mjs --base http://127.0.0.1:29001 --routes /,/x,/y
  *   node scripts/verify-offline.mjs --url http://127.0.0.1:29001/en
+ *
+ * 中文规格（自 scripts/README.md 迁入，v0.3.21；本表另一拼写：`verify-offline.mjs`）
+ * **零外联门的静态一半**：枚举产出字节里每个外部绝对 URL 并逐条裁决（§1.6 的四类断言面里，资源级探针看不见的那三类）
+ * **零外联门的静态半边**（资源级半边是 `probe.mjs --no-external`）：产出字节里的外部绝对 URL 普查——class 1 连接热身（preconnect/dns-prefetch）、class 2/3 调用点（sendBeacon/fetch/Image 携带外部字面量），census 里每个 host 必须在 `mirror/external.txt` 有登记行
+ * `node verify-offline.mjs --base http://127.0.0.1:<port> --routes /,/about`
  */
+import { cli } from "./lib/cli.mjs";
+
+cli({ known: ["base", "routes", "url"], file: import.meta.url });
+
 const args = process.argv.slice(2);
 const flag = (n, d) => {
   const i = args.indexOf("--" + n);

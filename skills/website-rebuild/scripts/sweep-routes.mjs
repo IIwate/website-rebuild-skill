@@ -31,38 +31,30 @@
  *        [--eval "<js, result recorded per route>"]
  *        [--allow-external vimeo.com,i.vimeocdn.com]
  *        [--out docs/sweep.tsv] [--cdp-port N] [--width 1280] [--height 800]
+ *        [--routes /,/about] [--allow-errors <re>] [--allow-failures <re>]
+ *
+ * 中文规格（自 scripts/README.md 迁入，v0.3.21；本表另一拼写：`sweep-routes.mjs`）
+ * **渲染广度门:全路由,一个浏览器**。
+ * 逐路由记 page errors / 请求失败 / 外联,`--interact` 跑交互钩子(入场点击等 load 到不了的状态),`--eval` 逐路由采集(如音频池普查);`--allow-external` 放行已登记的 EMBED 主机——⭐ 允许主机上的 4xx 是它的离域行为不判红(域名锁 Vimeo 实测),自家 origin 的 4xx 照红。分工:本门管广度(每路由一状态),probe 管深度(单路由走查/截图/长观察)
+ * `node sweep-routes.mjs --base <port> --pages docs/pages.json --interact '<js>' --eval '<js>' --allow-external vimeo.com --out docs/sweep.tsv`
  */
 import { readFileSync, writeFileSync } from "node:fs";
-import { access } from "node:fs/promises";
 import path from "node:path";
 import { resolvePort, chromeSentinel, assertOwnBrowser } from "./lib/ports.mjs";
-import { launchChrome, preflightChrome } from "./lib/chrome.mjs";
+import { findChrome, headlessArgs, launchChrome, preflightChrome } from "./lib/chrome.mjs";
+import { connectCdp } from "./lib/cdp.mjs";
+import { cli } from "./lib/cli.mjs";
 
-// Chrome discovery: first existing candidate wins; override with CHROME_PATH.
-const CHROME_CANDIDATES = [
-  process.env.CHROME_PATH,
-  "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
-  "/Applications/Chromium.app/Contents/MacOS/Chromium",
-  "/usr/bin/google-chrome",
-  "/usr/bin/chromium",
-  "/usr/bin/chromium-browser",
-].filter(Boolean);
-async function findChrome() {
-  for (const c of CHROME_CANDIDATES) {
-    try { await access(c); return c; } catch {}
-  }
-  console.error("FATAL: Chrome not found. Set CHROME_PATH.");
-  process.exit(3);
-}
+// Unknown flags are fatal — the check lives in lib/cli.mjs (probe.mjs's header
+// tells why); this is the set it validates against.
+cli({
+  known: ["base", "routes", "pages", "wait", "interact", "interact-wait", "eval", "allow-external",
+    "allow-errors", "allow-failures", "out", "cdp-port", "width", "height"],
+  file: import.meta.url,
+});
 
 const args = process.argv.slice(2);
 const flag = (n, d) => { const i = args.indexOf("--" + n); return i >= 0 && args[i + 1] !== undefined ? args[i + 1] : d; };
-const KNOWN = new Set(["base", "routes", "pages", "wait", "interact", "interact-wait", "eval", "allow-external", "allow-errors", "out", "cdp-port", "width", "height"]);
-for (const a of args) if (a.startsWith("--") && !KNOWN.has(a.slice(2))) {
-  console.error(`FATAL — unknown flag ${a}. Known: ${[...KNOWN].map((f) => "--" + f).join(" ")}`);
-  process.exit(2);
-}
-
 const BASE = (flag("base", "") || "").replace(/\/$/, "");
 if (!BASE) { console.error("usage: sweep-routes.mjs --base <url> (--routes /,/a | --pages docs/pages.json) [...]"); process.exit(2); }
 const WAIT = Number(flag("wait", "6000"));
@@ -70,12 +62,25 @@ const INTERACT = flag("interact", null);
 const INTERACT_WAIT = Number(flag("interact-wait", "4000"));
 const EVAL = flag("eval", null);
 const ALLOW_EXTERNAL = new Set((flag("allow-external", "") || "").split(",").map((s) => s.trim()).filter(Boolean));
+// Suffix form: an entry beginning with "." (e.g. ".mux.com") allows any
+// subdomain of that domain. Multi-CDN video/streaming hosts rotate their
+// subdomain per request (measured on basement: mux HLS lands on edgemv one
+// run, fastly the next), so an exact host set can never register them all.
+const allowedExt = (h) =>
+  ALLOW_EXTERNAL.has(h) ||
+  [...ALLOW_EXTERNAL].some((a) => a.startsWith(".") && (h === a.slice(1) || h.endsWith(a)));
 // --allow-errors <regex>: a REGISTERED page-error pattern (deviation/quirk
 // table entry) counted and reported but not fatal. Exists for judgment calls a
 // dead-site rescue cannot settle against a live origin (e.g. Vue Router's
 // NavigationDuplicated on locale routes) — same contract as --allow-external:
 // what is registered stays visible, what is not stays red.
 const ALLOW_ERRORS = flag("allow-errors", null) ? new RegExp(flag("allow-errors", null)) : null;
+// --allow-failures <regex>: same contract, for NETWORK failures. Exists for
+// REGISTERED holes whose 404 is itself faithful — a dead avatar the live
+// origin also 404s (external.txt row), a favicon the origin never had. The
+// row stays visible in the report; only the verdict stops bleeding for what
+// is registered. What is not registered stays red.
+const ALLOW_FAILURES = flag("allow-failures", null) ? new RegExp(flag("allow-failures", null)) : null;
 const OUT = flag("out", null);
 const W = Number(flag("width", "1280")), H = Number(flag("height", "800"));
 
@@ -100,25 +105,22 @@ console.log(`=== sweep-routes  ${routes.length} route(s) on ${BASE} ===`);
 console.log(`[sweep] cdp port ${PORT_LABEL}; one browser for the whole sweep`);
 
 await preflightChrome({ role: "sweep", port, tool: "sweep-routes.mjs" });
-const CHROME = await findChrome();
+// Chrome discovery (candidate list, CHROME_PATH override) lives in lib/chrome.mjs.
+const CHROME = await findChrome().catch(() => {
+  console.error("FATAL: Chrome not found. Set CHROME_PATH.");
+  process.exit(3);
+});
 const sentinel = chromeSentinel();
 const chrome = launchChrome({
   bin: CHROME,
   role: "sweep",
   port,
   tool: "sweep-routes.mjs",
+  // The shared headless set (anti-throttling, sentinel) plus this gate's own two.
   args: [
-    "--headless=new",
-    `--remote-debugging-port=${port}`,
-    "--no-first-run",
+    ...headlessArgs({ port, width: W, height: H, sentinelUrl: sentinel.url }),
     "--disable-gpu-sandbox",
     "--hide-scrollbars",
-    "--mute-audio",
-    "--disable-background-timer-throttling",
-    "--disable-renderer-backgrounding",
-    "--disable-backgrounding-occluded-windows",
-    `--window-size=${W},${H}`,
-    sentinel.url,
   ],
 });
 const cleanup = (code) => {
@@ -129,27 +131,8 @@ const cleanup = (code) => {
 };
 
 const target = await assertOwnBrowser({ port, sentinel, tool: "sweep-routes.mjs", pid: chrome.pid });
-const ws = new WebSocket(target.webSocketDebuggerUrl);
-let msgId = 0;
-const pending = new Map();
-let socketClose = null;
-ws.onclose = (ev) => {
-  socketClose = ev?.code ?? 1006;
-  const err = new Error(`CDP socket closed (${socketClose}) with ${pending.size} call(s) in flight`);
-  for (const p of pending.values()) p.reject(err);
-  pending.clear();
-};
-const send = (method, params = {}, timeoutMs = 60000) =>
-  new Promise((resolve, reject) => {
-    if (socketClose !== null) { reject(new Error(`CDP socket already closed (${socketClose}); cannot send ${method}`)); return; }
-    const id = ++msgId;
-    const timer = setTimeout(() => { pending.delete(id); reject(new Error(`CDP timeout after ${timeoutMs}ms: ${method}`)); }, timeoutMs);
-    pending.set(id, {
-      resolve: (v) => { clearTimeout(timer); resolve(v); },
-      reject: (e) => { clearTimeout(timer); reject(e); },
-    });
-    ws.send(JSON.stringify({ id, method, params }));
-  });
+// Bounded calls + loud close on a dead socket: lib/cdp.mjs.
+const cdp = await connectCdp(target.webSocketDebuggerUrl, { defaultTimeoutMs: 60000 });
 
 // Per-route collectors, reset before each navigation. Events between routes
 // (trailing beacons from the previous document) land on whichever route is
@@ -161,21 +144,17 @@ const external = new Map(); // host -> count (disallowed)
 const allowedExternal = new Map(); // host -> count (registered EMBED etc.)
 let loadFired = null;
 
-ws.onmessage = (ev) => {
-  const m = JSON.parse(ev.data);
-  if (m.id && pending.has(m.id)) {
-    const { resolve, reject } = pending.get(m.id);
-    pending.delete(m.id);
-    m.error ? reject(new Error(m.error.message)) : resolve(m.result);
-    return;
-  }
+cdp.on("*", (m) => {
   switch (m.method) {
     case "Runtime.exceptionThrown":
       pageErrors.push(m.params.exceptionDetails.exception?.description ?? m.params.exceptionDetails.text);
       break;
     case "Log.entryAdded": {
       const e = m.params.entry;
-      if (e.level === "error") pageErrors.push(`[${e.source}] ${e.text}`.slice(0, 300));
+      // e.url names the failing resource; without it a network-echoed console
+      // error ("Failed to load resource: ... 404") is unmatchable by any
+      // registered --allow-errors pattern — the URL is the registration key.
+      if (e.level === "error") pageErrors.push(`[${e.source}] ${e.text}${e.url ? ` <${e.url}>` : ""}`.slice(0, 300));
       break;
     }
     case "Network.requestWillBeSent": {
@@ -183,7 +162,7 @@ ws.onmessage = (ev) => {
       requests.set(m.params.requestId, u);
       if (/^https?:/.test(u) && new URL(u).origin !== SELF_ORIGIN) {
         const h = new URL(u).host;
-        if (ALLOW_EXTERNAL.has(h)) allowedExternal.set(h, (allowedExternal.get(h) || 0) + 1);
+        if (allowedExt(h)) allowedExternal.set(h, (allowedExternal.get(h) || 0) + 1);
         else external.set(h, (external.get(h) || 0) + 1);
       }
       break;
@@ -196,7 +175,7 @@ ws.onmessage = (ev) => {
       // Reported, never fatal; the same status from OUR origin stays fatal.
       if (s >= 400) {
         const h = (() => { try { return new URL(m.params.response.url).host; } catch { return ""; } })();
-        (ALLOW_EXTERNAL.has(h) ? allowedFailures : failures).push(`HTTP ${s} ${m.params.response.url}`);
+        (allowedExt(h) ? allowedFailures : failures).push(`HTTP ${s} ${m.params.response.url}`);
       }
       break;
     }
@@ -204,7 +183,7 @@ ws.onmessage = (ev) => {
       const u = requests.get(m.params.requestId) || "?";
       if (!m.params.canceled) {
         const h = (() => { try { return new URL(u).host; } catch { return ""; } })();
-        (ALLOW_EXTERNAL.has(h) ? allowedFailures : failures).push(`FAILED ${m.params.errorText} ${u}`);
+        (allowedExt(h) ? allowedFailures : failures).push(`FAILED ${m.params.errorText} ${u}`);
       }
       break;
     }
@@ -223,15 +202,14 @@ ws.onmessage = (ev) => {
       if (loadFired) loadFired();
       break;
   }
-};
+});
 
-await new Promise((r) => (ws.onopen = r));
-await send("Network.enable");
-await send("Inspector.enable");
-await send("Log.enable");
-await send("Runtime.enable");
-await send("Page.enable");
-await send("Emulation.setDeviceMetricsOverride", { width: W, height: H, deviceScaleFactor: 1, mobile: false });
+await cdp.send("Network.enable");
+await cdp.send("Inspector.enable");
+await cdp.send("Log.enable");
+await cdp.send("Runtime.enable");
+await cdp.send("Page.enable");
+await cdp.send("Emulation.setDeviceMetricsOverride", { width: W, height: H, deviceScaleFactor: 1, mobile: false });
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const rows = [];
@@ -243,19 +221,19 @@ for (const route of routes) {
   requests.clear(); external.clear(); allowedExternal.clear();
 
   const loaded = new Promise((r) => { loadFired = r; });
-  await send("Page.navigate", { url: BASE + route });
+  await cdp.send("Page.navigate", { url: BASE + route });
   await Promise.race([loaded, sleep(30000)]);
   await sleep(WAIT);
 
   let interacted = "";
   if (INTERACT) {
-    const r = await send("Runtime.evaluate", { expression: INTERACT, awaitPromise: true, returnByValue: true }).catch((e) => ({ result: { value: `INTERACT ERROR: ${e.message}` } }));
+    const r = await cdp.send("Runtime.evaluate", { expression: INTERACT, awaitPromise: true, returnByValue: true }).catch((e) => ({ result: { value: `INTERACT ERROR: ${e.message}` } }));
     interacted = String(r?.result?.value ?? "");
     await sleep(INTERACT_WAIT);
   }
   let evalResult = "";
   if (EVAL) {
-    const r = await send("Runtime.evaluate", { expression: EVAL, awaitPromise: true, returnByValue: true }).catch((e) => ({ result: { value: `EVAL ERROR: ${e.message}` } }));
+    const r = await cdp.send("Runtime.evaluate", { expression: EVAL, awaitPromise: true, returnByValue: true }).catch((e) => ({ result: { value: `EVAL ERROR: ${e.message}` } }));
     evalResult = String(r?.result?.value ?? "");
   }
 
@@ -264,6 +242,12 @@ for (const route of routes) {
     const keep = pageErrors.filter((e) => !ALLOW_ERRORS.test(e));
     allowedErrors = pageErrors.length - keep.length;
     pageErrors = keep;
+  }
+  let allowedFailRows = 0;
+  if (ALLOW_FAILURES) {
+    const keep = failures.filter((f) => !ALLOW_FAILURES.test(f));
+    allowedFailRows = failures.length - keep.length;
+    failures = keep;
   }
   const extStr = [...external].map(([h, n]) => `${h}(x${n})`).join(",");
   const allowedStr = [...allowedExternal].map(([h, n]) => `${h}(x${n})`).join(",");
@@ -286,7 +270,7 @@ for (const route of routes) {
     for (const e of pageErrors.slice(0, 3)) console.log(`         ${e.slice(0, 140)}`);
     for (const f of failures.slice(0, 5)) console.log(`         ${f.slice(0, 140)}`);
   } else {
-    console.log(`  ok   ${route}${allowedStr ? `  (allowed: ${allowedStr}${allowedFailures.length ? `, ${allowedFailures.length} failing off-origin` : ""})` : ""}${allowedErrors ? `  (${allowedErrors} allowed error(s))` : ""}${evalResult ? `  ${evalResult.slice(0, 80)}` : ""}`);
+    console.log(`  ok   ${route}${allowedStr ? `  (allowed: ${allowedStr}${allowedFailures.length ? `, ${allowedFailures.length} failing off-origin` : ""})` : ""}${allowedErrors ? `  (${allowedErrors} allowed error(s))` : ""}${allowedFailRows ? `  (${allowedFailRows} allowed failure(s))` : ""}${evalResult ? `  ${evalResult.slice(0, 80)}` : ""}`);
   }
 }
 

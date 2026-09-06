@@ -6,34 +6,37 @@
  * supplies both exact line ranges and the complete set of permitted changes.
  * Whitespace and comments disappear in Acorn's token stream; every other
  * token, including string and property-key spelling, remains observable.
+ *
+ * Usage:
+ *   node scripts/verify-sourceified-tokens.mjs --plan <plan.json|plan.mjs> --rename-map <rename-map.json|rename-map.mjs> [--root <dir>] [--ecma-version latest|auto|<number>] [--format text|json]
+ *
+ * The plan must contain units (or comparisons). Each unit has an id, an
+ * original fragment, a sourceified fragment, and allowedChanges. A fragment is
+ * { file, range: { start, end } } with inclusive line numbers. A change is
+ * { kind: "identifier"|"shorthand-expansion", from, to, count }.
+ *
+ * ECMAScript selection:
+ *   latest uses the fixed Acorn 8.14.0 maximum (2025).
+ *   auto tries the fixed supported versions from high to low and reports the
+ *   selected version. Explicit versions never fall back.
+ *
+ * Exit codes:
+ *   0  every comparison passed
+ *   1  token, parse, or verification failure
+ *   2  CLI or plan/mapping configuration error
  */
 import { mkdtempSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { spawnSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import { pathToFileURL } from "node:url";
 import path from "node:path";
+import { cli } from "./lib/cli.mjs";
+
+cli({ known: ["plan", "rename-map", "root", "ecma-version", "format"], bools: [], file: import.meta.url });
 
 const ACORN_PACKAGE = "acorn@8.14.0";
 const ACORN_MAX_ECMA = 2025;
 const AUTO_VERSIONS = [2025, 2024, 2023, 2022, 2021, 2020, 2019, 2018, 2017, 2016, 2015, 5, 3];
-const HELP = `Usage:
-  node scripts/verify-sourceified-tokens.mjs --plan <plan.json|plan.mjs> --rename-map <rename-map.json|rename-map.mjs> [--root <dir>] [--ecma-version latest|auto|<number>] [--format text|json]
-
-The plan must contain units (or comparisons). Each unit has an id, an
-original fragment, a sourceified fragment, and allowedChanges. A fragment is
-{ file, range: { start, end } } with inclusive line numbers. A change is
-{ kind: "identifier"|"shorthand-expansion", from, to, count }.
-
-ECMAScript selection:
-  latest uses the fixed Acorn 8.14.0 maximum (${ACORN_MAX_ECMA}).
-  auto tries the fixed supported versions from high to low and reports the
-  selected version. Explicit versions never fall back.
-
-Exit codes:
-  0  every comparison passed
-  1  token, parse, or verification failure
-  2  CLI or plan/mapping configuration error
-`;
 
 class ConfigurationError extends Error {}
 class VerificationError extends Error {}
@@ -42,8 +45,7 @@ function parseArgs(argv) {
   const result = { format: "text", ecmaVersion: "latest" };
   for (let index = 0; index < argv.length; index += 1) {
     const arg = argv[index];
-    if (arg === "--help" || arg === "-h") result.help = true;
-    else if (["--plan", "--rename-map", "--root", "--ecma-version", "--format"].includes(arg)) {
+    if (["--plan", "--rename-map", "--root", "--ecma-version", "--format"].includes(arg)) {
       const value = argv[++index];
       if (!value || value.startsWith("--")) throw new ConfigurationError(`${arg} requires a value`);
       if (arg === "--plan") result.plan = value;
@@ -53,8 +55,8 @@ function parseArgs(argv) {
       else result.format = value;
     } else throw new ConfigurationError(`unknown option ${arg}`);
   }
-  if (!result.help && !["text", "json"].includes(result.format)) throw new ConfigurationError("--format must be text or json");
-  if (!result.help && (!result.plan || !result.renameMap)) throw new ConfigurationError("--plan and --rename-map are required");
+  if (!["text", "json"].includes(result.format)) throw new ConfigurationError("--format must be text or json");
+  if ((!result.plan || !result.renameMap)) throw new ConfigurationError("--plan and --rename-map are required");
   return result;
 }
 
@@ -512,10 +514,6 @@ async function main() {
   let options;
   try { options = parseArgs(process.argv.slice(2)); }
   catch (error) { console.error(`FATAL: ${error.message}`); process.exitCode = 2; return; }
-  if (options.help) {
-    console.log(HELP);
-    return;
-  }
   try {
     if (!/^(?:latest|auto|\d+)$/.test(options.ecmaVersion)) throw new ConfigurationError(`--ecma-version must be latest, auto, or a number`);
     const root = resolveRoot(options.root);

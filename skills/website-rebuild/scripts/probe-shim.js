@@ -28,6 +28,14 @@
 // a countdown on setInterval left two consecutive dumps of the SAME mirror
 // disagreeing on 7 numeric fields. With all of them pinned, __pump's time is
 // the only clock in the page and A/B comparison is frame-exact.
+//
+// 中文规格（自 scripts/README.md 迁入，v0.3.21；本表另一拼写：`probe-shim.js`）
+// Freezes registered clocks, timers, visibility, Math.random and IO delivery.
+// IO uses viewport intersections; root, rootMargin and threshold are normalized
+// and discarded options are reported. Use ?__probe&__noio for a native IO control.
+// CSS animations require pixelcompare --freeze-css or a separate unfrozen check.
+// __pump(dt, frames) advances the registered clocks; it does not prove that
+// every entropy source of an arbitrary page is covered.
 (function () {
   if (typeof location === "undefined" || !location.search.includes("__probe")) return;
 

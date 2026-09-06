@@ -24,18 +24,27 @@
  * ran. Both sides can then be compared without re-implementing the parser.
  *
  *   node scripts/harvest-cases.mjs --url <source-url> --config scripts/harvest.config.mjs \
- *        --out docs/case-baseline.json [--steps 9]
+ *        --out docs/case-baseline.json [--steps 9] [--probe scripts/probe.mjs]
  *
  * The config supplies the target-specific part:
  *
  *   export const name = "keyframes";
  *   export function states(steps) { … }        // → [{label, js}] driving statements
  *   export function collect() { … }            // → JS expression string returning the record
+ *
+ * 中文规格（自 scripts/README.md 迁入，v0.3.21；本表另一拼写：`harvest-cases.mjs`）
+ * **从源站活引擎采用例**：驱动源站到 N 个状态，逐状态记录它自己对象里的数值（站点侧写在 `harvest.config.mjs`，样例见 `harvest.config.example.mjs`）。
+ * ⛔ 只产出 A 侧，必须配 `verify-harvest.mjs`。⚠ 采**解析完的数值**而非源文本
+ * 从源站活引擎采用例：驱动到 N 个状态、逐状态记录它自己对象里的数值。⛔ 只产出 A 侧。⛔ 自带的“全同”防呆必须盯住**被测量本身**——盯“状态是否不同”曾放行一份关键帧全是死的基线
+ * `node scripts/harvest-cases.mjs --url <src> --config scripts/harvest.config.mjs`
  */
 import { writeFile, mkdir } from "node:fs/promises";
 import { spawn } from "node:child_process";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
+import { cli } from "./lib/cli.mjs";
+
+cli({ known: ["url", "config", "out", "steps", "probe"], bools: [], file: import.meta.url });
 
 const args = process.argv.slice(2);
 const flag = (n, d) => { const i = args.indexOf("--" + n); return i >= 0 && args[i + 1] !== undefined ? args[i + 1] : d; };

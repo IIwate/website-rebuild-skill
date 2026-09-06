@@ -6,6 +6,7 @@
 //   node serve.mjs --side rebuild --root dist            # the rebuild
 //   node serve.mjs --side mirror --root mirror [--ext-hosts cdn.x.com,fonts.gstatic.com]
 //                  [--stub-ext-hosts telemetry.example.com] [--origin-host example.com] [--port N]
+//                  [--host 127.0.0.1] [--fallback-root dir,dir] [--query-ignore v,cb | --query-only w,h] [--rewrite FROM::TO]...
 //   PORT=3200 SERVE_ROOT=mirror node serve.mjs    # explicit port still wins
 //
 // PORTS AND IDENTITY (scripts/lib/ports.mjs — read its header once):
@@ -55,6 +56,11 @@
 //   -> racingshop-rebuild (HLS/DASH ladder MIME types)
 //   -> shopifydesign-rebuild (.mov MIME, --stub-ext-hosts for hosts that are
 //      rewritten into /ext/ but deliberately not mirrored).
+//
+// 中文规格（自 scripts/README.md 迁入，v0.3.21；本表另一拼写：`serve.mjs`）
+// 零依赖静态服务器（MIME/Range/服务层改写/重定向回放），兼任源站参照服。`--rewrite FROM::TO` 是**登记式字面量替换**，为的是一类本地化触及不到的东西——**源程序按自己的域名分支**（`location.hostname=="x.com" && (CDN=...)`，镜像不在那个域名上于是整个子系统走空路径）；**首次命中打印**，因为沉默与生效此前无法区分。`--fallback-root` 让复刻侧只放产出、资产全部从只读镜像读（`asset-management.md` 的不复制策略）——⭐ v0.3.15 起是**回落链** `--fallback-root mirror-negotiated,mirror`，协商变体的独立记账树压在只读镜像之上、两侧同链；⛔ **桩主机的 DSN 保持是 DSN**：`https://<key>@oNNN.ingest.us.sentry.io/<id>` 改写成 `http://<key>@127.0.0.1:<port>/ext/<host>/<id>`，SDK 正常初始化、信封打进桩（此前改成裸路径 → 两侧 console `Invalid Sentry Dsn`，CLEAN 门红而无静态门能见）；**未知旗标响亮失败**——被静默忽略的旗标是一次没人知道的降级
+// 零依赖静态服务器：MIME 补全（含 HLS 阶梯与 `.mov`）、Range、redirects.tsv 重定向回放（FROM 写绝对 URL 或裸路径都能命中）、`/ext/<host>/` 服务层改写（镜像磁盘神圣不改）、`--stub-ext-hosts` 把"改写进 `/ext/` 但故意不镜像"的遥测 host 回 JS stub（否则要么真外联、要么 404）、`?__probe` 注入 probe-shim、404.html 回放。**`--side mirror\|rebuild` 必填**（除非显式给 `--port`/`PORT`）：它决定端口（…1 镜像 / …2 复刻）并写进每个响应的 `x-wrs-identity`，端口被占直接退 3 并点名占用方。三条镜像层修复：① **查询感知取文件**（`lib/urlpath.mjs`，读镜像里的 `urlpath-policy.json`）——按 pathname 取文件会拿一个变体回答所有 `?width=`，页面照渲染，零 404 门在错镜像上变绿；② **host 改写覆盖四种写法**——普通 / 协议相对 / JSON 转义（`https:\/\/host\/` 与 `\/\/host\/`）/ **裸主机常量**（`"https://otlp.example.com"` 后面代码自己拼路径）；新增 `--origin-host` 把源站对自己的绝对/协议相对自引用改写成根相对（否则离线镜像会向线上真站要盘上已有的图）；③ **回放前跳过本地化后自指的重定向**（源站常有 http→https 同路径条目，两侧本地化后同路径 → `ERR_TOO_MANY_REDIRECTS`，把真实在盘的资产打死）。v0.3.15（raycastkbd）两条：④ **`--fallback-root` 是回落链**（`--fallback-root mirror-negotiated,mirror`，左到右第一个有文件的 root 应答——协商变体的独立记账树压在只读镜像之上，两侧同链）；⑤ **桩主机的 DSN 保持是 DSN**：`https://<key>@oNNN.ingest.us.sentry.io/<id>` 改写成 `http://<key>@127.0.0.1:<port>/ext/<host>/<id>`（此前 userinfo 归一化后再本地化成裸路径，Sentry `new Dsn()` 拒收 → 两侧 console `Invalid Sentry Dsn`，CLEAN 门红而无静态门能见；现在 SDK 按源站那样初始化，信封打进 `/ext/<host>/api/<id>/envelope/` 的桩）。
+// `node serve.mjs --side mirror --root mirror --origin-host example.com`；复刻侧 `node serve.mjs --side rebuild --root dist`；有遥测时加 `--stub-ext-hosts www.googletagmanager.com,www.clarity.ms`
 
 import http from "node:http";
 import { rewriteFlight, repairFlightRows, hasFlight } from "./lib/flight.mjs";
@@ -80,27 +86,28 @@ import {
 // ?width=N with one arbitrary variant: the page renders, so the zero-404 gate
 // goes green while the server hands out the wrong bytes. See lib/urlpath.mjs.
 import { serveCandidates, loadPolicy, policyFromArgs, describePolicy } from "./lib/urlpath.mjs";
+// The ledgers this server replays (recorded types, redirects) are read by the
+// module that writes them — lib/ledger.mjs.
+import { readManifest, readRedirects, REDIRECTS_FILE } from "./lib/ledger.mjs";
+import { sha256 } from "./lib/hash.mjs";
+import { cli } from "./lib/cli.mjs";
 
-const args = process.argv.slice(2);
 // Every --flag this script understands. An UNKNOWN flag is a loud failure, not
 // a shrug: a flag that is silently ignored looks exactly like one that worked.
 // Field case — `--fallback-root` was passed to a build of this script that did
 // not have it yet; it started single-rooted without a word and every asset
 // 404'd (121 problems on the first probe). A degradation nobody was told about
-// is worse than a crash.
-const KNOWN_FLAGS = new Set([
-  "host", "port", "root", "fallback-root", "side", "origin-host", "ext-hosts",
-  "stub-ext-hosts", "query-ignore", "query-only", "redirects", "cdp-port", "rewrite",
-]);
-{
-  const unknown = args.filter((a) => a.startsWith("--") && !KNOWN_FLAGS.has(a.slice(2)));
-  if (unknown.length) {
-    console.error(`FATAL: unknown flag(s): ${unknown.join(" ")}`);
-    console.error(`       known: ${[...KNOWN_FLAGS].map((f) => "--" + f).join(" ")}`);
-    console.error(`       A silently ignored flag is a silent downgrade — refusing to start.`);
-    process.exit(2);
-  }
-}
+// is worse than a crash. The check itself (and --help) lives in lib/cli.mjs,
+// the one argv contract every script shares.
+cli({
+  known: [
+    "host", "port", "root", "fallback-root", "side", "origin-host", "ext-hosts",
+    "stub-ext-hosts", "query-ignore", "query-only", "rewrite",
+  ],
+  file: import.meta.url,
+});
+
+const args = process.argv.slice(2);
 const flag = (name, dflt) => {
   const i = args.indexOf("--" + name);
   return i >= 0 && args[i + 1] !== undefined ? args[i + 1] : dflt;
@@ -115,8 +122,17 @@ const ROOT = path.resolve(flag("root", process.env.SERVE_ROOT || "mirror"));
 // mirror. Without this the rebuild side needs a second copy of the mirror — a
 // second place for the bytes to drift. Order matters: anything the build layer
 // rewrote must win over the untransformed original.
-const FALLBACK_ROOT = flag("fallback-root", "") ? path.resolve(flag("fallback-root", "")) : null;
-const ROOTS = [ROOT, ...(FALLBACK_ROOT ? [FALLBACK_ROOT] : [])];
+// ⭐ A CHAIN, not one directory: `--fallback-root mirror-negotiated,mirror`.
+// The independent ledger tree for negotiated variants (sanity-platform.md
+// §1.2 — the browser-Accept re-grab that leaves the read-only mirror untouched)
+// has to sit ABOVE the mirror on BOTH sides, and the rebuild side has already
+// spent its first root on site/. Left to right; the first root that holds the
+// file answers. [raycastkbd: 42 next/image rungs in mirror-negotiated/, the
+// rest of the site in mirror/, site/ on top — three roots, one server]
+const FALLBACK_ROOTS = flag("fallback-root", "")
+  .split(",").map((s) => s.trim()).filter(Boolean).map((p) => path.resolve(p));
+const FALLBACK_ROOT = FALLBACK_ROOTS[0] || null;
+const ROOTS = [ROOT, ...FALLBACK_ROOTS];
 
 // Which side of the comparison this instance is. It selects the port, it is
 // stamped on every response, and it is the thing that makes a two-sided run
@@ -199,8 +215,8 @@ const RAW_FLIGHT_ROW = /(^|\n)[0-9a-f]+:T[0-9a-f]+,/;
 const RECORDED_TYPE = new Map();
 for (const root of ROOTS) {
   try {
-    const mf = JSON.parse(await fsp.readFile(path.join(root, "mirror-manifest.json"), "utf8"));
-    for (const rec of Object.values(mf.files || {})) {
+    const mf = await readManifest(root);
+    for (const rec of Object.values(mf?.files || {})) {
       if (!rec || !rec.path || !rec.type) continue;
       RECORDED_TYPE.set(path.join(root, rec.path), rec.type);
       RECORDED_TYPE.set(path.join(root, rec.path, "index.html"), rec.type);
@@ -350,11 +366,12 @@ const localizeUrl = (abs) => {
   return EXT_HOSTS.includes(u.hostname) ? `/ext/${u.hostname}${u.pathname}` : u.pathname;
 };
 const trimSlash = (p) => p.replace(/(.)\/$/, "$1");
-for (const ledger of ["_scripts/redirects.tsv", "redirects.tsv"]) {
+for (const ledger of ["_scripts/" + REDIRECTS_FILE, REDIRECTS_FILE]) {
+  // First ledger that EXISTS wins, rows or not (readRedirects reads an absent
+  // file as empty, so existence is checked here).
+  if (!fs.existsSync(path.join(ROOT, ledger))) continue;
   try {
-    const tsv = await fsp.readFile(path.join(ROOT, ledger), "utf8");
-    for (const line of tsv.trim().split("\n").slice(1)) {
-      const [code, from, to] = line.split("\t");
+    for (const { status: code, from, to } of await readRedirects(ROOT, ledger)) {
       if (!from || !to) continue;
       // Drop entries that LOCALIZE TO A SELF-REDIRECT. Origins routinely carry
       // http->https redirects on the same path, and a crawler that meets one
@@ -481,13 +498,13 @@ let islandNoted = false;
 function rewrite(text, ext, where = "") {
   // Rewritten bytes can no longer match SRI hashes; drop integrity attrs (HTML only).
   if (ext === ".html") text = text.replace(/ integrity="[^"]*"/g, "");
-  // ⛔ A DEVALUE DATA ISLAND IS PROGRAM INPUT, NOT ADDRESSES (§4.18), and the
+  // ⛔ A DEVALUE DATA ISLAND IS PROGRAM INPUT, NOT ADDRESSES (payload-gates.md §6), and the
   // guard is SHARED with lib/shell-build.mjs rather than copied here — the two
-  // localisers disagreeing about where an island is would be §4.9.4's drift in
+  // localisers disagreeing about where an island is would be payload-gates.md §1.4's drift in
   // its most expensive form, because the payload gate compares exactly these
   // two outputs and would report the disagreement as corrupted content.
   // ⭐ `where` is what makes the EXTERNALIZED payload reachable: `.json` is in
-  // TEXT_REWRITE, so `/_payload.json` (§4.19) would otherwise be localised
+  // TEXT_REWRITE, so `/_payload.json` (payload-gates.md §5) would otherwise be localised
   // here exactly the way the inline island was.
   const guarded = protectDataIslands(text, (t) => rewriteInner(t, ext), { where });
   for (const p of guarded.preserved) {
@@ -523,6 +540,22 @@ function rewriteInner(text, ext) {
 }
 
 function rewriteText(text, ext) {
+  // ⛔ A DSN IS A PARSED ADDRESS, NOT A FETCH TARGET. Normalising the userinfo
+  // away (below) and then localising the host turns Sentry's
+  //     https://<key>@o3794….ingest.us.sentry.io/6624334
+  // into `/ext/o3794….ingest.us.sentry.io/6624334`, which `new Dsn()` rejects:
+  // "Invalid Sentry Dsn" on the console of BOTH sides — a CLEAN-gate red that
+  // reads like a port bug and that no static gate can see (raycastkbd). For
+  // STUB hosts keep the DSN a DSN: scheme + userinfo + THIS server +
+  // /ext/<host>/<path>. Sentry parses it, posts its envelopes to
+  // /ext/<host>/api/<project>/envelope/, the stub answers 200 — same-origin,
+  // zero egress, and the SDK initialises exactly as it does on the origin.
+  for (const h of STUB_EXT_HOSTS) {
+    const eh = h.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    text = text
+      .replace(new RegExp(`https?://([\\w.+-]+(?::[^@/\\s"']*)?)@${eh}/`, "gi"), (m, ui) => `http://${ui}@${HOST}:${PORT}/ext/${h}/`)
+      .replace(new RegExp(`https?:\\\\/\\\\/([\\w.+-]+(?::[^@\\s"']*)?)@${eh}\\\\/`, "gi"), (m, ui) => `http:\\/\\/${ui}@${HOST}:${PORT}\\/ext\\/${h}\\/`);
+  }
   // ⛔ A URL CAN CARRY USERINFO, AND EVERY HOST SHAPE BELOW MISSES IT. Sentry's
   // DSN is the canonical case: `https://<key>@o3794….ingest.us.sentry.io/…`
   // sits in a chunk, the stub host is listed, and the request still went out —
@@ -701,8 +734,7 @@ async function resolveSoleQueryVariant(pathname) {
   const first = await resolve1(v[0]);
   if (v.length === 1) return first;
   if (!first) return null;
-  const { createHash } = await import("node:crypto");
-  const sha = async (f) => createHash("sha256").update(await fsp.readFile((await resolve1(f)).file)).digest("hex");
+  const sha = async (f) => sha256(await fsp.readFile((await resolve1(f)).file));
   const h0 = await sha(v[0]);
   for (const f of v.slice(1)) if (await sha(f) !== h0) return null;
   return first;

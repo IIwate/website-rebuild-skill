@@ -22,10 +22,21 @@
 //
 // Adapted from storytellingnoomo-rebuild/scripts/verify-ssr.mjs
 // (its SSR-byte-gate-first discipline; masking only buildId).
+//
+// 中文规格（自 scripts/README.md 迁入，v0.3.21；本表另一拼写：`verify-ssr.mjs`）
+// SSR/DOM 逐字节门
+// SSR 逐字节门：body DOM / 数据 payload / config / 序列化顺序四项对镜像 byte-equal（buildId 掩码）
+// `node verify-ssr.mjs`（端口取自 `lib/ports.mjs` 并打印；`PORT=3100` 可覆盖；页面可自动发现）
 
 import { readFileSync, readdirSync, existsSync, statSync } from "node:fs";
 import path from "node:path";
 import { resolvePort } from "./lib/ports.mjs";
+import { cli } from "./lib/cli.mjs";
+
+// No flags: everything this gate asserts lives in CONFIG below (PORT / MIRROR_DIR
+// come from the environment). cli() still runs so --help works and a stray
+// --flag fails loudly instead of being ignored.
+cli({ known: [], file: import.meta.url });
 
 // ---------------------------------------------------------------------------
 // CONFIG — edit per project.

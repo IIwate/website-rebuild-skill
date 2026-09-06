@@ -28,13 +28,15 @@
  * a separate gate (verify-symbols.mjs); doing both at once means a failure
  * cannot be attributed.
  *
- *   node tools/modules-to-src.mjs --closure docs/app-closure.json \
+ *   node tools/modules-to-src.mjs [--map docs/module-map.json] --closure docs/app-closure.json \
  *        --names docs/app-names.json --entry 14 --out src
  */
 import { readFile, writeFile, mkdir, rm } from "node:fs/promises";
 import path from "node:path";
 import { parse } from "@babel/parser";
 import _traverse from "@babel/traverse";
+import { cli } from "../scripts/lib/cli.mjs";
+cli({ known: ["map", "closure", "names", "entry", "out"], file: import.meta.url });
 const traverse = _traverse.default ?? _traverse;
 
 const args = process.argv.slice(2);
@@ -74,7 +76,7 @@ for (const id of ids) {
     : SRC.slice(m.startLine - 1, m.endLine).join("\n");
 
   // Strip `"<id>": ` / `<id>: ` so the file starts at `function (…)`.
-  const fnText = raw.replace(/^\s*(?:"[^"]+"|[A-Za-z_$][\w$]*|\d+)\s*:\s*/, "").replace(/,\s*$/, "");
+  const fnText = raw.replace(/^\s*(?:"[^"]+"|[A-Za-z_$][\w$]*|\d+(?:\.\d+)?(?:e\d+)?)\s*:\s*/, "").replace(/,\s*$/, "");
 
   // ⛔ Rename ONLY the wrapper's own three parameters, and do it with SCOPE, not
   // with text. A text-level shadow test is far too coarse for one-letter names:
@@ -104,7 +106,14 @@ for (const id of ids) {
     // methods are the contract (ctx.i / ctx.r / ctx.s). Both are fixed by the
     // build, not inferred, so renaming them is free readability either way.
     const arity = fnPath ? fnPath.node.params.length : 0;
-    const WANTED_BY_ARITY = { 1: ["ctx"], 2: ["module", "exports"], 3: ["module", "exports", "require"] };
+    // ⛔ Turbopack's three-parameter factory is (ctx, module, exports) — the
+    // runtime calls `n(u, o, i)` with the context FIRST — not webpack's
+    // (module, exports, require). Naming it the webpack way keeps positions
+    // right and readability backwards: `module.i(…)` where the reader expects
+    // `ctx.i(…)` (darkroom §F-12). The container kind decides the names.
+    const WANTED_BY_ARITY = TURBO
+      ? { 1: ["ctx"], 2: ["ctx", "module"], 3: ["ctx", "module", "exports"] }
+      : { 1: ["ctx"], 2: ["module", "exports"], 3: ["module", "exports", "require"] };
     if (fnPath && WANTED_BY_ARITY[arity] && fnPath.node.params.every((p) => p.type === "Identifier")) {
       const wanted = WANTED_BY_ARITY[arity];
       const spans = [];
@@ -314,6 +323,6 @@ if (typeof window !== "undefined") window.__req = require;
 console.log(`=== modules-to-src ===`);
 console.log(`  ${ids.length} module(s) -> ${path.relative(process.cwd(), OUT)}/modules/`);
 console.log(`  ${named} named from evidence, ${ids.length - named} keep their id`);
-console.log(`  ${wrapperRenamed} wrapper signature(s) renamed to ${TURBO ? "(ctx)" : "(module, exports, require)"};`);
+console.log(`  ${wrapperRenamed} wrapper signature(s) renamed to ${TURBO ? "(ctx[, module, exports])" : "(module, exports, require)"};`);
 console.log(`  ${ids.length - wrapperRenamed} left alone (unexpected parameter shape, or the target name is taken)`);
 console.log(`\n  ⚠ Bodies are still verbatim. Local renaming is the next step and has its own gate.`);

@@ -18,6 +18,7 @@
  *     [--force]                    re-download files already on disk
  *     [--dry-run]                  enumerate the ladder, write nothing
  *     [--manifest <path>]          default <out>/mirror-manifest.json
+ *     [--referer <url>]            Referer header sent with every request; default <origin>/
  *
  * Find the master URL the way it surfaced in racingshop: probe.mjs / the
  * browser console reports 404s for the variant playlists, or netcapture.mjs
@@ -39,17 +40,29 @@
  * (EXT-X-MEDIA alternate renditions, I-FRAME playlists, EXT-X-MAP fMP4 init
  * segments, EXT-X-KEY), relative-URI resolution against each playlist's own
  * URL (subdirectory ladders, not just flat siblings), and manifest append.
+ *
+ * 中文规格（自 scripts/README.md 迁入，v0.3.21；本表另一拼写：`gapfill-video.mjs`）
+ * HLS/DASH 流媒体阶梯补录（master → rendition → 分片），静态爬虫的结构性盲区
+ * HLS 流媒体阶梯补录：master m3u8 → 递归取 variant/备用音轨/I-frame 播放列表 → 逐段下载 `.ts`/`.m4s`（含 EXT-X-MAP 初始化段、EXT-X-KEY）→ 追加进 manifest 账本。补的是静态爬虫的结构性盲区：HTML 里只有 master，其余全由播放器运行时 fetch，只有探针 404 才暴露（`serve.mjs` 的 MIME 表已含 `.m3u8`/`.ts`/`.m4s`/`.mpd`，补录后即可本地回放）
+ * `node gapfill-video.mjs --master https://cdn.x.com/vp/<id>/<id>.m3u8 --origin https://example.com`（`--dry-run` 先看阶梯全貌）
  */
 import { mkdir, readFile, writeFile, stat } from 'node:fs/promises';
 import { dirname, join, relative, extname } from 'node:path';
+import { BROWSER_UA } from './lib/negotiate.mjs';
+import { cli } from './lib/cli.mjs';
+
+cli({
+  known: ['master', 'out', 'origin', 'referer', 'manifest', 'workers', 'delay'],
+  bools: ['force', 'dry-run'],
+  file: import.meta.url,
+});
 
 // ---------------------------------------------------------------------------
 // CONFIG — per-project constants; site specifics come from the CLI instead.
 // ---------------------------------------------------------------------------
 
-// Desktop UA for all requests; some media CDNs vary or block on UA.
-const UA =
-  'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0 Safari/537.36';
+// Desktop UA for all requests (some media CDNs vary or block on UA): the one
+// string in lib/negotiate.mjs, same as the crawler's.
 
 // How deep to follow playlist -> playlist references. A normal ladder is 2
 // levels (master -> variants); the guard only exists to stop pathological or
@@ -118,7 +131,7 @@ async function exists(p) {
 async function get(url) {
   const res = await fetch(url, {
     // Media CDNs commonly 403 without a same-origin Referer.
-    headers: { 'user-agent': UA, accept: '*/*', referer: REFERER },
+    headers: { 'user-agent': BROWSER_UA, accept: '*/*', referer: REFERER },
     redirect: 'follow',
   });
   if (!res.ok) throw new Error(`HTTP ${res.status}`);

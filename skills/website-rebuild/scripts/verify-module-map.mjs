@@ -32,12 +32,20 @@
  *
  * Zero-dependency: the tokenizer is a PINNED npx spawn, never an import.
  *
- *   node scripts/verify-module-map.mjs --closure docs/app-closure.json --src src
+ *   node scripts/verify-module-map.mjs --closure docs/app-closure.json --src src [--map docs/module-map.json]
+ *
+ * 中文规格（自 scripts/README.md 迁入，v0.3.21；本表另一拼写：`verify-module-map.mjs`）
+ * **M(n+1) 等价门（模块化产物）**：一模块一文件，且每个文件与打包器字节 **token 级一致**（只允许包装重命名那组一一映射）。⛔ 用文本把重命名 undo 回去比对会失败——`module.exports` 里的 `exports` 是属性名；**门用捷径就会测到自己的捷径**。⛔ 门也不许重跑重命名来比对
+ * **模块树对账门（模块容器产物）**：closure 里每个模块在 `src/modules/` 恰好一个文件且 token-exact——与 `verify-symbols` 互为两种产物形状（平铺 vs 容器）的同一道门。模块名可带子目录
+ * `node verify-module-map.mjs [--src port]`
  */
 import { readFile, readdir, writeFile, mkdtemp, rm } from "node:fs/promises";
 import { spawnSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import { cli } from "./lib/cli.mjs";
+
+cli({ known: ["closure", "src", "map"], bools: [], file: import.meta.url });
 
 const ACORN_VERSION = "8.14.0"; // PINNED — token shapes are the contract here.
 
@@ -88,10 +96,18 @@ for (const id of ids) {
   // mid-line, so a line slice carries the container prefix in with it — which
   // showed up here as every module being ~10 tokens longer on the packer's side
   // than in src/, a difference entirely manufactured by this gate.
-  const origText = (m.startChar != null && m.endChar != null)
+  // ⛔ Both branches strip a leading `<id>:` key and a trailing comma with ONE
+  // regex. module-map's startChar is the FACTORY start (nothing to strip), but a
+  // synthesized char boundary that points at the id start — a minified-original
+  // bounds table — used to keep the key on the packer's side and every module
+  // came out exactly 2 tokens longer (14islands F16). The id may be written in
+  // exponent form by the minifier (`71e3:` for 71000) — accept the full numeric
+  // literal shape (F14).
+  const KEY = /^\s*(?:"[^"]+"|[A-Za-z_$][\w$]*|\d+(?:\.\d+)?(?:e\d+)?)\s*:\s*/;
+  const origText = ((m.startChar != null && m.endChar != null)
     ? SRCTEXT.slice(m.startChar, m.endChar)
-    : SRC.slice(m.startLine - 1, m.endLine).join("\n")
-        .replace(/^\s*(?:"[^"]+"|[A-Za-z_$][\w$]*|\d+)\s*:\s*/, "").replace(/,\s*$/, "");
+    : SRC.slice(m.startLine - 1, m.endLine).join("\n"))
+        .replace(KEY, "").replace(/,\s*$/, "");
   const file = claims.get(id);
   if (!file) { fail++; mismatches.push(`${id}: no file claims it`); continue; }
   const text = await readFile(path.join(MODDIR, file), "utf8");

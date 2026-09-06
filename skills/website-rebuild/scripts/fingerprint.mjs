@@ -29,13 +29,20 @@
 //
 // 新写（v0.1.5）：把 scope-and-fingerprint.md §2 的手工协议脚本化，
 // 协议内容零发明——每一步的判据与坑都以该文档为准。
+//
+// 中文规格（自 scripts/README.md 迁入，v0.3.21；本表另一拼写：`fingerprint.mjs`）
+// Step 0 六步探测协议的跨平台等价实现（GET 存活 + 重定向链与终点域同一性、双抓 diff、物种/年代、HTML 技术指纹、bundle 初检；出现次数计数与 <1KB Referer 重试内置；Sanity CMS 证据采集——projectId/dataset/API 主机/auto=format/_key，三种拼写归一，命中即指路 sanity-platform.md）。**只采证据不出判级**——判级仍走 scope-and-fingerprint.md §3 判定树
+// Step 0 指纹侦察（`references/scope-and-fingerprint.md` §2 六步 curl 协议）的跨平台等价——无 POSIX 工具链（Windows PowerShell 无 curl/cmp/fold/tr/perl）也能跑：GET 存活 + 手动重定向链与终点域同一性、双抓确定性 diff、物种/年代 grep、HTML 技术指纹（剥注释枚举 `<script src>`/内联 `import()`、框架模式×引擎范式标记，计数一律出现次数语义 = `grep -o \| wc -l`）、bundle 初检（<1KB 自动补 Referer 重试、minification 形态、three 强签名、`/api/` 计数、catch-all content-type 告警）。**只采证据不出判级**；下载物逐个记 sha256，请求间隔 ≥1s
+// `node fingerprint.mjs --target https://example.com/awarded-path --bundle https://example.com/assets/main.xxx.js`
 
 import { mkdirSync, writeFileSync } from "node:fs";
-import { createHash } from "node:crypto";
 import path from "node:path";
+import { sha256 } from "./lib/hash.mjs";
+// UA 钉死为协议里的同一字符串——lib/negotiate.mjs 的 BROWSER_UA（抓取侧同款）。
+import { sanityEvidence, BROWSER_UA as UA } from "./lib/negotiate.mjs";
+import { cli } from "./lib/cli.mjs";
 
-const UA =
-  "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36";
+cli({ known: ["target", "bundle", "out", "gap-ms"], file: import.meta.url });
 
 const args = process.argv.slice(2);
 const flag = (name, dflt) => {
@@ -59,7 +66,6 @@ const BUNDLES = (flag("bundle", "") || "")
 mkdirSync(OUT, { recursive: true });
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
-const sha256 = (buf) => createHash("sha256").update(buf).digest("hex");
 // 出现次数语义（= grep -o | wc -l）。§2 计数硬约束：绝不数"匹配行数"。
 const count = (s, re) => (s.match(re) || []).length;
 const uniq = (arr) => [...new Set(arr)];
@@ -236,6 +242,21 @@ async function main() {
   say(
     `- Shopify 平台指纹：cdn/shop/=${count(aText, /cdn\/shop\//g)}  Shopify.theme=${count(aText, /Shopify\.theme/g)}  cdn.shopify.com=${count(aText, /cdn\.shopify\.com/g)}  myshopify.com=${count(aText, /myshopify\.com/g)}（命中 → B 类路由候选，见 references/shopify-platform.md）`,
   );
+  // Sanity 证据采集（lib/negotiate.mjs；三种拼写归一后计数——裸写/\/ 转义/%2F 编码）
+  const sanity = sanityEvidence(aText);
+  if (sanity.projects.length || sanity.apiHosts.length || sanity.cdnRefs) {
+    say(`- Sanity CMS 指纹（命中 → 加载 references/sanity-platform.md；判级看内容烘焙时点 §0，不看库名）：`);
+    say(`  - cdn.sanity.io 出现 ×${sanity.cdnRefs}${sanity.cdnRefs && !sanity.projects.length ? " —— ⚠ 有主机引用（如 flight :HC preconnect）但本页无资产路径：在栈里但首页未用，projectId 去深层路由取证" : ""}`);
+    for (const p of sanity.projects)
+      say(`  - projectId=${p.projectId} dataset=${p.dataset}（引用 ×${p.n}）`);
+    for (const h of sanity.apiHosts)
+      say(`  - API 主机 ${h.host} ×${h.n} —— ⚠ HTML 里出现 API 主机 ≠ 运行时装配；是否 D 因素看断网首屏有无 GROQ 流量（§0 三形态）`);
+    say(`  - auto=format ×${sanity.autoFormat}${sanity.autoFormat ? " —— ⛔ 内容协商：镜像必须发浏览器图片 Accept，否则拿到回退格式字节（sanity-platform.md §1.2；mirror-site/reconcile-gaps 已内置）" : ""}`);
+    say(`  - "_key" 字段 ×${sanity.keyFields}（Sanity 数组项化石——C1 照抄，不进 normalize 名单）`);
+    say(`  - M0 提醒：--hosts 需含 cdn.sanity.io 与上列 API 主机；next/image 代理 URL 先解码 url= 再判主机`);
+  } else {
+    say(`- Sanity CMS 指纹：无`);
+  }
   say(
     `- 人工核对项：技术栈年代 vs 获奖年份是否矛盾；generator/license 年份晚于获奖期 + 获奖期技术栈残留为零 → 隐性下线判 X（§2 步骤 3）。`,
   );

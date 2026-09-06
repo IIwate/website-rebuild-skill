@@ -14,8 +14,16 @@
 //
 // Zero dependencies: hand-written GLB (glTF binary) chunk + accessor reader.
 // Adapted from storytellingnoomo-rebuild/scripts/dump-timelines.mjs.
+//
+// 中文规格（自 scripts/README.md 迁入，v0.3.21；本表另一拼写：`dump-timelines.mjs`）
+// GLB 动画曲线 dump 成 JSON 数值账本
+// 手写 GLB 解析器，动画曲线 dump 成 JSON 数值账本——"数值基准先行"范例（先 dump 源数据再移植再数值验收）
+// `node dump-timelines.mjs mirror/timelines/cam.glb`
 import { readFile, writeFile, mkdir } from "node:fs/promises";
 import path from "node:path";
+import { cli } from "./lib/cli.mjs";
+
+cli({ known: ["out"], bools: [], file: import.meta.url, positional: "<file.glb> [...more.glb]" });
 
 const args = process.argv.slice(2);
 const flag = (name, dflt) => {

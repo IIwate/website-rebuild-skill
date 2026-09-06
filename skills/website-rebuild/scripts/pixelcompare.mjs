@@ -17,6 +17,8 @@
 //     [--label-a REBUILD] [--label-b MIRROR]
 //     [--format png|jpeg] [--quality 92]   frame encoding (see the ceiling below)
 //     [--max-mean 12]                  optional gate: exit 1 if meanAbsDiff exceeds
+//     [--self] [--pump dt,frames] [--after-ready N] [--hold expr] [--hold-grace ms] [--hold-after N]
+//     [--drive expr] [--chunk N] [--freeze-css] [--freeze-at -1s] [--cdp-port N]
 //
 // VIEWPORT SIZE IS LIMITED BY THE TRANSPORT, NOT BY CHROME. CDP hands the whole
 // frame back as ONE base64 WebSocket message and Node's built-in WebSocket dies
@@ -61,6 +63,12 @@
 // Zero npm dependencies: raw CDP over Node's built-in WebSocket (Node 22+).
 // Adapted from samsyninja-rebuild/scripts/pixelcompare.mjs (64x40 grid +
 // metric.json). For per-pixel byte gates + diff heatmaps see side-by-side.mjs.
+//
+// 中文规格（自 scripts/README.md 迁入，v0.3.21；本表另一拼写：`pixelcompare.mjs`、`scripts/pixelcompare.mjs` 的 `--freeze-css`）
+// 量化像素对拍（粗网格相似度 + metric 输出）。⭐ **状态对齐协议**：`--ready <表达式>` + `--chunk 1` + `--after-ready N`——两侧各自 READY 后再泵 N 帧，分块粒度即对齐分辨率（darkroom /about、/work 两处 UNCLASSIFIED 残差由此归零，determinism §7）。**视口 ≳ 1500×900 时 PNG 过不了 CDP 载荷硬顶**，改 `--format jpeg --quality 92`。**产出前先过非空帧前置条件**——两张空帧对拍会报 `meanAbsDiff 0 / 相似度 100`，与完美结果同形（实测：冻结把引擎停在首帧之前，三条路由全报 0，而那是 201 色 99.5% 纯黑）；`--pump dt,frames` 是 probe-shim 的一等驱动入口，且**与真实时间交错地泵**——冻结页的启动仍在墙钟上等资产，settle 之后一次性泵完会让引擎永远拿不到"资产已到达"的那一帧（`determinism.md` §2.9.1）。`--self` 是**自比带宽的合法通道**（§1.3.2 要求的那次测量按定义是一侧与自己比，会被跨侧假绿守卫拦下）——产物标 `kind:"self-band"`，且 `--max-mean` 对它失效：带宽是分类的**输入**，不是判决
+// ⛔ **冻 JS 时钟冻不住 CSS 动画**——`animation` 跑在浏览器动画时间线上，不经过 JS。症状是**同侧对照比跨侧还大**且最差格相同。该旗标把所有动画 `paused` + 固定负延迟钉在同一相位（⚠ 它改变被渲染内容，这正是目的：两侧定格在同一位置）。
+// 双服务器 A/B 截图 + 64×40 网格量化（适合活体场景）+ 并排合成图 + metric.json；`--max-mean` 可作门。**开拍前先证明 A/B 是两个进程**：同 origin 或两个 URL 拿到同一个 `serve.mjs` identity token 一律退 3（否则那份完美报告测的是同一侧），标签与服务自报的 side 不符则告警。浏览器生命周期走 `lib/chrome.mjs`——**这里的进程泄漏会直接把自比带宽抬高、把门调松**。`--format jpeg --quality N` 是撞上 CDP 载荷硬顶时的规避（默认 PNG），截图/指标/合成三步失败都点名原因并退 4，不再无声超时。⭐ v0.3.15 **状态分两种**（determinism §7.1）：泵到的状态用 `--ready`/`--after-ready N`（状态相对再泵 N 帧）；**等到的状态**（GLB 在 worker 里解码、纹理到达）用 `--hold <expr> --hold-after N --hold-grace ms`——先泵 N 帧让页面在泵的世界里发出请求，真实时间等到达（虚拟钟钉住）+ grace，再两侧同样绝对泵完。raycastkbd 25% 检查点：绝对泵 1/3 概率 2.91（未到达）、`--after-ready` 恒 1.7（相位错开）、泵前 hold 60s 超时、`--hold-after 30 --hold-grace 1500` 归零。v0.3.16：同一 `--out` 里混用 `--self` 与跨侧直接 FATAL（exit 2），metric.json 的 `kind` 不再被旧值覆盖
+// `node pixelcompare.mjs --a http://127.0.0.1:25002/ --b http://127.0.0.1:25001/ --name home`；1728×1080 加 `--format jpeg --quality 92`
 
 import { writeFileSync, readFileSync, mkdirSync } from 'node:fs';
 import { join } from 'node:path';
@@ -72,11 +80,22 @@ import {
 } from './lib/ports.mjs';
 import {
   findChrome,
+  headlessArgs,
   launchChrome,
   preflightChrome,
   shotCeilingAdvice,
   shotLikelyTooBig,
 } from './lib/chrome.mjs';
+import { connectCdp } from './lib/cdp.mjs';
+import { cli } from './lib/cli.mjs';
+
+cli({
+  known: ['a', 'b', 'name', 'out', 'width', 'height', 'format', 'quality', 'settle', 'ready', 'after-ready',
+    'hold', 'hold-grace', 'hold-after', 'drive', 'pump', 'chunk', 'freeze-at', 'seed', 'label-a', 'label-b',
+    'max-mean', 'cdp-port'],
+  bools: ['self', 'freeze-css'],
+  file: import.meta.url,
+});
 
 const args = process.argv.slice(2);
 const flag = (name, dflt) => {
@@ -86,14 +105,42 @@ const flag = (name, dflt) => {
   return i >= 0 && args[i + 1] !== undefined ? args[i + 1] : dflt;
 };
 
-const URL_A = flag('a', null);
-const URL_B = flag('b', null);
+// ⭐ The pump protocol REQUIRES the shim, and serve.mjs only injects it when the
+// request carries ?__probe — so a URL without it is never what the caller meant.
+// Measured: a bare URL produced "window.__pump never appeared within 30s" nine
+// times in a row, and the truncated error (relayed through pixel-walk's 60-char
+// slice) pointed at the serve config, which was fine all along. Append it here,
+// once, instead of asking every caller to remember.
+const withProbe = (u) => {
+  if (!u) return u;
+  try { const x = new URL(u); if (!x.searchParams.has('__probe')) { x.searchParams.set('__probe', ''); return x.href; } return u; }
+  catch { return u; }
+};
+const URL_A = withProbe(flag('a', null));
+const URL_B = withProbe(flag('b', null));
 if (!URL_A || !URL_B) {
   console.error('usage: pixelcompare.mjs --a <urlA> --b <urlB> [--name home] [--out docs/pixelcompare] [--width 1280] [--height 800] [--settle 6000] [--ready expr] [--seed expr] [--label-a A] [--label-b B] [--format png|jpeg] [--quality 92] [--max-mean N] [--self] [--pump dt,frames]');
   process.exit(2);
 }
 const NAME = flag('name', 'home');
 const OUT = flag('out', join(process.cwd(), 'docs', 'pixelcompare'));
+const KIND = args.includes('--self') ? 'self-band' : 'cross-side';
+// ⛔ Refuse to MIX KINDS in one metric.json, and refuse HERE — before the
+// server wait and before a browser is launched. The tag used to be spread
+// under the loaded object (`{kind, ...metrics}` with `metrics.kind` already
+// set), so the file kept whichever kind its first run wrote: a band file and
+// a cross-side pass could share one metric.json and the "tag travels with the
+// numbers" promise at the write site was never enforced. A file with no tag is
+// a pre-tag file and is simply tagged from here on.
+{
+  let prior = null;
+  try { prior = JSON.parse(readFileSync(join(OUT, 'metric.json'), 'utf8')).kind ?? null; } catch {}
+  if (prior && prior !== KIND) {
+    console.error(`FATAL: ${join(OUT, 'metric.json')} is tagged kind=${prior}, but this run is ${KIND}.`);
+    console.error(`       A band file and a cross-side file must not share one metric.json — use a different --out.`);
+    process.exit(2);
+  }
+}
 const W = Number(flag('width', 1280));
 const H = Number(flag('height', 800));
 // PNG by default: the saved frames are evidence and a byte-exact gate needs
@@ -112,6 +159,30 @@ if (FORMAT !== 'png' && (!Number.isInteger(QUALITY) || QUALITY < 1 || QUALITY > 
 const EXT = FORMAT === 'jpeg' ? 'jpg' : FORMAT;
 const SETTLE = Number(flag('settle', 6000));
 const READY = flag('ready', null);
+// --after-ready N: align on STATE first (the frame where --ready turns true on each side), THEN pump N more frames.
+// Waiting for an absolute pump count instead differs by one mount phase between the sides (darkroom /work: 1.8–2.5 at
+// pumps 180/210, 0 at 60/90/120/240 — phase noise, not a porting gap). Same-frame means state-relative time.
+const AFTER_READY = Number(flag('after-ready', '0')) || 0;
+// --hold <expr> [--hold-grace ms]: the OTHER half of state alignment. --ready/--after-ready
+// aligns on a state that is reached BY PUMPING (a mount phase in virtual time). But a
+// state reached in REAL time — a GLB decoded on a worker, a texture arriving — must be
+// waited for BEFORE the first pump, with the virtual clock still at 0: then both sides
+// pump the same absolute frames from the same starting state. Aligning such a state
+// with --after-ready instead makes the two sides' absolute pump counts differ by their
+// arrival jitter, and every time-driven animation lands at a different phase (raycastkbd
+// walk-025: exploded switch vs assembled switch, self-band a constant 1.7; with --hold
+// and absolute pumping 0.00). --hold-grace is the real-time tail after the predicate
+// (decode completion has no page-visible signal) — a stated deviation from "settle is a
+// page state", register it.
+const HOLD = flag('hold', null);
+const HOLD_GRACE = Number(flag('hold-grace', '0')) || 0;
+// --hold-after N: pump N frames FIRST, then hold. The arrival you wait for is usually
+// requested from inside the pumped world (an IntersectionObserver record, a mount effect,
+// the scroll drive reaching the section) — with the clock frozen at 0 the request is never
+// issued and the hold times out (measured: 60s, 5/5 checkpoints). N frames of virtual time
+// let the page ask; the hold then waits in real time; the remaining total−N frames pump the
+// same absolute clock on both sides.
+const HOLD_AFTER = Number(flag('hold-after', '0')) || 0;
 // ⛔ A LOAD-TIME SEED CANNOT DRIVE A PAGE WHOSE TARGET DOES NOT EXIST YET.
 // Measured: a site whose scroll container is created only after its preloader
 // finishes. The seed ran at `load`, found `scrollHeight - clientHeight === 0`,
@@ -157,7 +228,7 @@ const { port: CDP_PORT, label: CDP_LABEL } = resolvePort({
   envName: 'CDP_PORT',
 });
 
-const CHROME = findChrome();
+const CHROME = await findChrome();
 
 const waitFor = (fn, ms, label) => new Promise((resolve, reject) => {
   const t0 = Date.now();
@@ -226,10 +297,11 @@ const chrome = launchChrome({
   role: 'pixelcompare',
   port: CDP_PORT,
   tool: 'pixelcompare.mjs',
+  // The shared headless set (anti-throttling, sentinel) plus autoplay, so both
+  // sides' videos are at the same frame without a gesture.
   args: [
-    '--headless=new', `--remote-debugging-port=${CDP_PORT}`,
-    '--no-first-run', '--disable-background-timer-throttling', '--disable-renderer-backgrounding',
-    '--mute-audio', `--window-size=${W},${H}`, '--autoplay-policy=no-user-gesture-required', sentinel.url,
+    ...headlessArgs({ port: CDP_PORT, width: W, height: H, sentinelUrl: sentinel.url }),
+    '--autoplay-policy=no-user-gesture-required',
   ],
 });
 // Our own page or nothing: attaching to a browser this script did not start
@@ -238,62 +310,24 @@ const target = await assertOwnBrowser({
   port: CDP_PORT, sentinel, tool: 'pixelcompare.mjs', pid: chrome.pid,
 });
 
-const ws = new WebSocket(target.webSocketDebuggerUrl);
-await new Promise((resolve, reject) => { ws.onopen = resolve; ws.onerror = reject; });
-let msgId = 0;
-const pending = new Map();
-ws.onmessage = (event) => {
-  const msg = JSON.parse(event.data);
-  if (msg.id && pending.has(msg.id)) {
-    const p = pending.get(msg.id);
-    pending.delete(msg.id);
-    msg.error ? p.reject(new Error(msg.error.message)) : p.resolve(msg.result);
-  }
-};
-// THE loud-failure hook. An oversized screenshot does not return an error, it
-// kills the connection (close 1006); with no onclose handler and no timeout the
-// in-flight call never settles and the script hangs forever, printing nothing.
-// A silent timeout is the worst failure shape there is, so both are handled.
-let socketClose = null;
-ws.onclose = (ev) => {
-  socketClose = ev?.code ?? 1006;
-  const err = new Error(
-    `CDP socket closed (${socketClose}) with ${pending.size} call(s) in flight — ` +
-      `on a screenshot this means the frame exceeded Node's WebSocket payload ceiling`,
-  );
-  for (const p of pending.values()) p.reject(err);
-  pending.clear();
-};
-const cdp = (method, params = {}, timeoutMs = 120000) => new Promise((resolve, reject) => {
-  if (socketClose !== null) {
-    reject(new Error(`CDP socket already closed (${socketClose}); cannot send ${method}`));
-    return;
-  }
-  const id = ++msgId;
-  const timer = setTimeout(() => {
-    pending.delete(id);
-    reject(new Error(`CDP timeout after ${timeoutMs}ms: ${method}`));
-  }, timeoutMs);
-  pending.set(id, {
-    resolve: (v) => { clearTimeout(timer); resolve(v); },
-    reject: (e) => { clearTimeout(timer); reject(e); },
-  });
-  ws.send(JSON.stringify({ id, method, params }));
-});
+// THE loud-failure hook (an oversized screenshot kills the connection with
+// close 1006 instead of returning an error) and the per-call timeout both live
+// in lib/cdp.mjs; a silent hang is the worst failure shape there is.
+const cdp = await connectCdp(target.webSocketDebuggerUrl, { defaultTimeoutMs: 120000 });
 const evalJs = async (expression) => {
-  const res = await cdp('Runtime.evaluate', { expression, awaitPromise: true, returnByValue: true });
+  const res = await cdp.send('Runtime.evaluate', { expression, awaitPromise: true, returnByValue: true });
   if (res.exceptionDetails) throw new Error(res.exceptionDetails.exception?.description || 'eval failed');
   return res.result.value;
 };
 
-await cdp('Runtime.enable');
-await cdp('Page.enable');
-await cdp('Emulation.setDeviceMetricsOverride', { width: W, height: H, deviceScaleFactor: 1, mobile: false });
-if (SEED) await cdp('Page.addScriptToEvaluateOnNewDocument', { source: SEED });
+await cdp.send('Runtime.enable');
+await cdp.send('Page.enable');
+await cdp.send('Emulation.setDeviceMetricsOverride', { width: W, height: H, deviceScaleFactor: 1, mobile: false });
+if (SEED) await cdp.send('Page.addScriptToEvaluateOnNewDocument', { source: SEED });
 if (FREEZE_CSS) {
   // Injected on new document so it applies before first paint, and re-applied
   // after settle (below) for anything mounted later.
-  await cdp('Page.addScriptToEvaluateOnNewDocument', {
+  await cdp.send('Page.addScriptToEvaluateOnNewDocument', {
     source: `(() => {
       const css = \`*, *::before, *::after {
         animation-play-state: paused !important;
@@ -321,7 +355,7 @@ function shotFatal(label, err) {
     w: W, h: H,
     format: FORMAT,
     quality: FORMAT === 'png' ? null : QUALITY,
-    closeCode: socketClose,
+    closeCode: cdp.closed,
   })) console.error(`[pixel] ${l}`);
   chrome.reap();
   process.exit(4);
@@ -329,7 +363,7 @@ function shotFatal(label, err) {
 
 let landA = null, landB = null;
 async function capture(url, label) {
-  await cdp('Page.navigate', { url });
+  await cdp.send('Page.navigate', { url });
   // ⛔ --ready is NOT a pre-pump wait. Checking it before the pump can only ever
   // express "ready without any driving", and on a frozen page the states worth
   // waiting for are exactly the ones the pump has to produce: a preloader that
@@ -379,22 +413,52 @@ async function capture(url, label) {
       chrome.reap();
       process.exit(6);
     }
+    // Real-time wait with the virtual clock frozen: nothing the page animates
+    // advances between two __pump calls, so after the hold both sides resume the
+    // same absolute clock from the same (arrived) state.
+    let held = !HOLD;
+    const holdNow = async (done) => {
+      const ok2 = await waitFor(async () => { const r = await evalJs(HOLD); return r === true || r === 'true'; }, 60000, label + ' hold')
+        .then(() => true).catch(() => false);
+      if (!ok2) {
+        console.error(`[pixel] FATAL: ${label} never satisfied --hold within 60s of real time (after ${done} pumped frame(s)) — do NOT compare this frame.`);
+        console.error(`        If the arrival is only REQUESTED from inside the pumped world (IO record, mount effect, scroll drive), raise --hold-after.`);
+        chrome.reap();
+        process.exit(6);
+      }
+      if (HOLD_GRACE > 0) await new Promise((r) => setTimeout(r, HOLD_GRACE));
+      console.log(`[pixel]   ${label}: --hold satisfied after ${done} pumped frame(s)${HOLD_GRACE ? ` (+${HOLD_GRACE}ms grace)` : ''}, resuming the absolute clock`);
+      held = true;
+    };
+    if (HOLD && HOLD_AFTER === 0) await holdNow(0);
     const total = frames || 60;
-    const chunk = Math.max(1, Math.ceil(total / 40));
+    // --chunk N: pump granularity. State alignment (--ready) resolves to ONE chunk —
+    // a marquee that starts 8–16 frames earlier on the single-bundle rebuild sits
+    // entirely inside the default 6-frame chunk, and the two sides can only be
+    // pinned to the same frame with a 1-frame chunk (darkroom /about 2.57 → 0.00).
+    const chunk = Number(flag('chunk', '0')) > 0 ? Number(flag('chunk', '0')) : Math.max(1, Math.ceil(total / 40));
     const gap = Math.max(20, Math.floor(SETTLE / Math.ceil(total / chunk)));
     let readyAt = null;
     for (let done = 0; done < total; done += chunk) {
+      if (!held && done >= HOLD_AFTER) await holdNow(done);
       await evalJs(`(window.__pump(${dt || 16.7}, ${Math.min(chunk, total - done)}), true)`);
       if (DRIVE) await evalJs(`(function(){ try { ${DRIVE} } catch (e) { return "ERR:" + e; } return true; })()`);
       if (READY && readyAt === null) {
         const r = await evalJs(READY);
         if (r === true || r === 'true') {
           readyAt = done + chunk;
-          console.log(`[pixel]   ${label}: ready after ${readyAt} pumped frame(s) — stopping early`);
+          console.log(`[pixel]   ${label}: ready after ${readyAt} pumped frame(s) — ${AFTER_READY ? `then +${AFTER_READY} frame(s) state-relative` : 'stopping early'}`);
           break;
         }
       }
       await new Promise((r) => setTimeout(r, gap));
+    }
+    if (READY && readyAt !== null && AFTER_READY > 0) {
+      for (let done = 0; done < AFTER_READY; done += chunk) {
+        await evalJs(`(window.__pump(${dt || 16.7}, ${Math.min(chunk, AFTER_READY - done)}), true)`);
+        if (DRIVE) await evalJs(`(function(){ try { ${DRIVE} } catch (e) { return "ERR:" + e; } return true; })()`);
+        await new Promise((r) => setTimeout(r, gap));
+      }
     }
 
     if (READY && readyAt === null) {
@@ -418,7 +482,7 @@ async function capture(url, label) {
   }
   let data;
   try {
-    ({ data } = await cdp('Page.captureScreenshot', {
+    ({ data } = await cdp.send('Page.captureScreenshot', {
       format: FORMAT,
       ...(FORMAT === 'png' ? {} : { quality: QUALITY }),
     }));
@@ -457,13 +521,13 @@ const inlineFatal = (step, err) => {
   console.error(`[pixel]   it inlines BOTH frames into one CDP message (${INLINE_B64.toLocaleString()} base64 chars) and reads the result back.`);
   for (const l of shotCeilingAdvice({
     w: W, h: H, format: FORMAT, quality: FORMAT === 'png' ? null : QUALITY,
-    sizeB64: INLINE_B64, closeCode: socketClose,
+    sizeB64: INLINE_B64, closeCode: cdp.closed,
   })) console.error(`[pixel] ${l}`);
   chrome.reap();
   process.exit(4);
 };
 
-// --- NON-BLANK PRECONDITION (verification-gates.md §4.8) ---------------------
+// --- NON-BLANK PRECONDITION (gate-failure-modes.md §1.8) ---------------------
 // ⛔ Runs BEFORE the diff, and it is not optional. A comparison of two empty
 // frames reports meanAbsDiff 0, worstCellDiff 0, similarity 100 — the exact
 // shape of a perfect result. Measured on a WebGL target whose determinism
@@ -597,13 +661,16 @@ writeFileSync(join(OUT, `side-by-side-${NAME}.jpg`), Buffer.from(composite, 'bas
 // merge into metric.json so repeated runs (one per view/state) accumulate
 let metrics = {};
 try { metrics = JSON.parse(readFileSync(join(OUT, 'metric.json'), 'utf8')); } catch {}
+// Strip the loaded tag so this run's KIND wins the spread (the kind check
+// above already guaranteed the two agree, or exited before any pixel was taken).
+delete metrics.kind;
 metrics[NAME] = metric;
 // The tag travels with the numbers: a band file must never be readable later as
 // a cross-side pass. Anything consuming these files should refuse to mix kinds.
-writeFileSync(join(OUT, 'metric.json'), JSON.stringify({ kind: SELF ? 'self-band' : 'cross-side', ...metrics }, null, 2));
+writeFileSync(join(OUT, 'metric.json'), JSON.stringify({ kind: KIND, ...metrics }, null, 2));
 console.log('[pixel] wrote', OUT);
 
-ws.close();
+cdp.close();
 // Reap the whole process group and only then delete the profile — a live Chrome
 // keeps writing into that directory, so removing it first throws ENOTEMPTY and a
 // passing comparison exits non-zero on a failure that says nothing about the

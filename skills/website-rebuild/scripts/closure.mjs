@@ -13,9 +13,17 @@
  * an identifier invites it to be copied back in truncated.
  *
  *   node scripts/closure.mjs --seed <id>[,<id>...] [--map docs/module-map.json] [--out docs/slice-closure.json]
+ *
+ * 中文规格（自 scripts/README.md 迁入，v0.3.21；本表另一拼写：`closure.mjs`）
+ * 从种子模块算**传递依赖闭包**，是竖切边界的唯一依据。⛔ **未知种子 ID 一律 FATAL** 并给出 did-you-mean——静默丢弃会产出一个“小一号但看似合理”的切片，失败推迟到运行时
+ * 从种子模块算传递依赖闭包，竖切边界的唯一依据。⛔ 未知种子 ID 一律 FATAL + did-you-mean
+ * `node scripts/closure.mjs --seed <id>`
  */
 import { readFile, writeFile, mkdir } from "node:fs/promises";
 import path from "node:path";
+import { cli } from "./lib/cli.mjs";
+
+cli({ known: ["seed", "map", "out"], bools: [], file: import.meta.url });
 
 const args = process.argv.slice(2);
 const flag = (n, d) => { const i = args.indexOf("--" + n); return i >= 0 && args[i + 1] !== undefined ? args[i + 1] : d; };
@@ -30,6 +38,10 @@ const map = JSON.parse(await readFile(MAP, "utf8"));
 // or `id.startsWith` throws on the first numeric id it meets.
 const idOf = (m) => String(m.id);
 const byId = new Map(map.modules.map((m) => [idOf(m), m]));
+// ⛔ Aliases resolve too: a factory can answer to several ids (dedup runs) and to
+// scope-hoisted sub-module ids (ctx.s(…, subId)). A require of ANY of them must
+// land on the owning module, or the closure reports phantom missing ids.
+for (const m of map.modules) for (const a of m.aliases || []) if (!byId.has(String(a))) byId.set(String(a), m);
 
 const unknownSeeds = seed.filter((id) => !byId.has(id));
 if (unknownSeeds.length) {
@@ -52,13 +64,20 @@ while (q.length) {
   for (const r of m.requires) { const rid = String(r); if (!seen.has(rid)) q.push(rid); }
 }
 const missing = [...seen].filter((id) => !byId.has(id));
-const mods = [...seen].filter((id) => byId.has(id));
-const lines = mods.reduce((t, id) => t + byId.get(id).lines, 0);
+// ⛔ Dedup through aliases before counting. Several requested ids can resolve to
+// ONE owning module (dedup runs, scope-hoisted sub-ids); counting per requested
+// id triples both the module count and the line total, and the slicer would cut
+// the same body once per alias. The closure's output is OWNING ids only.
+const owning = new Map(); // primary id -> module
+for (const id of seen) { const m = byId.get(id); if (m) owning.set(idOf(m), m); }
+const mods = [...owning.keys()];
+const aliasHits = [...seen].filter((id) => byId.has(id)).length - mods.length;
+const lines = [...owning.values()].reduce((t, m) => t + m.lines, 0);
 const total = map.modules.reduce((t, m) => t + m.lines, 0);
 
 console.log(`=== closure ===`);
 console.log(`  seeds: ${seed.join(", ")}`);
-console.log(`  ${mods.length} module(s) / ${lines} lines  (${(lines / total * 100).toFixed(1)}% of the bundle's ${total})`);
+console.log(`  ${mods.length} module(s) / ${lines} lines  (${(lines / total * 100).toFixed(1)}% of the bundle's ${total})${aliasHits ? `; ${aliasHits} alias id(s) folded in` : ""}`);
 if (missing.length) {
   console.log(`\n  FAIL ${missing.length} required id(s) are not in the map — the closure is NOT closed:`);
   for (const id of missing.slice(0, 10)) console.log(`         ${id}`);

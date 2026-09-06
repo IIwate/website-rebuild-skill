@@ -69,11 +69,17 @@
  *       node scripts/lib/ports.mjs 21012     # decode one port
  *
  * Zero dependencies (Node 22+ builtins only).
+ *
+ * 中文规格（自 scripts/README.md 迁入，v0.3.21；本表另一拼写：`lib/ports.mjs`）
+ * **端口分配 + 实例身份注册表**（见本文件顶部一节）：`21000 + slot×1000 + lane×10 + side` 的确定性分配（默认互不重叠、端口自带语义）、占用即退 3 并点名占用方、CDP sentinel 归属校验、`serve.mjs` 身份 token 与双侧同一性断言。带 CLI：打印本工作区端口表 / 反解端口
+ * `node scripts/lib/ports.mjs`；脚本内 `import { resolvePort, assertPortFree, assertOwnBrowser } from "./lib/ports.mjs"`
  */
 import { createHash, randomBytes } from "node:crypto";
 import { existsSync } from "node:fs";
 import net from "node:net";
 import path from "node:path";
+import { cli } from "./cli.mjs";
+import { connectCdp } from "./cdp.mjs";
 
 export const PORT_BASE = 21000;
 export const SLOT_COUNT = 9;
@@ -333,15 +339,10 @@ export async function assertOwnBrowser({ port, sentinel, tool, pid = null, timeo
 async function warnOnForeignPid(port, pid, tool) {
   try {
     const v = await (await fetch(`http://127.0.0.1:${port}/json/version`, { signal: AbortSignal.timeout(2000) })).json();
-    const ws = new WebSocket(v.webSocketDebuggerUrl);
-    const info = await new Promise((resolve, reject) => {
-      const timer = setTimeout(() => reject(new Error("timeout")), 3000);
-      ws.onopen = () => ws.send(JSON.stringify({ id: 1, method: "SystemInfo.getProcessInfo" }));
-      ws.onerror = () => (clearTimeout(timer), reject(new Error("ws")));
-      ws.onmessage = (e) => (clearTimeout(timer), resolve(JSON.parse(e.data)));
-    });
-    ws.close();
-    const browser = info?.result?.processInfo?.find((p) => p.type === "browser");
+    const cdp = await connectCdp(v.webSocketDebuggerUrl, { defaultTimeoutMs: 3000 });
+    let info = null;
+    try { info = await cdp.send("SystemInfo.getProcessInfo", {}, 3000); } finally { cdp.close(); }
+    const browser = info?.processInfo?.find((p) => p.type === "browser");
     if (browser && browser.id !== pid) {
       console.error(
         `[ports] NOTE: ${tool} spawned pid ${pid} but the browser on ${port} reports pid ${browser.id}. ` +
@@ -417,6 +418,8 @@ export function annotateHost(host) {
 // --- CLI --------------------------------------------------------------------
 
 if (import.meta.url === `file://${process.argv[1]}`) {
+  // Only the CLI mode validates argv; importers never pay for it.
+  cli({ file: import.meta.url, positional: "[port]" });
   const arg = process.argv[2];
   if (arg) {
     const d = describePort(arg);

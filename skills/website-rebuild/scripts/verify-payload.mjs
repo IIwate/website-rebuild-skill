@@ -29,13 +29,23 @@
  *   node scripts/verify-payload.mjs --a http://127.0.0.1:24001 --b http://127.0.0.1:24002 \
  *        --routes /,/works,/about,/contact
  *   node scripts/verify-payload.mjs --a <base> --routes … --dump docs/payload
+ *   node scripts/verify-payload.mjs --a <base> --b <base> --routes … --allow-absent
  *
  * ⛔ It evaluates the payload with `new Function`. That is safe HERE and only
  * here: the input comes from a mirror of a site we are already running in a
  * browser, and the alternative — reimplementing the serialiser's argument
  * substitution — would be a second implementation of somebody else's format,
  * which drifts (verification-gates.md §2.1.1).
+ *
+ * 中文规格（自 scripts/README.md 迁入，v0.3.21；本表另一拼写：`verify-payload.mjs`）
+ * **SSG payload 门**：把内联序列化数据块（Nuxt2 `window.__NUXT__` / Nuxt3 `__NUXT_DATA__` / **React flight `self.__next_f`**）**求值展开**再按结构对拍。字节门在这里不够用——payload 是一段"输出数据的程序"（参数去重、`\u002F` 转义），两份可以字节不同而语义相同，也可以字节相近而语义不同；且服务层要**改写它内部**的 URL。
+ * **SSG 载荷门**：载荷是程序不是文本（去重进函数实参、`</script>` 转义），两个字节不同的载荷可以语义相同，反之亦然——所以**求值展开后按叶路径比对**，差异必须限于已登记引用改写。认 Nuxt 2（IIFE）/ Nuxt 3（`__NUXT_DATA__` devalue，**外置 `_payload.json` 优先**）等形状；`--allow-absent` 供**无数据岛**的纯标记 SSG 声明豁免（两侧一致缺席才放行，单侧有岛照样红）
+ * `node verify-payload.mjs --a <mirror> --b <port> --routes /,/x [--allow-absent]`
  */
+import { cli } from "./lib/cli.mjs";
+
+cli({ known: ["a", "b", "routes", "dump"], bools: ["allow-absent"], file: import.meta.url });
+
 const args = process.argv.slice(2);
 const flag = (n, d) => {
   const i = args.indexOf("--" + n);
@@ -333,7 +343,7 @@ for (const route of ROUTES) {
   // CONTENT — an anchor whose visible text is the address it links to
   // normalises to the same thing either way. That distinction belongs to the
   // render comparison, which is where it was actually found
-  // (verification-gates.md §4.10). Here it would pass, and saying so is part of
+  // (payload-gates.md §2). Here it would pass, and saying so is part of
   // knowing what this PASS is worth.
   const blankPaths = (v) =>
     String(v)

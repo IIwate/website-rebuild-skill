@@ -22,12 +22,20 @@
  * duplicates and the mapping is ambiguous; matching none means it is missing.
  *
  *   node scripts/verify-harvest.mjs --baseline docs/case-baseline.json \
- *        --b <port-url> --config scripts/harvest.config.mjs
+ *        --b <port-url> --config scripts/harvest.config.mjs [--probe scripts/probe.mjs]
+ *
+ * 中文规格（自 scripts/README.md 迁入，v0.3.21；本表另一拼写：`verify-harvest.mjs`）
+ * **采集基线的 B 侧**：把采到的身份逐条喂给移植，要求**恰好匹配一个**（零个=缺失，两个=移植里有重复行为、映射不成立）。⭐ 按**行为**匹配还能**把名字找回来**——源站的缓动函数全匿名，移植侧按可读键导出，指纹一对上就知道源页面在跑哪条曲线
+ * 采集基线的 B 侧：逐条身份要求在移植侧**恰好匹配一个**。⭐ 按行为匹配能把源站说不出的名字找回来
+ * `node scripts/verify-harvest.mjs --baseline docs/case-baseline.json --b <port>`
  */
 import { readFile } from "node:fs/promises";
 import { spawn } from "node:child_process";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
+import { cli } from "./lib/cli.mjs";
+
+cli({ known: ["baseline", "b", "config", "probe"], bools: [], file: import.meta.url });
 
 const args = process.argv.slice(2);
 const flag = (n, d) => { const i = args.indexOf("--" + n); return i >= 0 && args[i + 1] !== undefined ? args[i + 1] : d; };

@@ -26,11 +26,19 @@
 //   directories matching <dir>/*-check/.
 //
 // Adapted from careers-kimi-rebuild/scripts/side-by-side.mjs.
+//
+// 中文规格（自 scripts/README.md 迁入，v0.3.21；本表另一拼写：`side-by-side.mjs`）
+// 双侧截图并排合成图（对拍产物留证）
+// 消费门产出的 mirror-/rebuild- PNG 对，合成 [镜像\|重建\|8× 差异热力图] + 汇总表。本身不起任何进程（纯后处理）；但**上游采集**受 CDP 载荷硬顶约束，若某对帧是 JPEG 回退的产物，热力图读作“差在哪”而不是“差多少”
+// `node side-by-side.mjs --dir docs`
 
 import fs from "node:fs/promises";
 import path from "node:path";
 
 import { compare, decodePng, encodePng } from "./lib/png.mjs";
+import { cli } from "./lib/cli.mjs";
+
+cli({ known: ["dir", "out"], file: import.meta.url });
 
 const args = process.argv.slice(2);
 const flag = (name, dflt) => {

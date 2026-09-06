@@ -156,12 +156,12 @@ export function transformPage(html, cfg, { head = true } = {}) {
   // rows whose `T<hex>` still claims the old count, and the page dies inside
   // React's parser with no 404 and no failed request to point at it. Measured
   // here: 17 of 115 built pages, invisible to every other gate.
-  // ⛔ AND A DEVALUE DATA ISLAND IS PROGRAM INPUT, NOT ADDRESSES (§4.18). The
+  // ⛔ AND A DEVALUE DATA ISLAND IS PROGRAM INPUT, NOT ADDRESSES (payload-gates.md §6). The
   // carve-out lives in lib/data-island.mjs rather than here, for the same
   // reason the length-aware path lives in lib/flight.mjs: serve.mjs localises
   // the same bytes at RESPONSE time, and a guard on one of two localisers is
   // either undone by the other or reported by the payload gate as a content
-  // difference (§4.9.4 — the debt this file's own header names).
+  // difference (payload-gates.md §1.4 — the debt this file's own header names).
   // ⚠ What the carve-out kept is RETURNED, not swallowed: holding the island
   // back re-opens the latent-outbound class shape 6 above exists to close, and
   // build-site.mjs is what decides whether that ships.

@@ -5,36 +5,39 @@
  * The writer applies only source-range edits. Babel is used to decide which
  * identifiers belong to a Binding; it is never used to regenerate the file,
  * so comments, formatting, property keys, and unrelated tokens stay intact.
+ *
+ * Usage:
+ *   node tools/demangle-modules.mjs --help
+ *   node tools/demangle-modules.mjs --input <file> --output <file> --rename-map <file> [--config <file>] [--check]
+ *
+ * Rename map formats:
+ *   { "renames": [{ "from": "short", "to": "descriptive" }] }
+ *   { "short": "descriptive" }
+ *   An entry without a selector applies to every Binding with that name. Use
+ *   bindingId, declarationLine/declarationColumn, or declaration.start to
+ *   select one Binding when shadowed names need different destinations.
+ *
+ * Config fields:
+ *   root, sourceType, parserPlugins, and optional allowReturnOutsideFunction.
+ *   Paths are resolved below root and are rejected when they escape it.
+ *
+ * Behavior:
+ *   Direct eval and WithStatement are dynamic-scope boundaries. They fail before
+ *   any output is written. Object shorthand is expanded at the AST-selected
+ *   occurrence, while ObjectMethod names and non-computed property keys stay put.
+ *
+ * Exit codes:
+ *   0  transformation or --check passed
+ *   1  parse, dynamic-scope, binding, or collision failure
+ *   2  CLI, dependency, or configuration failure
  */
 import { readFileSync, realpathSync, statSync, writeFileSync } from "node:fs";
 import { pathToFileURL } from "node:url";
 import path from "node:path";
+import { cli } from "../scripts/lib/cli.mjs";
 
-const HELP = `Usage:
-  node tools/demangle-modules.mjs --help
-  node tools/demangle-modules.mjs --input <file> --output <file> --rename-map <file> [--config <file>] [--check]
+cli({ known: ["input", "output", "rename-map", "config"], bools: ["check"], file: import.meta.url });
 
-Rename map formats:
-  { "renames": [{ "from": "short", "to": "descriptive" }] }
-  { "short": "descriptive" }
-  An entry without a selector applies to every Binding with that name. Use
-  bindingId, declarationLine/declarationColumn, or declaration.start to
-  select one Binding when shadowed names need different destinations.
-
-Config fields:
-  root, sourceType, parserPlugins, and optional allowReturnOutsideFunction.
-  Paths are resolved below root and are rejected when they escape it.
-
-Behavior:
-  Direct eval and WithStatement are dynamic-scope boundaries. They fail before
-  any output is written. Object shorthand is expanded at the AST-selected
-  occurrence, while ObjectMethod names and non-computed property keys stay put.
-
-Exit codes:
-  0  transformation or --check passed
-  1  parse, dynamic-scope, binding, or collision failure
-  2  CLI, dependency, or configuration failure
-`;
 
 class ConfigurationError extends Error {}
 class TransformationError extends Error {}
@@ -62,8 +65,7 @@ function parseArgs(argv) {
   const result = { check: false };
   for (let index = 0; index < argv.length; index += 1) {
     const arg = argv[index];
-    if (arg === "--help" || arg === "-h") result.help = true;
-    else if (arg === "--check") result.check = true;
+    if (arg === "--check") result.check = true;
     else if (["--input", "--output", "--rename-map", "--config"].includes(arg)) {
       const value = argv[++index];
       if (!value || value.startsWith("--")) throw new ConfigurationError(`${arg} requires a value`);
@@ -73,7 +75,7 @@ function parseArgs(argv) {
       else result.config = value;
     } else throw new ConfigurationError(`unknown option ${arg}`);
   }
-  if (!result.help && (!result.input || !result.output || !result.renameMap)) throw new ConfigurationError("--input, --output, and --rename-map are required");
+  if ((!result.input || !result.output || !result.renameMap)) throw new ConfigurationError("--input, --output, and --rename-map are required");
   return result;
 }
 
@@ -375,10 +377,6 @@ async function main() {
   let options;
   try { options = parseArgs(process.argv.slice(2)); }
   catch (error) { console.error(`FATAL: ${error.message}`); process.exitCode = 2; return; }
-  if (options.help) {
-    console.log(HELP);
-    return;
-  }
   try {
     const config = options.config ? await loadData(options.config) : {};
     if (!isObject(config)) throw new ConfigurationError("config: expected an object");

@@ -22,11 +22,20 @@
  * (verification-gates.md §2.1.2).
  *
  *   node scripts/verify-shell.mjs --config scripts/shell-config.mjs
+ *   node scripts/verify-shell.mjs [--config scripts/shell-config.mjs] [--mirror mirror] [--site site] [--max-report 8]
+ *
+ * 中文规格（自 scripts/README.md 迁入，v0.3.21；本表另一拼写：`verify-shell.mjs`）
+ * **外壳字节门**：逐文档 patience diff，每个差异块必须能被变换表**重放**解释。⛔ 不 import `build-site.mjs`——门不许生产它所审计之物（`verification-gates.md` §2.1.2）
+ * **外壳字节保真门**："复刻与镜像的差异仅限变换表所述"——不是相信构建日志，而是从字节**重推**这个命题：逐 shell 对镜像原文 diff，每个差异 hunk 必须被某条已登记变换解释（变换在 hunk 上重放）。配 `floors` 下限与 purpose 断言
+ * `node verify-shell.mjs --site site`
  */
 import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { transformPage, noindexBlock } from "./lib/shell-build.mjs";
+import { cli } from "./lib/cli.mjs";
+
+cli({ known: ["config", "mirror", "site", "max-report"], file: import.meta.url });
 
 const args = process.argv.slice(2);
 const flag = (n, d) => {

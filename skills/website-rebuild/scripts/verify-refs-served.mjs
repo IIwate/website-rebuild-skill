@@ -12,11 +12,21 @@
  * ⚠ This is cheap on purpose: one HEAD per distinct reference, no browser. It
  * cannot see a URL assembled at runtime; that is the resource-level probe's job
  * (verification-gates.md §1.6 class 4).
+ *
+ *   node scripts/verify-refs-served.mjs --base http://127.0.0.1:6376 --dir site [--allow mirror/external.txt]
+ *
+ * 中文规格（自 scripts/README.md 迁入，v0.3.21；本表另一拼写：`verify-refs-served.mjs`）
+ * **引用可达门**:把产出字节里的每一条资源引用**逐条问服务器**(一次 GET,不开浏览器)。⭐ 关键在于**问服务器,而不是再实现一遍它的解析**——一个自己走镜像的离线检查就是第二份 url→path 实现,而第二份实现就是一次等着被报成窟窿的分歧(实测它把 28 张在场的图报成缺失,只因不知道服务器的查询变体回退)。⚠ 它看不见运行时拼出来的 URL,那是资源级探针的活(§1.6 class 4)
+ * **引用可达门**：产出字节里每条资产引用逐条**向真服务器请求**（GET + Range 0-0）。⭐ 问服务器，不重实现它——离线走盘的检查是 url→path 的第二份实现，第二份实现就是一个待报的假洞。`--allow` 消费与镜像门同一份 `external.txt`（源站自身 404 的引用是登记的偏差，不是要发明文件补的洞）
+ * `node verify-refs-served.mjs --base http://127.0.0.1:<port> --allow mirror/external.txt`
  */
 import { existsSync, readFileSync } from "node:fs";
 import { readdir, readFile } from "node:fs/promises";
 import path from "node:path";
 import { joinFlightPushes, decodeEntities, decodeUrlEscapes } from "./lib/extract-refs.mjs";
+import { cli } from "./lib/cli.mjs";
+
+cli({ known: ["base", "dir", "allow"], file: import.meta.url });
 
 const args = process.argv.slice(2);
 const flag = (n, d) => { const i = args.indexOf("--" + n); return i >= 0 ? args[i + 1] : d; };

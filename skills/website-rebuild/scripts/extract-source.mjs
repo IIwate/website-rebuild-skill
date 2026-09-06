@@ -53,11 +53,19 @@
  * hardcoded there and are now config data; imports are an arbitrary list of
  * groups (alias table, stub file, anything else) instead of two fixed ones;
  * per-symbol provenance notes and the `--balance-check` boundary test are new.
+ *
+ * 中文规格（自 scripts/README.md 迁入，v0.3.21；本表另一拼写：`extract-source.mjs`）
+ * 字节切片器：按钉死行号区间切 `_pretty/` 拼成生成文件（sha256 守卫 + 切片表 + 别名/桩表，`--check` 进门），逐字移植首选形式（§2.2；配置样例 `scripts/slices.config.example.mjs`）
+ * 字节切片器：按钉死行号区间从 `_pretty/` 切字节、按**源序**拼成生成文件（`AUTO-GENERATED … DO NOT EDIT BY HAND` 头注 + 别名/桩 import + 导出表），逐字移植的首选实现形式（纪律见 [porting-discipline.md §2.2](../references/porting-discipline.md)）。三件套齐备：切片表 `{from,to,note,symbols}`（`to` 含尾行）/ 源文件 **sha256 守卫**（不符退 3 并打印"坐标系已移动，全部 `L####` 引用作废"，而不是静默切错行）/ **符号别名表**（可逐符号注明解析依据，与桩文件同为 import 组）。`--check` 生成物过期即失败（直接进验收门）；`--balance-check` 用 `new Function()` 抓切片边界错（§6.2 (c)）。**机器与数据分离**：路径/sha256/切片表/别名表全在 `--slices` 配置（`.mjs` 或 `.json`），带注释样例见同目录 `slices.config.example.mjs`
+ * `node extract-source.mjs --slices slices.config.mjs`；门：`node extract-source.mjs --slices slices.config.mjs --check`
  */
 import { readFile, writeFile, mkdir } from "node:fs/promises";
-import { createHash } from "node:crypto";
 import { pathToFileURL } from "node:url";
 import path from "node:path";
+import { cli } from "./lib/cli.mjs";
+import { sha256 } from "./lib/hash.mjs";
+
+cli({ known: ["slices", "source", "out", "sha256"], bools: ["check", "balance-check"], file: import.meta.url });
 
 const USAGE = `usage: extract-source.mjs --slices <config.mjs|config.json> [options]
 
@@ -85,9 +93,11 @@ const die = (code, msg) => {
   process.exit(code);
 };
 
-if (args.length === 0 || has("help") || has("h")) {
+// --help / -h are answered by lib/cli.mjs before this runs; a bare invocation
+// still gets the usage block and exit 2.
+if (args.length === 0) {
   console.error(USAGE);
-  process.exit(args.length === 0 ? 2 : 0);
+  process.exit(2);
 }
 
 const CHECK = has("check");
@@ -151,7 +161,7 @@ const IMPORTS = (cfg.imports ?? []).map((g, i) => {
 const raw = await readFile(SRC, "utf8").catch((e) =>
   die(2, `FATAL: cannot read source ${SRC}\n       ${e.message}`),
 );
-const sha = createHash("sha256").update(raw).digest("hex");
+const sha = sha256(raw);
 if (sha !== PINNED_SHA256) {
   die(
     3,

@@ -32,9 +32,17 @@
  * rename-map.json:
  *   { "declarations": { "<portName>": "<srcName>", ... },   // identity renames may be omitted
  *     "allow_orphans": ["<srcName>", ...] }                 // must be registered in REBUILD_PLAN §6
+ *
+ * 中文规格（自 scripts/README.md 迁入，v0.3.21；本表另一拼写：`verify-symbols.mjs`）
+ * **符号映射门**：`port/` 每个顶层声明在 `src/` 中有且仅有一个对应符号（双向单射，读 `docs/rename-map.json`），且 `src/` 里没有无来源的孤儿声明。⛔ **必需不是可选**——门只跑有限条路由，没被跑到的代码改坏了门是绿的；这是冷启动清点在重构阶段的同构物。⛔ 只读 `rename-map.json` 与两侧文本，**不许 import 重构器的 parser** 来"确认"重命名
+ * **符号存活门（平铺拼接产物）**：M(n+1) 把 port/ 重写成 src/（拆模块、重命名、加注释），每个运行时门都可以在丢了一整个声明的情况下保持绿——逐顶层声明断言在 src/ 恰好映射一个符号。esbuild 惰性包装形态的产物用它会成片假红，那种形状见 SKILL.md 的 `verify-decls` 范式
+ * `node verify-symbols.mjs`
  */
 import { readFile, readdir, stat } from "node:fs/promises";
 import path from "node:path";
+import { cli } from "./lib/cli.mjs";
+
+cli({ known: ["port", "src", "map"], bools: [], file: import.meta.url });
 
 const args = process.argv.slice(2);
 const flag = (n, d) => {

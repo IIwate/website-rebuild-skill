@@ -166,7 +166,7 @@ await preflightChrome({
 
 const sentinel = chromeSentinel();
 const chrome = launchChrome({
-  bin: findChrome(),
+  bin: await findChrome(),
   role: "verify-navigation",
   port: CDP_PORT,
   tool: "verify-spa-navigation.mjs",

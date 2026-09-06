@@ -6,35 +6,38 @@
  * ledger. It resolves every path, reads the referenced line, and checks an
  * optional needle on that same line. Configuration is the only source of the
  * document set and of historical dead zones.
+ *
+ * Usage:
+ *   node scripts/verify-ledger.mjs --help
+ *   node scripts/verify-ledger.mjs --config <config.json|config.mjs> [options]
+ *   node scripts/verify-ledger.mjs --docs <file> [--docs <file> ...] [options]
+ *
+ * Options:
+ *   --root <dir>             Project root. Default: current directory.
+ *   --docs <file>            Markdown document to scan. May be repeated.
+ *   --config <file>          JSON or ES module configuration.
+ *   --pretty-root <dir>      Source root containing pretty files.
+ *   --fatal-unresolved       Turn unbound L#### references into failures.
+ *   --format text|json       Output format. Default: text.
+ *   --help                   Print this help and exit.
+ *
+ * Configuration fields:
+ *   root, prettyRoot, documents, sourceFiles, and per-document deadZones.
+ *   A document is a string or { path, deadZones }. A source file is a string or
+ *   { path, aliases }. Dead zones require literal start and end markers.
+ *
+ * Exit codes:
+ *   0  all checked references passed (unresolved warnings are allowed by default)
+ *   1  a ledger assertion failed, or --fatal-unresolved found an unresolved item
+ *   2  CLI, configuration, or input loading error
  */
 import { readdirSync, readFileSync, realpathSync, statSync } from "node:fs";
 import { pathToFileURL } from "node:url";
 import path from "node:path";
+import { cli } from "./lib/cli.mjs";
 
-const HELP = `Usage:
-  node scripts/verify-ledger.mjs --help
-  node scripts/verify-ledger.mjs --config <config.json|config.mjs> [options]
-  node scripts/verify-ledger.mjs --docs <file> [--docs <file> ...] [options]
+cli({ known: ["root", "docs", "config", "pretty-root", "format"], bools: ["fatal-unresolved"], file: import.meta.url });
 
-Options:
-  --root <dir>             Project root. Default: current directory.
-  --docs <file>            Markdown document to scan. May be repeated.
-  --config <file>          JSON or ES module configuration.
-  --pretty-root <dir>      Source root containing pretty files.
-  --fatal-unresolved       Turn unbound L#### references into failures.
-  --format text|json       Output format. Default: text.
-  --help                   Print this help and exit.
-
-Configuration fields:
-  root, prettyRoot, documents, sourceFiles, and per-document deadZones.
-  A document is a string or { path, deadZones }. A source file is a string or
-  { path, aliases }. Dead zones require literal start and end markers.
-
-Exit codes:
-  0  all checked references passed (unresolved warnings are allowed by default)
-  1  a ledger assertion failed, or --fatal-unresolved found an unresolved item
-  2  CLI, configuration, or input loading error
-`;
 
 const SOURCE_EXTENSIONS = /\.(?:[cm]?js|jsx|ts|tsx)$/i;
 const REFERENCE_RE = /\bL(\d+)(?:\s*[–—-]\s*L?(\d+))?/g;
@@ -51,8 +54,7 @@ function parseArgs(argv) {
   const options = { docs: [], format: "text", fatalUnresolved: false };
   for (let i = 0; i < argv.length; i += 1) {
     const arg = argv[i];
-    if (arg === "--help" || arg === "-h") options.help = true;
-    else if (arg === "--fatal-unresolved") options.fatalUnresolved = true;
+    if (arg === "--fatal-unresolved") options.fatalUnresolved = true;
     else if (["--root", "--docs", "--config", "--pretty-root", "--format"].includes(arg)) {
       const value = argv[++i];
       if (!value || value.startsWith("--")) return usageError(`${arg} requires a value`);
@@ -63,7 +65,7 @@ function parseArgs(argv) {
       else options.format = value;
     } else return usageError(`unknown option ${arg}`);
   }
-  if (!options.help && !["text", "json"].includes(options.format)) {
+  if (!["text", "json"].includes(options.format)) {
     return usageError(`--format must be text or json, got ${options.format}`);
   }
   return options;
@@ -405,10 +407,6 @@ function outputText(result) {
 async function main() {
   const options = parseArgs(process.argv.slice(2));
   if (!options) return;
-  if (options.help) {
-    console.log(HELP);
-    return;
-  }
   let config = {};
   try {
     if (options.config) config = await loadData(options.config);

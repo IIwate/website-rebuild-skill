@@ -1,31 +1,44 @@
 #!/usr/bin/env node
-/**
- * module-map.mjs — enumerate a packed bundle's modules as the porting units.
- *
- * reverse-engineering.md's layer map scans TOP-LEVEL DECLARATIONS, because the
- * four projects before this one were flat concatenations: hundreds of
- * declarations sharing one scope, and the whole problem was deciding where one
- * ended. A packed bundle has ZERO top-level declarations — it is
- * `!function(modules){runtime}([…])` — and the boundaries the previous tool had
- * to reconstruct are simply present.
- *
- * ⭐ ZERO-DEPENDENCY, and that is not incidental. Everything before the source
- * stage runs with nothing installed; a rebuild project acquires devDependencies
- * only at M(n+1). The first version of this file imported @babel/* and sat in
- * scripts/ for eight releases — three lines below the paragraph forbidding it.
- *
- * It gets a real tokenizer anyway, via the same pinned-npx pattern
- * beautify-bundle.mjs uses: spawn `acorn --tokenize`, read the token stream,
- * never import anything. ⛔ Do NOT hand-roll the lexer instead. That was tried
- * elsewhere in this skill and a regex literal containing a quote desynced it by
- * 16,177 lines (F27). Brace matching over a real token stream is exact; brace
- * matching over text is a guess about strings, regexes and comments.
- *
- *   node scripts/module-map.mjs [--in mirror/_pretty/main.built.js] [--out docs/module-map.json]
- */
+//
+// module-map.mjs — enumerate a packed bundle's modules as the porting units.
+//
+// reverse-engineering.md's layer map scans TOP-LEVEL DECLARATIONS, because the
+// four projects before this one were flat concatenations: hundreds of
+// declarations sharing one scope, and the whole problem was deciding where one
+// ended. A packed bundle has ZERO top-level declarations — it is
+// `!function(modules){runtime}([…])` — and the boundaries the previous tool had
+// to reconstruct are simply present.
+//
+// ⭐ ZERO-DEPENDENCY, and that is not incidental. Everything before the source
+// stage runs with nothing installed; a rebuild project acquires devDependencies
+// only at M(n+1). The first version of this file imported @babel/* and sat in
+// scripts/ for eight releases — three lines below the paragraph forbidding it.
+//
+// It gets a real tokenizer anyway, via the same pinned-npx pattern
+// beautify-bundle.mjs uses: spawn `acorn --tokenize`, read the token stream,
+// never import anything. ⛔ Do NOT hand-roll the lexer instead. That was tried
+// elsewhere in this skill and a regex literal containing a quote desynced it by
+// 16,177 lines (F27). Brace matching over a real token stream is exact; brace
+// matching over text is a guess about strings, regexes and comments.
+//
+//   node scripts/module-map.mjs [--in mirror/_pretty/main.built.js] [--out docs/module-map.json]
+//
+// 中文规格（自 scripts/README.md 迁入，v0.3.21；本表另一拼写：`module-map.mjs`）
+// Webpack JSONP objects and sparse arrays retain their original module ids;
+// Turbopack supports async loaders and scope-hoisted aliases. Positive push
+// signatures take precedence over property-count heuristics, even for one module.
+// Duplicate primary ids use the last factory. Factories may share lines but
+// cannot overlap in character spans. Coverage requires at least half the file's
+// lines and, when there are more than eight require-shaped calls, at least half
+// those calls inside identified modules. Local dependencies (including aliases)
+// are requires; unresolved id-shaped targets are externalRequires and reported.
+// `node scripts/module-map.mjs --in mirror/_pretty/main.built.js`
 import { writeFile, mkdir, readFile } from "node:fs/promises";
 import { spawnSync } from "node:child_process";
 import path from "node:path";
+import { cli } from "./lib/cli.mjs";
+
+cli({ known: ["in", "out"], bools: [], file: import.meta.url });
 
 const ACORN_VERSION = "8.14.0"; // PINNED — a version bump can change token shapes.
 
@@ -182,6 +195,7 @@ const ownerAt = new Int32Array(T.length).fill(-1);
 const byOwner = new Map();
 for (const i of props) byOwner.set(ownerAt[i], (byOwner.get(ownerAt[i]) || []).concat(i));
 const [, members] = [...byOwner].sort((a, b) => b[1].length - a[1].length)[0] || [];
+const webpackPush = wpJsonpEntries.length > 0;
 
 // --- Turbopack container ----------------------------------------------------
 // ⭐ A second packer, a different container syntax, the same porting unit.
@@ -415,28 +429,67 @@ for (const { id, fi, aliases = [] } of entries) {
   // that decide what lands here rather than in `requires`.
   const externalRequires = new Set();
   const exportNames = new Set();
+  const subIds = new Set(); // scope-hoisted merged sub-modules registered via ctx.s(…, subId)
   let exportsAssigned = 0;
   for (let k = b; k < end; k++) {
     // --- Turbopack: ctx.i(id) / ctx.r(id) require; ctx.s([[name, …]], own) ---
     if (ctxName && lab(k) === "name" && val(k) === ctxName && lab(k + 1) === "." && lab(k + 2) === "name") {
       const method = val(k + 2);
-      if ((method === "i" || method === "r") && lab(k + 3) === "(" && lab(k + 4) === "num") {
-        // Turbopack spells ids as ordinals; `lab(k + 4)` is "num" by the guard.
+      // ⭐ ctx.A(<id>) is Turbopack's ASYNC loader — `import()` compiles to it.
+      // It is still a dependency edge: dropping it leaves the closure blind to
+      // everything behind a dynamic import (basement.studio loads its entire
+      // 3D scene as `e.A(724681).then(e => e.Scene)` — the whole office scene
+      // graph was invisible until this shape was collected).
+      if ((method === "i" || method === "r" || method === "A") && lab(k + 3) === "(" && lab(k + 4) === "num") {
         addRequire(String(val(k + 4)), "num", requires, externalRequires);
         continue;
       }
-      if (method === "s" && lab(k + 3) === "(") {
-        // ⭐ Export names, given by the packer. Every string literal at any depth
-        // inside the call, up to its matching ")", is an exported name.
+      // ⭐ ctx.v(cb) defines an ASYNC MODULE: a loader stub whose body loads
+      // sibling chunks (ctx.l("path")) and then resolves `cb(<moduleId>)`. The
+      // id handed to the resolve callback is the stub's real payload — collect
+      // every numeric literal in the call (the only numbers a stub body holds
+      // are resolve targets; chunk paths are strings).
+      if (method === "v" && lab(k + 3) === "(") {
         let d2 = 0;
         for (let j = k + 3; j < end; j++) {
           const l = lab(j);
           if (OPEN.has(l)) d2++;
           else if (CLOSE.has(l)) { d2--; if (d2 === 0) { k = j; break; } }
-          else if (d2 >= 1 && l === "string") exportNames.add(String(val(j)));
+          else if (d2 >= 1 && l === "num" && String(val(j)).length >= 3) addRequire(String(val(j)), "num", requires, externalRequires);
         }
-        exportsAssigned++;
         continue;
+      }
+      if (method === "s" && lab(k + 3) === "(") {
+        // ⭐ Export names, given by the packer. Every string literal at any depth
+        // inside the call, up to its matching ")", is an exported name.
+        // ⛔ And the call's LAST numeric argument (depth 1) is the id the exports
+        // register under. Scope hoisting merges several source modules into ONE
+        // factory, each declaring its exports via `ctx.s([…], <subId>)` — those
+        // sub-ids are require-able from other chunks (`ctx.i(subId)`), so a map
+        // that only knows factory ids leaves the closure unclosed: 87 required
+        // ids "missing" on basement.studio, every one an in-factory merge.
+        // ⛔ DO NOT SKIP THE CALL BODY. With the React Compiler, Turbopack puts the
+        // export's whole implementation INSIDE the declaration —
+        //   e.s(["useTheatre", 0, function(o, a, s, l) { …the entire component… }], 59278)
+        // — so "collect names, then jump past the matching `)`" jumped past the
+        // module: every `.A(id)` / `.i(id)` inside the component vanished from
+        // `requires`, the closure looked closed, and the runtime said "dependency
+        // not mapped" (darkroom §F-1: 12712 behind e.A inside useEffect). Names are
+        // read only at element-start positions of the declaration array (depth 2
+        // flat form, depth 3 paired form) so body strings are not mistaken for
+        // exports; the scan then continues INTO the call.
+        let d2 = 0, lastNum = null;
+        for (let j = k + 3; j < end; j++) {
+          const l = lab(j);
+          if (OPEN.has(l)) { d2++; continue; }
+          if (CLOSE.has(l)) { d2--; if (d2 === 0) break; continue; }
+          const startsElement = lab(j - 1) === "[" || lab(j - 1) === ",";
+          if ((d2 === 2 || d2 === 3) && l === "string" && startsElement) exportNames.add(String(val(j)));
+          else if (d2 === 1 && l === "num") lastNum = String(val(j));
+        }
+        if (lastNum !== null && lastNum !== String(id)) subIds.add(lastNum);
+        exportsAssigned++;
+        continue; // k advances by one: the call body is scanned like any other code
       }
     }
 
@@ -500,7 +553,7 @@ for (const { id, fi, aliases = [] } of entries) {
   // can hang them on a shadowed body — which makes slice-modules emit an alias
   // pointing at the wrong factory. Same failure text as the bug aliases exist to
   // fix ("the module factory is not available"), one level harder to trace.
-  mods.push({ id, aliases, startLine, endLine, startChar, endChar, lines: endLine - startLine + 1, requires: [...requires], externalRequires: [...externalRequires], exportsAssigned, exportNames: [...exportNames].slice(0, 12) });
+  mods.push({ id, aliases: [...new Set([...aliases, ...subIds])], startLine, endLine, startChar, endChar, lines: endLine - startLine + 1, requires: [...requires], externalRequires: [...externalRequires], exportsAssigned, exportNames: [...exportNames].slice(0, 12) });
 }
 
 // ⛔ A container can define the same id more than once, and this one does: 597
@@ -547,6 +600,15 @@ if (shadowed.length) {
   mods.push(...lastOf.values());
 }
 
+// Scope-hoisted aliases are known only after every factory has been scanned.
+// Resolve them before separating local edges from cross-chunk dependencies.
+const defined = new Set(mods.flatMap((m) => [m.id, ...m.aliases]));
+for (const m of mods) {
+  const dependencies = [...new Set([...m.requires, ...m.externalRequires])];
+  m.requires = dependencies.filter((id) => defined.has(id));
+  m.externalRequires = dependencies.filter((id) => !defined.has(id));
+}
+
 mods.sort((a, b) => b.lines - a.lines);
 const total = mods.reduce((t, m) => t + m.lines, 0);
 console.log(`=== module-map  ${path.relative(process.cwd(), IN)} ===`);
@@ -556,7 +618,23 @@ console.log(`  container: ${containerKind === "TurbopackChunk" ? "turbopack chun
 // of the next share a line, so the per-module line counts overlap by one each.
 // Say so rather than letting "more lines inside modules than in the file" read
 // as a bug in the reader.
-if (total > fileLines) console.log(`  ⚠    module spans overlap by ${total - fileLines} line(s): in a flat list one line closes a module and opens the next`);
+if (total > fileLines) console.log(`  ⚠    module spans overlap by ${total - fileLines} line(s): modules share lines (flat list, or a minified original)`);
+// ⛔ The overlap invariant is in CHARACTERS, not lines. Lines lied both ways:
+// on a beautified chunk "1,864 module lines in a 1,213-line file" was a real
+// wrong-boundary case that passed (14islands 7753 via the heuristic reader),
+// and on a MINIFIED original — the coordinates when js-beautify cannot parse
+// the file — 652 correct modules all "span" line 1, so a line rule is a
+// permanent false red (14islands F11). Factories never share characters in
+// any container shape, so the character sum is the invariant.
+{
+  const totalChars = mods.reduce((t, m) => t + (m.endChar - m.startChar + 1), 0);
+  if (totalChars > code.length) {
+    console.error(`FATAL — ${totalChars} module character(s) inside a ${code.length}-character file: the container boundaries overlap, so they are wrong.`);
+    console.error(`        Every downstream slice would carry the wrong bytes. Do NOT fall back to the flat layer map.`);
+    process.exit(5);
+  }
+}
+if (webpackPush) console.log(`  container identified by its webpackChunk/webpackJsonp push signature (positive), not by property count`);
 console.log(`  tokenized by acorn@${ACORN_VERSION} (pinned, spawned — not imported)`);
 {
   const aliased = mods.filter((m) => (m.aliases || []).length);

@@ -2,7 +2,7 @@
 // holding them back cost. Imported by BOTH localisers, so the two cannot
 // disagree about where those regions are.
 //
-// verification-gates.md §4.9.4: url localisation exists twice in this
+// payload-gates.md §1.4: url localisation exists twice in this
 // toolchain — lib/shell-build.mjs bakes it into the port's bytes at BUILD
 // time, serve.mjs rewrites the mirror on its way out at RESPONSE time — and
 // the discipline that keeps them from drifting is that whatever they must
@@ -24,7 +24,7 @@ import { decodeUrlEscapes, looksLikeAsset } from "./extract-refs.mjs";
 
 /**
  * ⛔ A DEVALUE DATA ISLAND IS PROGRAM INPUT, NOT ADDRESSES
- * (verification-gates.md §4.18). Nuxt inlines
+ * (payload-gates.md §6). Nuxt inlines
  * `<script type="application/json" id="__NUXT_DATA__">` whose entries the app
  * PARSES at runtime. Measured on hubtown: the island carries the deploy's site
  * record (name, env, url), the WebGL boot derives its Theatre environment from
@@ -40,8 +40,8 @@ const INLINE_ISLAND = /(<script[^>]*\bid=["']?__NUXT_DATA__["']?[^>]*>)([\s\S]*?
 
 /**
  * ⭐ THE SAME ISLAND ALSO ARRIVES AS A FILE. Nuxt 3 can EXTERNALIZE the payload
- * to `/_payload.json?<buildId>` (§4.19) — the same devalue-encoded program
- * input with the `<script>` wrapper removed. §4.18 and §4.19 landed in the
+ * to `/_payload.json?<buildId>` (payload-gates.md §5) — the same devalue-encoded program
+ * input with the `<script>` wrapper removed. payload-gates.md §6 and payload-gates.md §5 landed in the
  * same upstream commit and were never connected, and `.json` sits in
  * serve.mjs's TEXT_REWRITE set, so the response layer localises the
  * externalized payload exactly the way it localised the inline island.
