@@ -6,7 +6,7 @@ Compared with [upstream/main](https://github.com/boyang-hu/website-rebuild-skill
 
 ### Runtime and verification
 
-- Extends shared Chrome discovery with `CHROME_BIN` and Windows installation paths, supports `CHROME_FLAGS`, and supplies `--no-sandbox` for root environments.
+- Extends shared Chrome discovery with `CHROME_BIN`, supports `CHROME_FLAGS`, and supplies `--no-sandbox` for root environments.
 - Uses a fresh CDP target for each netcapture route, rejects invalid or empty viewport selections, and preserves full Content-Type parameters in fetched ledger rows.
 - Supports sparse webpack JSONP arrays and additional webpack export metadata. Module maps separate local `requires` from ID-shaped `externalRequires`, including path IDs in path-keyed containers; Turbopack aliases are resolved before that split. Module naming accepts path IDs and anchors Turbopack discovery to its container signature. Cold audits resolve aliases and mapped cross-chunk dependencies, select signatures by container identity, and enforce coverage independently of advisory findings.
 - Shares an off-host asset census between the crawler and mirror verifier, preserving long-extension, image-proxy and srcset evidence. The mirror verifier reads `external.txt` by default, accepts `--root`, and writes its complete gap report outside the mirror by default (`--gap-out`).

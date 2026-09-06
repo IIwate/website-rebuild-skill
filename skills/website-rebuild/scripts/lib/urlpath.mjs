@@ -101,8 +101,8 @@ export function canonicalUrl(abs) {
 }
 
 const MAX_SUFFIX = 96;
-// Anything that is illegal, magic or lossy in a path segment on macOS, Linux or
-// Windows. Hitting one of these sends the whole suffix to its hash form.
+// Filesystem, URL and shell metacharacters use the hash form. Keep this mapping
+// stable across the crawler, server and ledger checks.
 const HOSTILE = /[/\\?%*:|"'<>&=\x00-\x1f\x7f]/;
 
 /**

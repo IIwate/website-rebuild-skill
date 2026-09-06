@@ -102,8 +102,8 @@ export function parseProfileName(name) {
 // --- chrome binary discovery ------------------------------------------------
 
 /**
- * Standard candidates for local Chrome / Chromium executables across macOS,
- * Linux, and Windows. Respects CHROME_BIN / CHROME_PATH overrides.
+ * Standard candidates for local Chrome / Chromium on macOS and Linux.
+ * Respects CHROME_BIN / CHROME_PATH overrides.
  */
 export const CHROME_CANDIDATES = Object.freeze([
   process.env.CHROME_BIN,
@@ -114,8 +114,6 @@ export const CHROME_CANDIDATES = Object.freeze([
   "/usr/bin/google-chrome-stable",
   "/usr/bin/chromium",
   "/usr/bin/chromium-browser",
-  "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe",
-  "C:\\Program Files (x86)\\Google\\Chrome\\Application\\chrome.exe",
 ].filter(Boolean));
 
 /**

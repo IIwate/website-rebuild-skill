@@ -337,10 +337,8 @@ import { createHash } from "node:crypto";
 import { createReadStream, promises as fsp } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-// fileURLToPath, not URL#pathname: the latter keeps percent-escapes and the
-// leading slash of a Windows drive path, so a deliverable copied into a
-// directory with a space in its name fails to find its own manifest — and
-// that failure looks exactly like the drift this gate exists to report.
+// File URLs percent-encode spaces and Unicode; decode them before resolving
+// the byte manifest.
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const m = JSON.parse(await fsp.readFile(path.join(HERE, "byte-manifest.json"), "utf8"));
 const hashFile = (p) => new Promise((res, rej) => {

@@ -331,8 +331,8 @@ function canonicalToken(token, text) {
   return `${type}:${tokenRaw(token, text)}`;
 }
 
-function runAcorn(executable, args) {
-  const result = spawnSync(executable, args, {
+function runAcorn(args) {
+  const result = spawnSync("npx", args, {
     encoding: "utf8",
     maxBuffer: 1024 * 1024 * 64,
     timeout: 120000,
@@ -345,10 +345,9 @@ function runAcorn(executable, args) {
 function tokenize(text, label, version, tempDirectory, fileIndex, sourceType) {
   const file = path.join(tempDirectory, `fragment-${fileIndex}.js`);
   writeFileSync(file, text, "utf8");
-  const executable = process.platform === "win32" ? "npx.cmd" : "npx";
   const common = ["--yes", ACORN_PACKAGE, acornFlag(version)];
   if (sourceType === "module") common.push("--module");
-  const parsed = runAcorn(executable, [...common, "--compact", file]);
+  const parsed = runAcorn([...common, "--compact", file]);
   if (parsed.reason) return parsed;
   let ast;
   try {
@@ -357,7 +356,7 @@ function tokenize(text, label, version, tempDirectory, fileIndex, sourceType) {
   } catch (error) {
     return { infrastructure: true, reason: `cannot parse Acorn AST: ${error.message}` };
   }
-  const result = runAcorn(executable, [...common, "--tokenize", file]);
+  const result = runAcorn([...common, "--tokenize", file]);
   if (result.reason) return result;
   try {
     const tokens = JSON.parse(result.stdout);
