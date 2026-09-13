@@ -1,6 +1,6 @@
 // Preserve serialized data regions during URL localization.
 // The build and response layers share this helper so they protect the same
-// inline Nuxt data and external payload files. Sharing prevents implementation
+// inline data islands and external Nuxt payload files. Sharing prevents implementation
 // drift; independent fixtures are still needed to detect shared mistakes.
 //
 // Protecting data in only one layer lets the other rewrite it, or makes the
@@ -16,7 +16,8 @@ import { decodeUrlEscapes, looksLikeAsset } from "./extract-refs.mjs";
  *
  * The id attribute may be quoted or unquoted in the captured HTML.
  */
-const INLINE_ISLAND = /(<script[^>]*\bid=["']?__NUXT_DATA__["']?[^>]*>)([\s\S]*?)(<\/script>)/g;
+const SCRIPT_BLOCK = /(<script\b[^>]*>)([\s\S]*?)(<\/script\s*>)/gi;
+const DATA_TYPES = new Set(["application/ld+json", "speculationrules"]);
 
 /**
  * Nuxt 3 also serves devalue payloads as /_payload.json?<buildId>
@@ -30,8 +31,8 @@ export const isDataIslandFile = (where) => PAYLOAD_FILE.test(String(where || "")
 
 // NUL delimiters distinguish placeholders from ordinary text. The reference
 // extractor treats NUL-containing input as binary and does not scan its URLs.
-const MARK = (i) => `\u0000NUXTDATA${i}\u0000`;
-const MARK_RE = /\u0000NUXTDATA(\d+)\u0000/g;
+const MARK = (i) => `\u0000DATAISLAND${i}\u0000`;
+const MARK_RE = /\u0000DATAISLAND(\d+)\u0000/g;
 
 const ABS_URL = /https?:\/\/[^\s"'\\<>]+/g;
 
@@ -52,7 +53,8 @@ const urlsIn = (body) =>
  * apply: (text) => text.
  * where: the response or file path; a recognized external payload is protected
  *        as a whole.
- * Returns { text, preserved: [{ url, asset }] } without logging or global state.
+ * keepIslands: regexes selecting additional script blocks in the build config.
+ * Returns { text, preserved: [{ url, asset }], kept } without logging or global state.
  *
  * Protected payloads can retain external asset URLs. The build caller rejects
  * such addresses; the reference server reports them while preserving its data.
@@ -63,19 +65,26 @@ const urlsIn = (body) =>
  * The placeholder method assumes islands are not nested inside length-prefixed
  * Flight text rows. Such nesting would require joint length-aware processing.
  */
-export function protectDataIslands(text, apply, { where = "" } = {}) {
-  if (isDataIslandFile(where)) return { text, preserved: urlsIn(text) };
+export function protectDataIslands(text, apply, { where = "", keepIslands = [] } = {}) {
+  if (isDataIslandFile(where)) return { text, preserved: urlsIn(text), kept: 1 };
 
   const bodies = [];
-  const carved = text.replace(INLINE_ISLAND, (_m, open, body, close) => {
+  const carved = text.replace(SCRIPT_BLOCK, (script, open, body, close) => {
+    const attr = (name) => {
+      const m = open.match(new RegExp(`\\s${name}\\s*=\\s*(?:"([^"]*)"|'([^']*)'|([^\\s>]+))`, "i"));
+      return m ? m[1] ?? m[2] ?? m[3] : "";
+    };
+    // Match each script once so overlapping custom selectors cannot nest placeholders.
+    if (attr("id") !== "__NUXT_DATA__" && !DATA_TYPES.has(attr("type").toLowerCase()) &&
+        !keepIslands.some((re) => script.search(re) >= 0)) return script;
     bodies.push(body);
     return open + MARK(bodies.length - 1) + close;
   });
-  if (!bodies.length) return { text: apply(text), preserved: [] };
+  if (!bodies.length) return { text: apply(text), preserved: [], kept: 0 };
   // A callback preserves literal $& and $1 sequences in the payload; a string
   // replacement would interpret them as substitution patterns.
   const out = apply(carved).replace(MARK_RE, (_m, i) => bodies[Number(i)]);
-  return { text: out, preserved: bodies.flatMap(urlsIn) };
+  return { text: out, preserved: bodies.flatMap(urlsIn), kept: bodies.length };
 }
 
 /**

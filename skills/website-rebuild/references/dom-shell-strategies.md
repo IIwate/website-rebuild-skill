@@ -234,15 +234,9 @@ else { /* Production path. */ }
 
 ## 6. 常见坑(各策略通用)
 
-0. **JSON 数据岛里的 URL 是内容, 不是地址--T-LOCALIZE 不许进岛**[14islands].pages router 的
-   `<script id="__NEXT_DATA__" type="application/json">`(以及 JSON-LD)里既有资产地址也有
-   **文本位置的 URL**(portable text 的 `markDefs.url`/`externalLink.url`, 正文里的裸链接);
-   内建 T-LOCALIZE 的守卫只认 `>URL<` 与 `"children":"URL"` 两种位置, 实测 17/104 路由的
-   文章内容 URL 被改成 `/`,而外壳字节检查全部通过(改写本身就是登记变换).正确形状:**岛整段
-   保真(登记为 T-DATA-KEEP)**,运行时由 JSON 拼出的资产 URL 交给服务层 `serve --rewrite` /
-   `/ext/<host>/` 响应改写(hashgraphvc 6.2 / 14islands 6.4 同族);Nuxt payload 那种"岛内
-   全是资产地址"的站另当别论(verify-payload 路线),**判据是岛里有没有文本位置的 URL**,
-   不是框架名.
+0. **数据岛中的内容与地址需要分别处理.** 14islands 的 `__NEXT_DATA__` 混合了资产地址, `markDefs.url` 和正文链接, 曾有 17/104 条路由的文章 URL 被本地化为 `/`. `lib/data-island.mjs` 在构建层和服务层共同保护内联 `__NUXT_DATA__`, JSON-LD, speculationrules, 并在服务层保护外部 `_payload.json`; 构建记录保护数量为 `T-DATA-KEEP`. `cfg.keepIslands` 可用正则选择额外 script 块, 仅作用于构建配置, 需核对参照响应对这些块的处理. 它不默认包含所有 `application/json` 或 `__NEXT_DATA__`.
+
+   保留正文也会保留其中的外部 URL. 构建器继续报告并拒绝未处理的资产形态 URL, 服务层会报告这些地址. JSON-LD 元数据和实际运行时请求需要结合字段用途区分; speculationrules 还可能触发预取. 必要的字段转换应依据载荷结构单独定义并核对两侧行为, 不能以保护数量代替离线性检查. `serve --rewrite` 同样位于共享保护范围内, 不会进入这些已保护的数据岛.
 
 1. **自创补偿性 CSS 会反转成 bug**:JS 机制没对齐时用 CSS 补观感, 等 JS 对齐后补丁全部反转--rogier 十余个视觉 bug 全部源于此."宁可先不像, 也未启用功能规则"[rogier].
 2. **检查只断言想到的字段是盲的**:`<main>` 只比 3 个固定字段抓不到"shell 组件发明了源站没有的 DOM 属性";修法是**并集全量比对**替代字段名单[kimi].

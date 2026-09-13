@@ -82,7 +82,7 @@ objectandarchive 的记录包括查询变体映射冲突、转义 URL 漏提取�
 
 | 脚本 | 用途 | 阶段 | 出处 | 验证记录与限制 |
 |---|---|---|---|---|
-| `scripts/fingerprint.mjs` | Step 0 六步探测协议的跨平台等价实现(无 curl/cmp 也能跑) | Step 0(无 POSIX 工具链时) | 新写(把 §2 手工协议脚本化, 协议内容零发明) | 有限验证(逐条对照 §2 实现 + 实站冒烟三路: byte-identical / 301 链 / <1KB Referer 重试; 未经完整项目项目实践) |
+| `scripts/fingerprint.mjs` | 采集 GET 响应, 重定向, 两次采样与 bundle 标记; 跟随一次短 ESM 导入 | Step 0 | landonorris, lamalama 等探测记录 | 不自动判级; 小响应, 重定向后的导入与 sourcemap 需结合内容判断 |
 | `scripts/mirror-site.mjs` | BFS 爬虫镜像: 资产白名单迭代到不动点, 三本账逐文件 sha256 | M0 第一遍 | lando 版(rogier→noomo→lando→shopifydesign→objectandarchive 五代演进) | 已有项目使用记录 |
 | `scripts/wayback-mirror.mjs` | X 类存档恢复: 把失效站点从 Wayback 抢成标准镜像 | M0(X 类失效站点存档恢复) | darknetflix/umamiland 版(v0.2.4) | 已记录(两个失效站点实跑:312+123 文件, 0 抓取失败, 缺失资源记录如实) |
 | `scripts/netcapture.mjs` | 真实浏览器 CDP 抓包, 对账补录运行时资源(CDN 站必传 --hosts) | M0 第二遍 | kimi 版(+shopifydesign host 白名单,+objectandarchive 共享映射) | 已有项目使用记录 |
@@ -91,7 +91,7 @@ objectandarchive 的记录包括查询变体映射冲突、转义 URL 漏提取�
 | `scripts/reconcile-gaps.mjs` | 运行时缺口对账器: GAP 行 + 字节推导全集, 逐条补进镜像 | M0(运行时资源多的站) | rauchg 版 | 已记录(rauchg 项目实践 1,600+ URL 零失败) |
 | `scripts/flight-decode.mjs` | C1 的坐标系: 把每页内联的 flight 流解成可寻址的树 | M1(C1) | rauchg 版 | 已记录(19 文档全解; selftest 合成流夹具) |
 | `scripts/verify-flight.mjs` | C1 语义检查: 重构工程与镜像 flight 树逐语义比对 | M(n-1)(C1) | rauchg 版 | 已记录(18/18 路由完成验收; selftest 绿/红双面夹具) |
-| `scripts/serve.mjs` | 零依赖静态服务器: MIME / Range / 重定向回放 / ext 改写 / 桩主机, 带实例身份 | M0.5 起全程 | noomo+lando 合并版(samsy→kimi→noomo→lando→racingshop→shopifydesign→objectandarchive;kimi 的 RSC 层需按项目自加) | 已有项目使用记录 |
+| `scripts/serve.mjs` | 静态服务: MIME / Range / 重定向 / URL 改写 / 固定 JSON 端点替身, 带实例身份 | M0.5 起全程 | noomo, lando, racingshop, lamalama 等项目 | `--stub-json PATH::FILE` 按路径返回固定 JSON, 不恢复后端处理逻辑; RSC 等响应按项目配置 |
 | `scripts/probe.mjs` | CDP 无头探针:404 / 控制台错误 / 外联 / 截图, 一页一报 | M0.5 起每 commit | lando 版(rogier 探针家族→samsy regression→lando→shopifydesign) | 已有项目使用记录 |
 | `scripts/verify-routes.mjs` | 路由 / 重定向 / <head> 契约检查, 状态码也比 | M2+ | kimi 版 | 已记录(CONFIG 需按项目填写) |
 | `scripts/verify-ssr.mjs` | SSR 逐字节契约检查: body DOM / 载荷 / 运行时配置对镜像 | M2+(有 SSR 产物时最先建) | noomo 版 | 已记录(提取器为 Nuxt 专用, 换框架需替换) |
@@ -99,7 +99,7 @@ objectandarchive 的记录包括查询变体映射冲突、转义 URL 漏提取�
 | `scripts/side-by-side.mjs` | 双侧截图并排合成图(展示用, 不是检查) | M(n-1) | kimi 版 | 已有项目使用记录 |
 | `scripts/probe-shim.js` | 确定性驱动 shim:冻 rAF / 时钟 / 随机, 让两侧采到同一时刻 | M(n-1) | noomo 版(+shopifydesign 熵面补全) | 已有项目使用记录 |
 | `scripts/dump-timelines.mjs` | GLB 动画曲线 dump 成 JSON 数值账本 | M1(数据驱动动画时) | noomo 版 | 有限验证(GLB 专用, 模式可泛化) |
-| `scripts/beautify-bundle.mjs` | 固定版本 js-beautify 展开 bundle 到 _pretty/,行号即溯源坐标 | M1 | 新写薄封装(oryzo 引入流程, samsy 固定版本, kimi/noomo/lando 统一 1.15.1) | 有限验证(新写, 未经项目项目实践) |
+| `scripts/beautify-bundle.mjs` | 固定版本格式化并校验 bundle, 支持 ESM 与累积来源清单 | M1 | oryzo, samsy, kimi, noomo, lando, lamalama | 语法和 token 校验不构成全部语义的证明; 格式化失败会保留原件并报告失败 |
 | `scripts/extract-source.mjs` | 字节切片器: 按 _pretty/ 行号区间逐字取出源 | M2+(逐字移植期) | shopifydesign 版(原脚本切片表硬编码, 通用化为配置驱动) | 已记录(shopifydesign 项目实践: M2 33 段/2,475 行, M3 增至 41 段; 配置化 + `--balance-check` 为通用化新增, 已 fixture 验证切片/守卫/`--check`/边界错四路) |
 | `scripts/module-map.mjs` | 模块化 bundle 的分层表: 认容器, 列模块, 连依赖边 | M1(模块化打包产物) | airpodspro 版 | 需核对目标输入的适用性 |
 | `scripts/closure.mjs` | 从种子模块算传递依赖闭包, 纵向功能切片边界的依据之一 | M2+(模块化打包产物) | airpodspro 版 | 需核对目标输入的适用性 |
@@ -126,7 +126,7 @@ objectandarchive 的记录包括查询变体映射冲突、转义 URL 漏提取�
 | `scripts/slice-esm.mjs` | 拼接式分解切片器: parts 逐字节拼回 chunk | M2+(拼接式分解) | hashgraphvc 版(v0.2.0) | 已记录(33 chunk / 44.9 万行 → 2,043 件全数重拼一致) |
 | `scripts/verify-reassembly.mjs` | 重拼检查: 每个 part 的 sha256 与拼接后的 chunk 哈希都对得上 | M(n+1)(拼接式分解) | hashgraphvc 版(v0.2.0) | 已有项目使用记录 |
 | `scripts/sweep-routes.mjs` | 渲染广度检查: 全路由一个浏览器跑完, 逐路由记错误 / 失败 / 外联 | M0.5 起(全路由广度) | overworld/milknetwork 版(v0.2.3) | 已记录(20 路由含音频钩子 4.4 分钟全清;122 路由 7.5 分钟, 正确复认已登记的 Vimeo 401) |
-| `scripts/pixel-walk.mjs` | 检查点巡航: N 个滚动位置上跑像素检查, 先测自比带宽 | M(n-1) | shopifydesign 版(v0.1.52) | 已有项目使用记录 |
+| `scripts/pixel-walk.mjs` | 在多个滚动位置比较像素, 转发 seed, ready, hold, chunk 和 CSS 冻结参数 | M(n-1) | shopifydesign, lamalama | 自比用于估计波动; 核对实际落点, 非空帧和检查点覆盖 |
 | `scripts/lib/ports.mjs` | 端口分配 + 实例身份注册表(slot / lane / side) | 所有起服务 / 起浏览器的脚本依赖 | 新写(shopifydesign §8.30 实例连接错误事故的根治) | 已记录(本仓 fixture 实跑验证: 并发不冲突 / 占用明确报错并非零退出 / 双侧各连各的) |
 | `scripts/lib/chrome.mjs` | 无头浏览器生命周期: 进程组回收, 孤儿回收, 载荷硬顶 | 所有 CDP 脚本依赖 | 新写(objectandarchive Mn-1a 仪器教训 #5 + D-G6) | 已记录(实跑验证: 正常收尾 / SIGINT / SIGTERM 后零残留; SIGKILL 制造 11 个孤儿后下一轮自检全数回收并清 profile;1728×1080 PNG 复现 close 1006 并明确退 4;jpeg q92 全程跑通) |
 | `scripts/lib/urlpath.mjs` | 唯一的 url→本地路径映射(查询感知),爬虫与检查共用 | mirror-site / netcapture / serve / verify-mirror 共用 | objectandarchive 版(D-T1) | 已记录(本仓 fixture 实跑: 同路径不同 query 落到不同文件; 排序无关; 敏感字符不撞名) |

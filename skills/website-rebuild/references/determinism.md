@@ -148,7 +148,7 @@ kimi M4.3 日志原话:"**找出渲染器的全部熵源, 逐个用环境补丁�
 | `framebudget` | rAF 时间戳改发 `帧序号×16.67ms`,n 帧后停摆 | 过渡中间帧 |
 | `__warp(t)` | 冻结时钟可拨动, damp/blend 一帧确定性收敛 | 轮盘 detail 态 |
 | 种子化 `Math.random` | mulberry32(42) 双侧同流 | 头像洗牌, 字符瀑布 |
-| 媒体层补丁 | `play()` 假成功, `paused` 谎报 false | pixel-flow 视频 |
+| 媒体层补丁 | 按播放器选择暂停, 定帧与就绪信号 | 视频与动态纹理, 见 §2.6 |
 | 重光栅归一化 | display 抖动强制重绘, 清合成层缓存 | 带 transform 过渡的标题层 |
 | 同等隐藏 | 不可冻区域双侧同规则隐藏 | SwipeHint, LetterGlitch, 星云 |
 | 能力探测固定[shopifydesign] | GPU 微基准结果 / `canPlayType` / `deviceMemory`·`hardwareConcurrency` / `matchMedia` | 画质分级, 编解码器分支, 设备分支 |
@@ -177,14 +177,15 @@ mulberry32(42) 替换 `Math.random`,双侧同流--随机序列相同则洗牌/�
 因此要在任何应用与库对象构造前注入种子, 固定依赖版本, 并按源站物理执行序记录关键构造器及累计随机调用数. 可在启动阶段临时给 `Math.random` 加计数探针, 按区间对比消费预算; 完成取证后不把诊断探针留进生产路径. 只核对显式业务调用, 不能证明两侧随机流同位; 消费次数或顺序无法稳定时, 随机分支应拆开强制验收, 不能宣称字节确定性.
 
 ### 2.6 媒体层补丁
-`play()` 假成功, `paused` 谎报 false--视频停在 seek 帧, 同时防止站点的"卡死检测循环"发现视频没在播而进入异常分支("自己漏检")[kimi].seek 后必须重新驱帧再截图[noomo].
 
+媒体时钟独立于 JavaScript 计时器. 冻结 rAF 和定时器后, 视频仍可能播放. 根据目标播放器选择暂停与定帧方法, 并在两侧加载应用前通过同一份 `--seed` 注入. `--drive` 用于重复驱动滚动, 必须记录 `window.__walkScroll = { tag, max, target, landed }`; 未记录落点时 pixelcompare 退出 6.
 
- **视频不走 JS 时钟, 冻结页里它照播**[samsy];且作品墙的 `<video>` 是 `document.createElement` 出来**不挂 DOM** 的,`querySelectorAll('video')` 找不到. 做法: 在 shim 之后 hook `Document.prototype.createElement` 记下每个 video;每次截图前 `pause()` + `currentTime = 0`, 等齐 `seeked`(用 shim 暴露的 `__nativeSetTimeout` 补充检查超时, 页面的 `setTimeout` 已被泵接管), 再泵 2 帧让 VideoTexture 采到第 0 帧.(实证:`case-studies/determinism.md` §2.6)
+`autoplay` 可以由浏览器直接启动, 不经过被替换的 `HTMLMediaElement.prototype.play`. 对已连接到文档的媒体, 可在 `document` 的捕获阶段监听 `play`, `playing`, `loadeddata` 和 `timeupdate`. 这些事件不冒泡. 脱离 DOM 的媒体需要保存元素引用并直接监听; samsy 的视频墙通过拦截实际使用的 `Document.prototype.createElement` 找到这类元素, `querySelectorAll('video')` 无法覆盖它们.
 
- **多人房间不是任一侧的属性, 而 `Network.setBlockedURLs` 挡不住 WebSocket 握手**.对握手生效的是 DNS 层: Chrome 启动旗标 `--host-resolver-rules=MAP <host> 127.0.0.1`,两侧同加, 登记为仪器条件(§2.8 同等隐藏).
+暂停和 seek 必须有收敛条件: 仅在实际播放时调用 `pause()`, 仅在未 seeking 且当前位置与目标有差距时设置 `currentTime`. HLS/MSE 的首段可能从 0.021s 等非零 PTS 开始, 目标应位于已缓冲且可 seek 的区间. 在每个 `timeupdate` 中无条件 seek 到 0 会触发重复事件, 或使 seek 永远无法完成. 为等待和重试设置上限, 未到达目标帧时报告失败原因.
 
- **活世界的带宽来自它自己的骰子, reseed 是归类实验不是调参**[samsy]:NPC 随机游走, 粒子 spawn, CRT 屏的随机内容全走 `Math.random`--shim 把它定种了, 但两侧在到达同一状态前消耗的次数不同(three 双拷贝 / vendored 库各消耗一串),于是跨侧残差成片. 在每个视图截图前两侧同时 `__reseed(n)`,残差归零证明它们是**骰子相位**不是移植差异; 而同侧自比带宽照旧(活世界的骰子在截图前已经掷过了),检查的容差就是这个带宽 + 常数, 不许因为看见了残差再去动.
+`paused` 的替换取决于播放器分支. kimi 的特定实现需要报告 false 以避开卡死检测; lamalama 的 hls.js 在同样替换下反而触发停滞检测与 nudge. 不将任一取值作为通用补丁. seek 完成后还需确认解码帧可用, 再驱动纹理更新; noomo 和 samsy 的记录见 [case-studies/determinism.md](case-studies/determinism.md) §2.6. 等待媒体事件时使用保留的原生计时器, 避免超时机制依赖已冻结的页面定时器.
+
 ### 2.7 重光栅归一化
 display 抖动强制重绘, 清掉合成层缓存的历史次像素光栅--带 transform 过渡的层会在合成器里留下与过渡路径相关的光栅残迹, 导致同终态不同字节[kimi].
 
@@ -382,6 +383,16 @@ raycastkbd 的 25% 检查点两边都撞过:
 规则:**到达用 `--hold`(真实时间,`--hold-after N` 让页面先未解决项要),相位用 `--ready/--after-ready`(虚拟时间, 泵之中)**;
 一个页面可能两者都要. **hold 的谓词要按名点名**:`≥5 条匹配 glb|hdr|wasm 的资源条目` 在 switch.glb 还没被请求时就被别的条目凑满了, 复刻侧 1/3 概率拍到空轴体(2.91);改成五个文件名逐一 `some(includes)` 后逐次 0.01.`--hold-grace` 是对"解码完成没有页面可见信号"的让步--它是 §2.2
 "settle 必须是页面状态"的一条登记偏差, 写进 §6,不许藏在默认值里.
+
+`--chunk` 同时影响状态采样分辨率和让出真实时间的频率. 媒体管线需要清单, 分片, append 和 seek 等异步步骤; 帧预算不能脱离分块大小与真实等待间隔比较. lamalama 的记录中, chunk 5 在 900 帧内未就绪, chunk 1 约 430 帧就绪. 可从较小分块开始测量, 改变条件后重新确认同侧波动范围. 泵帧耗尽时, pixelcompare 会输出 `--ready` 留在 `window.__why` 中的诊断字符串, 最多 400 字符.
+
+多个命令共用的 seed, ready 和 drive 应引用同一份表达式, 例如共同变量或协议文件. pixelcompare 输出这三个表达式的摘要与长度, pixel-walk 转发首个检查点的记录. 摘要用于识别陈旧副本; 它不包含所有参数或浏览器状态, 不能单独证明两次采样条件一致.
+
+pixelcompare 禁用 HTTP 缓存并在每次导航前清理浏览器缓存, 避免第二拍复用第一拍的响应并改变 `img.complete` 分支. 此设置不清理 cookie, localStorage, Cache Storage 或 Service Worker. 如果目标行为依赖这些状态, 按比较场景设置相同的初始条件并记录, 不默认清空应用所需的数据.
+
+图片的 `complete` 也可能表示加载失败, 不能单独作为成功条件. 视口外图片可能在已有可显示内容时仍有待处理请求; 结合所需图片的 `currentSrc`, `naturalWidth`, 解码结果和场景状态判断. WebGL 纹理输入自身可能透明或脱离 DOM, 不能仅靠 CSS 可见性或 `document.images` 枚举它们. 优先跟踪实际元素与资源信号; 只能用额外等待时, 说明覆盖限制, 不把等待时长作为资源全部到达的证明.
+
+pixel-walk 的滚动 seed 在应用初始化前设置 `history.scrollRestoration = 'manual'`. 同 URL 连拍时, 浏览器恢复上一拍位置可能改变初始化和观察者触发顺序; 显式驱动滚动需要固定这个起点. 上述 lamalama 测量记录见 [case-studies/determinism.md](case-studies/determinism.md) §7.1.
 
 ## 8. 常见坑
 

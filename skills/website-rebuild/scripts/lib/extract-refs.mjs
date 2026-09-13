@@ -383,8 +383,21 @@ export function createRefExtractor({ origin, originHost, assetHosts, onOffHost }
     // Measured on hubtown: probe uptime 6s after a 100s settle.
     if (baseUrl && /\.js($|\?)/i.test(baseUrl)) {
       const dir = baseUrl.replace(/[^/]+(\?.*)?$/, "");
-      for (const m of text.matchAll(/"(\.\/[\w~.-]+\.(?:js|css|json|woff2?|png|jpe?g|webp|svg|wasm|glb|ktx2))"/g)) {
+      // Object keys such as import.meta.glob entries can name bundled modules
+      // without corresponding files. Exclude that spelling from this heuristic.
+      for (const m of text.matchAll(/"(\.\/[\w~.-]+\.(?:js|css|json|woff2?|png|jpe?g|webp|svg|wasm|glb|ktx2))"(?!\s*:)/g)) {
         try { addIfAsset(new URL(m[1], dir).href, urls); } catch {}
+      }
+      // Vite dependency tables can use assets/x.js relative to a literal base.
+      // Without that helper, infer the base from the emitted base/assets/ layout;
+      // other layouts still require runtime capture or explicit seeds.
+      const deps = text.match(/__vite__mapDeps=\(i,m=__vite__mapDeps,d=\(m\.f\|\|\(m\.f=\[([^\]]*)\]/);
+      if (deps) {
+        const base = text.match(/return\s*["'`](\/[^"'`]*\/)["'`]\s*\+\s*[A-Za-z_$][\w$]*\s*}/)?.[1];
+        const root = base ? DOC_ORIGIN + base : dir.replace(/[^/]+\/$/, "");
+        for (const m of deps[1].matchAll(/["']([^"']+\.(?:js|css))["']/g)) {
+          try { addIfAsset(new URL(m[1], root).href, urls); } catch {}
+        }
       }
     }
 

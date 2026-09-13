@@ -4,7 +4,8 @@
  * Records GET redirect chains, two response samples, HTML markers and bundle
  * statistics. Counts occurrences rather than matching lines. Classification is
  * left to the caller; markers and two equal samples are not conclusive evidence.
- * Small bundles are retried with Referer, then still require content inspection.
+ * A short ESM import-only entry is followed once. Other small responses are
+ * retried with Referer, then still require content inspection.
  * Cases: kprverse had different HEAD/GET results; landonorris returned a 32-byte
  * refusal; darknetflix redirected to netflix.com. These are observations, not
  * universal failure rules. Downloads include size and SHA-256 records.
@@ -270,7 +271,7 @@ async function main() {
     say(`  node fingerprint.mjs --target "${TARGET}" --bundle <bundle-url> --out ${path.basename(OUT)}`);
   }
   for (let i = 0; i < BUNDLES.length; i++) {
-    const url = BUNDLES[i];
+    let url = BUNDLES[i];
     say(`### bundle ${i + 1}: ${url}`);
     await sleep(1100);
     let r;
@@ -281,25 +282,37 @@ async function main() {
       continue;
     }
     let refererUsed = false;
+    // Relative imports belong to the entry's final URL after HTTP redirects.
+    const stub = r.status === 200 && r.body.length < 256
+      ? /^\s*import\s*(["'])(\.\/[^"']+\.m?js)\1;?\s*$/.exec(r.body.toString("utf8"))
+      : null;
+    if (stub) {
+      url = new URL(stub[2], r.finalUrl).href;
+      say(`- ESM 入口桩 (${r.body.length}B), 跟随一次导入: ${url}`);
+      saveArtifact(`bundle-${i + 1}-stub.js`, r.body, r.finalUrl);
+      await sleep(1100);
+      try { r = await getManual(url); }
+      catch (e) { say(`- 导入目标获取失败: ${e.message}`); continue; }
+    }
     if (r.body.length < 1024) {
       // Retry small responses with Referer; landonorris returned a 32-byte refusal.
       const refDir = TARGET.slice(0, TARGET.lastIndexOf("/") + 1);
       say(`-  响应 ${r.body.length}B <1KB，疑似拒绝页——补 Referer(${refDir}) 重试`);
       await sleep(1100);
       try {
-        r = await getManual(url, { referer: refDir });
+        r = await getManual(r.finalUrl, { referer: refDir });
         refererUsed = true;
       } catch (e) {
         say(`- Referer 重试失败：${e.message}`);
       }
     }
-    saveArtifact(`bundle-${i + 1}.js`, r.body, url);
+    saveArtifact(`bundle-${i + 1}.js`, r.body, r.finalUrl);
     const text = r.body.toString("utf8");
     const lines = text.split("\n");
     let longest = 0;
     for (const l of lines) if (l.length > longest) longest = l.length;
     say(
-      `- code=${r.status} bytes=${r.body.length} content-type=${r.contentType}${refererUsed ? "（带 Referer）" : ""}`,
+      `- code=${r.status} bytes=${r.body.length} content-type=${r.contentType} final=${r.finalUrl}${refererUsed ? " (Referer)" : ""}`,
     );
     if (/text\/html/i.test(r.contentType))
       say(`- JavaScript URL 返回 HTML. 核对状态码与正文是否为回退页、访问提示或错误响应; 摘要只能核对内容一致性.`);
@@ -323,7 +336,7 @@ async function main() {
       for (const rel of smMatches.slice(0, 3)) {
         let mapUrl = null;
         try {
-          mapUrl = new URL(rel, url).href;
+          mapUrl = new URL(rel, r.finalUrl).href;
         } catch {}
         if (!mapUrl || rel.startsWith("data:")) { say(`  - ${rel} → 内联或不可解析，人工确认`); continue; }
         await sleep(1100); // politeness: the protocol is one session, low rate

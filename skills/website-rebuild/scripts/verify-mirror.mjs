@@ -51,7 +51,7 @@ import { sha256, sha256File } from "./lib/hash.mjs";
 // test come from the module the WRITERS use — a gate that carries its own copy
 // audits a format it may have drifted from.
 import { readManifest, parseInventory, isBookkeeping, MANIFEST_FILE, INVENTORY_FILE } from "./lib/ledger.mjs";
-import { BROWSER_UA } from "./lib/negotiate.mjs";
+import { BROWSER_UA, fetchProfiles } from "./lib/negotiate.mjs";
 import { localRelPath, loadPolicy, describePolicy, canonicalUrl } from "./lib/urlpath.mjs";
 // Both halves come from the same module on purpose: the SHAPES a reference can
 // take, and WHICH FILES get scanned for them. A gate that carries its own copy
@@ -935,8 +935,12 @@ if (!SKIP.has("resample") && RESAMPLE > 0) {
   const errored = [];
   for (const [url, f] of picked) {
     try {
+      // Replay the recorded header profile even when Vary omits Accept;
+      // otherwise negotiated image bytes can look like source drift.
+      const want = f.profile || "std";
+      const prof = fetchProfiles(url, { origin: ORIGIN, typeHint: f.type || "" }).find((x) => x.name === want);
       const res = await fetch(url, {
-        headers: { "user-agent": BROWSER_UA, accept: "*/*", referer: ORIGIN + "/" },
+        headers: prof ? prof.headers : { "user-agent": BROWSER_UA, accept: "*/*", referer: ORIGIN + "/" },
         redirect: "manual",
       });
       if (res.status >= 300) {

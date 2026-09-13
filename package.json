@@ -1,7 +1,7 @@
 {
   "name": "website-rebuild-skill-repo",
   "private": true,
-  "version": "0.3.22",
+  "version": "0.3.23",
   "type": "module",
   "description": "Rebuild websites from captured client assets and behavior, with source mapping and automated resource, structural, and visual checks.",
   "keywords": [

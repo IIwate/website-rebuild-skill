@@ -48,6 +48,8 @@ shopify.design 的 Step 0 用 `tr ';{}' '\n' | grep -c` 数 token,一次产出�
 
 - 分层判级的实例: 杂交站可分层判级: kprverse 整体 C,但 three 子层(独立 chunk 的命令式代码)可局部按 A 手法转写[probe].
 
+**[lamalama, 2026-09-06] WordPress 内容层与客户端行为分离.** 目标 `https://lamalama.com/` 含 `WPML ver:4.9.6`, `WP Rocket 3.23.1.1`, `wp-content` 出现 1,306 次, robots 使用 Yoast 模板. 两次 HTML 响应均为 431,958 B 且字节相同. 852 KB 的 Vite ESM 主题 bundle 包含自研 WebGL 基类, 8 处 `void main`, GSAP 3.15.0 / ScrollTrigger, Lenis 1.3.15, Swup 4.8.2 和 hls.js 1.6.2. 观察到的 `admin-ajax.php` 用于联系表单 POST, `/api/` 命中来自 flareapp 错误上报. 客户端视觉与交互按 B 类恢复, 另处理分包, Bunny/HLS 资产和接口替身; 表单服务端行为并未因此恢复. 与 aimservices 的静态子目录不同, 这是 WordPress 主题站本身, 同样不能仅按 CMS 标记判 D.
+
 ## 4. 二维判定表 + 三判据规则(防 noomo / shopify.design 型误判, 核心)
 
 规则见 `scope-and-fingerprint.md` §4.

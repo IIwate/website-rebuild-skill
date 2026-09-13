@@ -282,10 +282,16 @@ const extractAssetUrls = createRefExtractor({
 const SCOPE = flag('scope', null);
 const inScope = (p) => !SCOPE || p === SCOPE.replace(/\/$/, '') || p.startsWith(SCOPE);
 
+// Resolve absolute and protocol-relative links before checking the origin.
+// Comparing origins keeps a foreign host or port out of the page queue.
+const PAGE_ORIGIN = new URL(ORIGIN).origin;
 function extractPageLinks(html) {
   const pages = new Set();
-  for (const m of html.matchAll(/href="(\/[^"#?]*)"/g)) {
-    const p = m[1];
+  for (const m of html.matchAll(/(?:^|\s)href\s*=\s*["']((?:https?:\/\/|\/)[^"'#?]*)["']/gi)) {
+    let link;
+    try { link = new URL(m[1], ORIGIN); } catch { continue; }
+    if (link.origin !== PAGE_ORIGIN) continue;
+    const p = link.pathname;
     if (!inScope(p)) continue;
     // Not pages. Feeds and data documents (.atom/.rss/.json) are still FETCHED
     // — shape 3 of the extractor sees `href="/collections/all.atom"` and queues
@@ -380,10 +386,17 @@ async function crawlPages() {
           sha256: sha256(buf),
           type: 'text/html (404 template)',
         };
+      } else if (!res.ok) {
+        // Store the HTTP failure in the ledger. Saving its body as index.html
+        // would make the local server return it as a successful page.
+        manifest[url] = { path: null, error: `HTTP ${res.status} (page)` };
+        fetched.add(url); // attempted this run — the stale-row prune must keep it
+        console.log(`[page] ${path} (${buf.length}b, HTTP ${res.status} — not saved)`);
+        continue;
       } else {
         await save(url, buf, res.headers.get('content-type'));
       }
-      console.log(`[page] ${path} (${buf.length}b${res.ok ? '' : `, HTTP ${res.status}`})`);
+      console.log(`[page] ${path} (${buf.length}b)`);
       for (const u of extractAssetUrls(html, url)) enqueueRef(u);
       if (!isNotFoundProbe) {
         for (const p of extractPageLinks(html)) if (!pagesDone.has(p)) pageQueue.push(p);

@@ -59,7 +59,7 @@ rg -o 'WebGLRenderer' probe/bundle.js | wc -l
 
 ### 步骤 5: Bundle 可分析性
 
-检查响应状态、Content-Type、文件内容与源码映射. 极短响应可能是拒绝页, 也可能是合法的小模块, 不按 1 KB 阈值直接判失败. `fingerprint.mjs` 会对小于 1 KB 的响应补 Referer 重试, 其结果仍需检查; landonorris 的 32 字节拒绝页案例说明了这一边界.
+检查响应状态, Content-Type, 文件内容与源码映射. 极短响应可能是拒绝页, 也可能是合法的小模块, 不按 1 KB 阈值直接判失败. `fingerprint.mjs` 对不足 256 B 的单条相对 ESM 导入跟随一次, 按重定向后的 URL 解析导入与 sourcemap. 对其他小于 1 KB 的响应, 包括导入目标, 补 Referer 重试, 其结果仍需检查; landonorris 的 32 字节拒绝页案例说明了这一边界.
 
 有完整 `sourcesContent` 时优先使用公开源码映射. 无需格式化的源文件直接作为坐标基准. 格式化产物保留源文件摘要与工具版本, 校验词法内容, 再针对语义敏感改动验证运行行为.
 
@@ -82,6 +82,8 @@ rg -o 'WebGLRenderer' probe/bundle.js | wc -l
 5. 对无法恢复的服务端能力标 D, 说明与其他可恢复能力的关系.
 
 aimservices 的 `/50th/` 是静态微站, 虽然宿主 robots 含 WordPress 路径, 目标路径的 `wp-content` 为 0, 资产位于 `/50th/assets/`. 应检查目标路径自身, 不能用宿主技术栈代替它.
+
+目标路径本身由 WordPress 渲染时, 仍需分别定位内容与行为的来源. lamalama 的 HTML 含大量 CMS 标记, 但 WebGL, 动画, 转场与视频控制在主题的 Vite bundle 中, 可按 B 类处理其客户端范围与平台适配. 两次 HTML 相同只提供该采样的快照证据, 不能证明服务端行为已恢复. 详细记录见案例 §3.
 
 多 chunk、Rive 数据、GLB、第三方桶、CMS 快照和公开 sourcemap 会改变工具选择或工作量, 不直接否定客户端移植. 相关站点记录包括 stripe 的 74 个分包、chungiyoo、kodeclubs、orano、synchronized-studio 和 persepolis, 见案例 §3.
 

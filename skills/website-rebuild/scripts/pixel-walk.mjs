@@ -22,7 +22,8 @@
  *   node scripts/pixel-walk.mjs --a <rebuild-url> --b <mirror-url> [--steps 9]
  *                               [--pump 16.7,120] [--max-mean 1.0] [--self]
  *                               [--out docs/pixelcompare] [--format jpeg] [--quality 92] [--rescroll-ms 1500]
- *                               [--settle ms] [--ready expr] [--hold expr] [--hold-grace ms] [--hold-after N]
+ *                               [--settle ms] [--ready expr] [--after-ready N] [--hold expr] [--hold-grace ms] [--hold-after N]
+ *                               [--seed js] [--freeze-css] [--chunk N]
  *
  */
 import { spawn } from "node:child_process";
@@ -30,12 +31,12 @@ import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { cli } from "./lib/cli.mjs";
 
-//  settle/ready/hold*/format/quality/out/pump are FORWARDED to pixelcompare
-// verbatim — a name it does not know must never be accepted here.
+// Forward capture options to pixelcompare so a walk uses the same readiness,
+// media and CSS conditions as the caller's individual captures.
 cli({
   known: ["a", "b", "steps", "pump", "out", "max-mean", "format", "quality", "rescroll-ms",
-    "settle", "ready", "hold", "hold-grace", "hold-after"],
-  bools: ["self"],
+    "settle", "ready", "hold", "hold-grace", "hold-after", "after-ready", "seed", "chunk"],
+  bools: ["self", "freeze-css"],
   file: import.meta.url,
 });
 
@@ -64,6 +65,13 @@ const READY = flag("ready", null);
 const HOLD = flag("hold", null);
 const HOLD_GRACE = flag("hold-grace", null);
 const HOLD_AFTER = flag("hold-after", null);
+// --after-ready / --chunk / --freeze-css: passed through unchanged.
+// --seed: the caller's load-time script (a media freeze, a state pin) runs
+// FIRST, then this walk's own scroll seed — one injected source, both sides.
+const AFTER_READY = flag("after-ready", null);
+const CHUNK = flag("chunk", null);
+const FREEZE_CSS = args.includes("--freeze-css");
+const USER_SEED = flag("seed", null);
 if (!A || !B) { console.error("usage: pixel-walk.mjs --a <rebuild-url> --b <mirror-url> [--steps N] [--pump dt,frames] [--max-mean N] [--self] [--ready expr] [--hold expr] [--hold-grace ms] [--hold-after N]"); process.exit(2); }
 if (STEPS < 2) { console.error("FATAL — --steps must be >= 2. One checkpoint is the problem this tool exists to fix."); process.exit(2); }
 
@@ -103,9 +111,11 @@ if (RESCROLL_MS >= PUMP_BUDGET) {
 // the same wrong thing.
 //
 //  The re-issue rides the pump, not the wall clock, so it still lands after
-// init on a frozen page.
+// init on a frozen page. Disable scroll restoration before page initialization
+// so a same-URL capture cannot start at the previous capture's landing position.
 const seedFor = (f) =>
-  `window.addEventListener("load", () => {
+  `history.scrollRestoration = "manual";
+   window.addEventListener("load", () => {
      //  FIND THE SCROLLER. The document is not always what scrolls. A site
      // using a smooth-scroll library often scrolls an inner
      // \`overflow-y: auto\` container, and there
@@ -194,7 +204,8 @@ let fail = 0;
 for (let i = 0; i < STEPS; i++) {
   const f = i / (STEPS - 1);
   const name = `walk-${String(Math.round(f * 100)).padStart(3, "0")}`;
-  const a = ["--a", A, "--b", B, "--name", name, "--pump", PUMP, "--seed", seedFor(f), "--out", OUT, "--format", FMT, "--quality", Q];
+  const seed = (USER_SEED ? USER_SEED + "\n;\n" : "") + seedFor(f);
+  const a = ["--a", A, "--b", B, "--name", name, "--pump", PUMP, "--seed", seed, "--out", OUT, "--format", FMT, "--quality", Q];
   //  Drive INSIDE the pump loop, not from a load-time seed: on a site whose
   // scroll container appears only after its preloader, a seed fires too early
   // and every checkpoint lands at 0.
@@ -204,13 +215,18 @@ for (let i = 0; i < STEPS; i++) {
   if (HOLD) a.push("--hold", HOLD);
   if (HOLD_GRACE) a.push("--hold-grace", HOLD_GRACE);
   if (HOLD_AFTER) a.push("--hold-after", HOLD_AFTER);
+  if (AFTER_READY) a.push("--after-ready", AFTER_READY);
+  if (CHUNK) a.push("--chunk", CHUNK);
+  if (FREEZE_CSS) a.push("--freeze-css");
   if (SELF) a.push("--self");
   const { code, out } = await run(a);
   //  Forward the alignment diagnostics. pixelcompare says "ready after N pumped
   // frame(s)" / "--hold satisfied after N" per side, and swallowing them left a
   // walk whose READY never fired indistinguishable from one that aligned
   // (raycastkbd: a constant 1.7 band with no line saying why).
-  for (const line of out.split("\n")) if (/^\[pixel\]\s+(REBUILD|MIRROR|[AB]):.*(ready after|--hold satisfied|never satisfied)/.test(line)) console.log(`  ${line.trim()}`);
+  // Report the first checkpoint's expressions. Seed and drive include its scroll fraction.
+  if (i === 0) for (const line of out.split("\n")) if (/^\[pixel\] instrument — /.test(line)) console.log(`  ${line.trim()}`);
+  for (const line of out.split("\n")) if (/^\[pixel\]\s+(REBUILD|MIRROR|[AB]):.*(ready after|--hold satisfied|never satisfied)/.test(line) || /window\.__why/.test(line)) console.log(`  ${line.trim()}`);
   // Landing positions, reported by the seed on each side.
   const m = out.match(/\{"meanAbsDiff":[^}]+\}/);
   const census = out.match(/REBUILD: (\d+) colours/);

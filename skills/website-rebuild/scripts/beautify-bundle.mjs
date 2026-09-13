@@ -20,7 +20,7 @@
 
 
 import { spawnSync } from "node:child_process";
-import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { tokenStream, firstDivergence, showToken } from "./lib/tokens.mjs";
 import { cli } from "./lib/cli.mjs";
@@ -45,8 +45,13 @@ if (FILES.length === 0) {
 const OUT = path.resolve(flag("out", "mirror/_pretty"));
 mkdirSync(OUT, { recursive: true });
 
-// basename -> the source that claimed it, so a repeat is caught rather than lost.
-const takenNames = new Map();
+// Retain source coordinates across batches, including filenames with spaces.
+const prior = existsSync(path.join(OUT, "README.md")) ? readFileSync(path.join(OUT, "README.md"), "utf8") : "";
+const priorRows = prior.split("\n").filter((line) => /^\| [^|]+ \| [^|]+ \| `[0-9a-f…]+` \| /.test(line));
+const takenNames = new Map(priorRows.map((line) => {
+  const [, pretty, source] = line.split("|").map((s) => s.trim());
+  return [pretty, source];
+}));
 
 const typeFor = (f) =>
   /\.css$/i.test(f) ? "css" : /\.html?$/i.test(f) ? "html" : "js";
@@ -55,6 +60,7 @@ const entries = [];
 let tokenTrouble = 0; // files whose beautified tokens differ from the source (coordinates only)
 for (const file of FILES) {
   const src = path.resolve(file);
+  const source = path.relative(process.cwd(), src);
   //  Flattening to the basename is not injective, and the coordinate system
   // this file exists to create is built on the assumption that it is. Two
   // bundles named `main.built.js` under different directories
@@ -67,14 +73,18 @@ for (const file of FILES) {
   // the same assertion verify-mirror makes about the mirror's own mapping —
   // the pretty tree needs it too, and did not have it.
   let dest = path.join(OUT, path.basename(src));
-  if (takenNames.has(path.basename(src))) {
+  if (takenNames.has(path.basename(src)) && takenNames.get(path.basename(src)) !== source) {
     const parent = path.basename(path.dirname(src));
     dest = path.join(OUT, `${parent}--${path.basename(src)}`);
     console.log(`[beautify]  basename collision: ${path.basename(src)} already written from`);
     console.log(`           ${takenNames.get(path.basename(src))}`);
     console.log(`           -> this one becomes ${path.basename(dest)}`);
   }
-  takenNames.set(path.basename(src), path.relative(process.cwd(), src));
+  if (takenNames.has(path.basename(dest)) && takenNames.get(path.basename(dest)) !== source) {
+    console.error(`FATAL: output ${dest} is already assigned to ${takenNames.get(path.basename(dest))}`);
+    process.exit(5);
+  }
+  takenNames.set(path.basename(dest), source);
   const type = typeFor(src);
   console.log(`[beautify] ${path.basename(src)} (${type}) -> ${path.relative(process.cwd(), dest)}`);
   //  js-beautify's CLI globs its -f argument. A Next dynamic-route chunk is
@@ -121,7 +131,12 @@ for (const file of FILES) {
   // ORIGINAL bytes ship as the coordinates — minified but valid.
   let verbatim = false;
   if (type === "js") {
-    const chk = spawnSync("npx", ["-y", "acorn@8.14.0", "--ecma2022", "--silent", dest], { encoding: "utf8" });
+    // Module syntax includes top-level await, which need not produce an
+    // import/export-specific error in script mode.
+    let chk = spawnSync("npx", ["-y", "acorn@8.14.0", "--ecma2022", "--silent", dest], { encoding: "utf8" });
+    if (chk.status !== 0) {
+      chk = spawnSync("npx", ["-y", "acorn@8.14.0", "--ecma2022", "--module", "--silent", dest], { encoding: "utf8" });
+    }
     if (chk.status !== 0) {
       console.error(`   beautified output DOES NOT PARSE (js-beautify corruption) — shipping the`);
       console.error(`    original bytes verbatim as this file's coordinates instead:`);
@@ -166,6 +181,8 @@ for (const file of FILES) {
 
 // The regeneration ledger. Anyone touching _pretty/ must be able to reproduce
 // it byte-for-byte from this file alone.
+const mine = new Set(entries.map((e) => e.pretty));
+const carried = priorRows.filter((line) => !mine.has(line.split("|")[1].trim()));
 const readme = `# _pretty/ — beautified bundle coordinate system
 
 Beautified with **js-beautify@${JS_BEAUTIFY_VERSION}** (PINNED — a version bump shifts
@@ -181,7 +198,7 @@ ${entries
     (e) =>
       `| ${e.pretty} | ${e.source} | \`${e.sha256.slice(0, 16)}…\` | ${e.tokens}${e.verbatim ? " (original bytes, not beautified)" : ""} | \`npx -y js-beautify@${JS_BEAUTIFY_VERSION} --type ${e.type} -f ${e.source} -o mirror/_pretty/${e.pretty}\` |`,
   )
-  .join("\n")}
+  .join("\n")}${carried.length ? "\n" + carried.join("\n") : ""}
 
 Token column: \`equal\` = safe to deliver these bytes (re-emit / slice); \`DIFFER@n\` = js-beautify
 changed content (nested template literal) — COORDINATES ONLY, deliver from the minified original.

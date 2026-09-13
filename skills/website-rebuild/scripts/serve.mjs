@@ -9,7 +9,7 @@
 //   node serve.mjs --side rebuild --root dist            # the rebuild
 //   node serve.mjs --side mirror --root mirror [--ext-hosts cdn.x.com,fonts.gstatic.com]
 //                  [--stub-ext-hosts telemetry.example.com] [--origin-host example.com] [--port N]
-//                  [--host 127.0.0.1] [--fallback-root dir,dir] [--query-ignore v,cb | --query-only w,h] [--rewrite FROM::TO]...
+//                  [--host 127.0.0.1] [--fallback-root dir,dir] [--query-ignore v,cb | --query-only w,h] [--rewrite FROM::TO]... [--stub-json PATH::FILE]...
 //   PORT=3200 SERVE_ROOT=mirror node serve.mjs    # explicit port still wins
 //
 // --side determines a default port unless an explicit port is supplied.
@@ -21,6 +21,11 @@
 // Explicit --stub-ext-hosts return local substitutes. SRI attributes are removed
 // where response rewriting would invalidate source hashes; this changes the
 // local replay's integrity behavior and is part of its recorded adaptation.
+//
+// --stub-json PATH::FILE returns a fixed, validated JSON response for an exact
+// pathname. Query strings, request bodies and methods do not select responses;
+// this is a local service substitute, not a reproduction of backend behavior.
+// The first request to each registered stub is logged.
 //
 // Derived from samsyninja, careers-kimi, storytellingnoomo, landonorris,
 // racingshop and shopifydesign, covering redirects, Range requests, external
@@ -67,7 +72,7 @@ import { cli } from "./lib/cli.mjs";
 cli({
   known: [
     "host", "port", "root", "fallback-root", "side", "origin-host", "ext-hosts",
-    "stub-ext-hosts", "query-ignore", "query-only", "rewrite",
+    "stub-ext-hosts", "query-ignore", "query-only", "rewrite", "stub-json",
   ],
   file: import.meta.url,
 });
@@ -412,6 +417,24 @@ function unicodeSlash(text, host, to) {
     .replace(new RegExp(`${U_RE}${U_RE}${esc(host)}${U_RE}`, "gi"), `${toEsc}${U}`);
 }
 
+const STUB_JSON = args
+  .map((a, i) => (a === "--stub-json" ? args[i + 1] : null))
+  .filter(Boolean)
+  .map((spec) => {
+    const at = spec.indexOf("::");
+    if (at < 1 || !spec.slice(at + 2) || !/^\/(?!\/)[^?#\s]*$/.test(spec.slice(0, at))) {
+      console.error(`FATAL: --stub-json needs PATH::FILE, got ${JSON.stringify(spec)}`);
+      process.exit(2);
+    }
+    const file = path.resolve(spec.slice(at + 2));
+    let body;
+    try { body = fs.readFileSync(file, "utf8"); JSON.parse(body); } catch (e) {
+      console.error(`FATAL: --stub-json ${spec.slice(0, at)}: ${file} is not a readable JSON file (${e.message})`);
+      process.exit(2);
+    }
+    return { path: spec.slice(0, at), file, body, hits: 0 };
+  });
+
 // --rewrite 'FROM::TO' (repeatable): a REGISTERED literal replacement applied to
 // text responses. It exists for one recurring shape that no url localisation can
 // reach — THE SOURCE PROGRAM BRANCHING ON ITS OWN HOSTNAME:
@@ -537,6 +560,8 @@ function rewriteText(text, ext) {
     // the build layer disagree on the same input.
     text = text.replace(new RegExp(`https?://${h.replace(/\./g, "\\.")}(?![/\\w.-])`, "g"), "/");
     text = text.replaceAll(`https:\\/\\/${h}\\/`, "\\/").replaceAll(`http:\\/\\/${h}\\/`, "\\/");
+    // Bare escaped origins use the same home-page mapping as the build layer.
+    text = text.replace(new RegExp(`https?:\\\\/\\\\/${h.replace(/\./g, "\\.")}(?![\\\\\\w.-])`, "g"), "\\/");
     text = text.replaceAll(`\\/\\/${h}\\/`, "\\/");
     // Shape 6: UNICODE-ESCAPED slashes. Serialised payloads escape "/" as
     // \u002F so the blob can never contain a literal "</script>" — Nuxt's
@@ -808,6 +833,15 @@ const server = http.createServer(async (req, res) => {
       }
       res.writeHead(redirect.code, { location: to, "cache-control": "no-cache" });
       return res.end();
+    }
+
+    // Fixed endpoint responses are matched by pathname before asset lookup.
+    const stub = STUB_JSON.find((x) => x.path === url.pathname);
+    if (stub) {
+      if (stub.hits++ === 0) console.log(`  [stub-json] first hit: ${req.method} ${url.pathname}${url.search.slice(0, 60)} -> ${path.basename(stub.file)}`);
+      req.resume(); // drain a POST body we never read
+      res.writeHead(200, { "content-type": "application/json; charset=utf-8", "cache-control": "no-store" });
+      return res.end(stub.body);
     }
 
     // 2. stub prefixes (unmirrored analytics proxies): keep the console quiet

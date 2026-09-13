@@ -83,7 +83,10 @@ export function localizeShapes(text, host, to, onHit = () => {}) {
   return restore(text
     .replace(new RegExp(`https?://${h}(?=/)`, "g"), hit("absolute", to))
     .replace(new RegExp(`https?://${h}(?!/)`, "g"), hit("absolute-bare", bare))
-    .replace(new RegExp(`https?:\\\\/\\\\/${h}`, "g"), hit("escaped-absolute", toEsc))
+    // A bare escaped origin still names the home page. Keep the slash escaped
+    // so the surrounding JSON or JavaScript retains its string encoding.
+    .replace(new RegExp(`https?:\\\\/\\\\/${h}(?=\\\\/)`, "g"), hit("escaped-absolute", toEsc))
+    .replace(new RegExp(`https?:\\\\/\\\\/${h}(?!\\\\/)`, "g"), hit("escaped-absolute-bare", toEsc || "\\/"))
     .replace(new RegExp(`https?:${U_RE}${U_RE}${h}(?=${U_RE})`, "gi"), hit("unicode-absolute", toU))
     .replace(new RegExp(`https?:${U_RE}${U_RE}${h}(?!${U_RE})`, "gi"), hit("unicode-absolute-bare", toU || U))
     .replace(new RegExp(`(?<!:)\\\\/\\\\/${h}`, "g"), hit("escaped-protocol-relative", toEsc))
@@ -163,8 +166,10 @@ export function transformPage(html, cfg, { head = true } = {}) {
   // build-site.mjs is what decides whether that ships.
   const guarded = protectDataIslands(out, (t) =>
     (hasFlight(t) ? rewriteFlight(t, localizeAll) : null) ?? localizeAll(t),
+    { keepIslands: cfg.keepIslands },
   );
   out = guarded.text;
+  if (guarded.kept) bump("T-DATA-KEEP", guarded.kept);
 
   // --- site-specific transforms ---------------------------------------------
   //  THESE GO THROUGH THE LENGTH-AWARE PATH TOO. It is not only localisation
@@ -211,6 +216,7 @@ export function transformPage(html, cfg, { head = true } = {}) {
 /** Every transform id the table can produce, builder and gate agreeing. */
 export const transformIds = (cfg) => [
   "T-LOCALIZE",
+  "T-DATA-KEEP",
   ...(cfg.transforms || []).map((t) => t.id),
   ...(cfg.notice ? ["T-NOINDEX"] : []),
 ];

@@ -129,6 +129,17 @@ const TMP = scratch(".tmp");
   eq("extract — .webmanifest/.jsonld/.woff2 root-relative refs are assets (v0.3.16)",
     ["https://x.com/site.webmanifest", "https://x.com/a.jsonld", "https://x.com/f.woff2"].filter((u) => lx.includes(u)).length, 3);
   truthy("extract — /about is still a page, not an asset (v0.3.16)", !lx.some((u) => u.endsWith("/about")), JSON.stringify(lx));
+  // Vite glob keys are module labels; dependency-table values are asset paths.
+  const jsb = "https://x.com/wp/dist/assets/app-AAAAAAAA.js";
+  truthy("extract — import.meta.glob key \"./x.js\": is not an address (v0.3.23)",
+    !refs(`o={"./ticker.js":()=>M(()=>Promise.resolve().then(()=>d)),"./scroller.js":()=>1}`, jsb).some((u) => /ticker|scroller/.test(u)));
+  truthy("extract — a real \"./x.js\" specifier still resolves (v0.3.23)",
+    refs(`import"./scripts-BBBBBBBB.js";`, jsb).includes("https://x.com/wp/dist/assets/scripts-BBBBBBBB.js"));
+  const vm = refs("const __vite__mapDeps=(i,m=__vite__mapDeps,d=(m.f||(m.f=[\"assets/a-CCCCCCCC.js\",\"assets/b-DDDDDDDD.css\"])))=>i.map(i=>d[i]);var vt=function(e){return`/wp/dist/`+e}", jsb);
+  eq("extract — __vite__mapDeps entries resolve against the chunk's own base literal (v0.3.23)",
+    ["https://x.com/wp/dist/assets/a-CCCCCCCC.js", "https://x.com/wp/dist/assets/b-DDDDDDDD.css"].filter((u) => vm.includes(u)).length, 2);
+  truthy("extract — …and against the importer's parent dir when no base literal is in the chunk (v0.3.23)",
+    refs("const __vite__mapDeps=(i,m=__vite__mapDeps,d=(m.f||(m.f=[\"assets/c-EEEEEEEE.js\"])))=>i.map(i=>d[i]);", jsb).includes("https://x.com/wp/dist/assets/c-EEEEEEEE.js"));
   // isTextRefSource: declared type is the oracle; octet-stream means "unknown".
   truthy("textref — declared css wins", isTextRefSource({ url: "https://x.com/f", contentType: "text/css", head: Buffer.from("a{}") }));
   truthy("textref — png bytes not text", !isTextRefSource({ url: "https://x.com/i.png", contentType: "image/png", head: Buffer.from([0x89, 0x50, 0x4e, 0x47]) }));
@@ -791,8 +802,14 @@ const TMP = scratch(".tmp");
   const http = await import("node:http");
   const { execFile } = await import("node:child_process");
   let failA = false;
+  // Page links include absolute and protocol-relative forms. Error responses
+  // must remain failures in the ledger rather than successful local pages.
+  const pageRequests = [];
   const routes = {
-    "/": ["text/html", `<html><a href="/about">about</a><script src="/app.js"></script><img src="/a.png"></html>`],
+    "/": ["text/html", (host) => `<html><a href="/about">about</a><a href="http://${host}/in/abs/">abs</a><a href='//${host}/in/proto/'>protocol</a><a href="http://127.0.0.1:1/in/foreign">foreign</a><div data-href="/in/not-page"></div><script src="/app.js"></script><img src="/a.png"></html>`],
+    "/in/abs": ["text/html", `<html><a href="/in/gone/">gone</a><img src="/in/x.png"></html>`],
+    "/in/proto": ["text/html", "<p>Protocol-relative route</p>"],
+    "/in/gone": ["text/html", `<html><body>not found</body></html>`, 404],
     "/app.js": ["text/javascript", `fetch("/data.json");x="/legal/site.html";y="/in/page.html";`],
     "/data.json": ["application/json", `{"img":"/b.png"}`],
     "/a.png": ["image/png", "PNGA"], "/b.png": ["image/png", "PNGB"],
@@ -801,10 +818,11 @@ const TMP = scratch(".tmp");
     "/in/x.png": ["image/png", "INX"], "/in/site.webmanifest": ["application/manifest+json", `{"name":"x"}`],
   };
   const srv = http.createServer((req, res) => {
+    pageRequests.push(req.url);
     const r = routes[req.url];
     if (req.url === "/a.png" && failA) { res.writeHead(500); return res.end("boom"); }
     if (!r) { res.writeHead(404); return res.end("nf"); }
-    res.writeHead(200, { "content-type": r[0] }); res.end(r[1]);
+    res.writeHead(r[2] || 200, { "content-type": r[0] }); res.end(typeof r[1] === "function" ? r[1](req.headers.host) : r[1]);
   });
   await new Promise((r) => srv.listen(0, "127.0.0.1", r));
   const origin = `http://127.0.0.1:${srv.address().port}`;
@@ -820,6 +838,13 @@ const TMP = scratch(".tmp");
     truthy("mirror-site — .html named in a chunk, in scope: crawled as a page with its assets (v0.3.16)",
       /\[page\] \/in\/page\.html/.test(c1.out) && existsSync(path.join(OUTM, "in/page.html")) && existsSync(path.join(OUTM, "in/x.png")), c1.out.slice(-300));
     truthy("mirror-site — .webmanifest is queued as an asset and written as a file (v0.3.16)", statSync(path.join(OUTM, "in/site.webmanifest")).isFile());
+    truthy("mirror-site — an ABSOLUTE same-origin href is a page link: /in/abs/ crawled, its asset fetched (v0.3.23)",
+      /\[page\] \/in\/abs/.test(c1.out) && existsSync(path.join(OUTM, "in/abs/index.html")) && existsSync(path.join(OUTM, "in/x.png")), c1.out.slice(-300));
+    truthy("mirror-site - protocol-relative links preserve origin and data-href is not a page link",
+      existsSync(path.join(OUTM, "in/proto/index.html")) && !pageRequests.some((url) => /foreign|not-page/.test(url)), JSON.stringify(pageRequests));
+    const gone = manifest()[`${origin}/in/gone`];
+    truthy("mirror-site — a 404 page is a ledger error row, never <path>/index.html (v0.3.23)",
+      !existsSync(path.join(OUTM, "in/gone")) && gone && gone.path === null && /HTTP 404 \(page\)/.test(gone.error), `${JSON.stringify(gone)} dir=${existsSync(path.join(OUTM, "in/gone"))} log=${(c1.out.match(/.*gone.*/g) || []).join(" | ").slice(0, 300)}`);
     failA = true;
     const c2 = await crawl();
     const row = manifest()[`${origin}/a.png`];
@@ -887,6 +912,18 @@ const TMP = scratch(".tmp");
       }));
     truthy("gapfill-video - records cached files and preserves unrelated entries", !requests.includes("/master.m3u8") && !requests.includes("/cached.ts") &&
       JSON.stringify(files[`${origin}/keep.txt`]) === JSON.stringify(preserved));
+    const incomplete = JSON.parse(readFileSync(path.join(output, "mirror-manifest.json"), "utf8"));
+    for (const url of [`${origin}/master.m3u8`, `${origin}/cached.ts`]) delete incomplete.files[url].sha256;
+    incomplete.files[`${origin}/cached.ts`].etag = '"cached-etag"';
+    writeFileSync(path.join(output, "mirror-manifest.json"), JSON.stringify(incomplete));
+    rmSync(path.join(output, "inventory.tsv"));
+    const beforeRepair = requests.length;
+    const repaired = await capture(output);
+    const repairedFiles = JSON.parse(readFileSync(path.join(output, "mirror-manifest.json"), "utf8")).files;
+    truthy("gapfill-video - repairs playlist and segment hashes from disk while retaining metadata", repaired.code === 0 && requests.length === beforeRepair &&
+      repairedFiles[`${origin}/master.m3u8`].sha256 === files[`${origin}/master.m3u8`].sha256 &&
+      repairedFiles[`${origin}/cached.ts`].sha256 === files[`${origin}/cached.ts`].sha256 && repairedFiles[`${origin}/cached.ts`].etag === '"cached-etag"' &&
+      readFileSync(path.join(output, "inventory.tsv"), "utf8").trim().split("\n").length === 11, repaired.out.slice(-300));
     const dryOutput = path.join(TMP, "hls-dry");
     const dry = await capture(dryOutput, "/master.m3u8", ["--dry-run"]);
     truthy("gapfill-video - dry run creates no output files", dry.code === 0 && !existsSync(dryOutput), dry.out.slice(-300));
@@ -1426,5 +1463,144 @@ const TMP = scratch(".tmp");
   red("dump-timelines - rejects a non-GLB header", run("scripts/dump-timelines.mjs", args), /Expected a GLB 2.0 header/);
 }
 
-// ---------------------------------------------------------------- summary
+// ESM formatting must preserve tokens and provide expanded source coordinates.
+{
+  const D = W(path.join(TMP, "beautify-esm"), {
+    "esm-AAAAAAAA.js": 'import{a}from"./x-BBBBBBBB.js";export const b=a+1;const c=()=>{return b};export{c}',
+    "await-BBBBBBBB.js": 'await Promise.resolve();const value=1;console.log(value);',
+  });
+  const r = run("scripts/beautify-bundle.mjs", [path.join(D, "esm-AAAAAAAA.js"), path.join(D, "await-BBBBBBBB.js"), "--out", path.join(D, "pretty")]);
+  const out = readFileSync(path.join(D, "pretty/esm-AAAAAAAA.js"), "utf8");
+  truthy("beautify-bundle - ESM and top-level await produce formatted output", r.code === 0 && out.split("\n").length > 3, r.out.slice(-300));
+  const ledger = readFileSync(path.join(D, "pretty/README.md"), "utf8");
+  truthy("beautify-bundle - both module forms retain equal tokens without a verbatim fallback",
+    ["esm-AAAAAAAA.js", "await-BBBBBBBB.js"].every((name) => ledger.split("\n").some((line) => line.startsWith(`| ${name} |`) && line.includes("| equal |"))), ledger);
+}
+
+// Import-only entries resolve from the final response URL and retain target checks.
+{
+  const http = await import("node:http");
+  const { execFile } = await import("node:child_process");
+  const bundle = `console.log("real");new WebGLRenderer();` + "x".repeat(2000) + "\n//# sourceMappingURL=../maps/app.js.map";
+  const stub = `import"./scripts-BBBBBBBB.js";`;
+  const requests = [];
+  const srv = http.createServer((req, res) => {
+    requests.push({ url: req.url, referer: req.headers.referer });
+    if (req.url === "/entry.js") { res.writeHead(302, { location: "/release/assets/main.js" }); return res.end(); }
+    if (req.url === "/release/assets/main.js") { res.writeHead(200, { "content-type": "text/javascript" }); return res.end(stub); }
+    if (req.url === "/release/assets/scripts-BBBBBBBB.js") {
+      res.writeHead(req.headers.referer ? 200 : 403, { "content-type": "text/javascript" });
+      return res.end(req.headers.referer ? bundle : "Referer required");
+    }
+    if (req.url === "/release/maps/app.js.map") { res.writeHead(200, { "content-type": "application/json" }); return res.end('{"sourcesContent":["source"]}'); }
+    if (req.url === "/") { res.writeHead(200, { "content-type": "text/html" }); return res.end('<html><script type="module" src="/entry.js"></script></html>'); }
+    res.writeHead(404); res.end("Not found");
+  });
+  await new Promise((resolve) => srv.listen(0, "127.0.0.1", resolve));
+  const origin = `http://127.0.0.1:${srv.address().port}`;
+  const FP = path.join(TMP, "fp");
+  try {
+    const result = await new Promise((resolve) => execFile(process.execPath, [path.join(SKILL, "scripts/fingerprint.mjs"), "--target", `${origin}/`, "--bundle", `${origin}/entry.js`, "--out", FP, "--gap-ms", "1000"],
+      { cwd: TMP, timeout: 30000 }, (err, so, se) => resolve({ code: err ? err.code : 0, out: String(so) + String(se) })));
+    truthy("fingerprint - follows a redirected ESM entry and saves the target bytes", result.code === 0 &&
+      readFileSync(path.join(FP, "bundle-1-stub.js"), "utf8") === stub && readFileSync(path.join(FP, "bundle-1.js"), "utf8") === bundle, result.out.slice(-300));
+    const targetRequests = requests.filter((r) => r.url === "/release/assets/scripts-BBBBBBBB.js");
+    truthy("fingerprint - Referer retry applies to the imported target without re-fetching the entry", targetRequests.length === 2 &&
+      !targetRequests[0].referer && targetRequests[1].referer === origin + "/" && requests.filter((r) => r.url === "/release/assets/main.js").length === 1, JSON.stringify(requests));
+    truthy("fingerprint - sourcemap resolves beside the imported bundle", requests.some((r) => r.url === "/release/maps/app.js.map"), JSON.stringify(requests));
+    const report = readFileSync(path.join(FP, "fingerprint-report.md"), "utf8");
+    truthy("fingerprint - statistics describe the imported bytes", report.includes(`bytes=${Buffer.byteLength(bundle)}`) && /WebGLRenderer\s*= 1/.test(report), report.slice(-700));
+  } finally { await new Promise((resolve) => srv.close(resolve)); }
+}
+
+// Negotiated image bytes depend on the recorded Accept profile, even without Vary: Accept.
+{
+  const http = await import("node:http");
+  const { writeLedgers } = await import(path.join(SKILL, "scripts/lib/ledger.mjs"));
+  const { sha256: sha } = await import(path.join(SKILL, "scripts/lib/hash.mjs"));
+  const WEBP = Buffer.concat([Buffer.from("RIFF"), Buffer.from([0x10, 0, 0, 0]), Buffer.from("WEBPVP8 "), Buffer.alloc(8, 1)]);
+  const JPEG = Buffer.concat([Buffer.from([0xff, 0xd8, 0xff, 0xe0]), Buffer.alloc(40, 2)]);
+  const srv = http.createServer((req, res) => {
+    if (req.url !== "/t.jpg") { res.writeHead(404); return res.end("Not found"); }
+    const webp = /image\/webp/.test(req.headers.accept || "");
+    res.writeHead(200, { "content-type": webp ? "image/webp" : "image/jpeg", vary: "Accept-Encoding" }); res.end(webp ? WEBP : JPEG);
+  });
+  await new Promise((resolve) => srv.listen(0, "127.0.0.1", resolve));
+  const origin = `http://127.0.0.1:${srv.address().port}`;
+  const D = W(path.join(TMP, "neg-mirror"), { "t.jpg": WEBP });
+  const row = (profile) => ({ [`${origin}/t.jpg`]: { path: "t.jpg", bytes: WEBP.length, sha256: sha(WEBP), type: "image/webp", profile, vary: "Accept-Encoding" } });
+  // The fixture server needs this event loop while the child performs its fetch.
+  const { execFile } = await import("node:child_process");
+  const vm = async (profile) => {
+    await writeLedgers(D, { origin, files: row(profile), redirects: [] });
+    return new Promise((resolve) => execFile(process.execPath, [path.join(SKILL, "scripts/verify-mirror.mjs"), "--mirror", D, "--origin", origin, "--resample", "1", "--resample-delay", "0", "--skip", "mapping,authenticity,closure"],
+      { encoding: "utf8", timeout: 30000 }, (err, so, se) => resolve({ code: err ? (err.code ?? 1) : 0, out: String(so) + String(se) })));
+  };
+  try {
+    green("verify-mirror - resample replays the browser image profile", await vm("std"), /1\/1 sampled URLs still byte-identical/);
+    red("verify-mirror - a bare profile yielding different bytes fails the resample", await vm("bare"), /no longer match the ledger/);
+  } finally { await new Promise((resolve) => srv.close(resolve)); }
+  const SD = W(path.join(TMP, "sweep-dir"));
+  red("sweep-routes - directory output fails before launching Chrome", run("scripts/sweep-routes.mjs", ["--base", "http://127.0.0.1:1", "--routes", "/", "--out", SD]), /is a directory; give the report FILE path/, 2);
+}
+
+// Data-island bodies and URL spellings must agree across build and response layers.
+{
+  const { transformPage, localizeShapes } = await import(path.join(SKILL, "scripts/lib/shell-build.mjs"));
+  const cfg = { originHosts: ["x.com"], stubExtHosts: [], mirroredExtHosts: [], transforms: [] };
+  const ld = `<SCRIPT TYPE = 'application/ld+json'>{"@id":"https:\\/\\/x.com\\/","url":"https://x.com/","text":"$& $1"}</SCRIPT>`;
+  const sr = `<script type=speculationrules>{"prefetch":[{"where":{"href_matches":"https://x.com/*"}}]}</script>`;
+  const page = `<html><head>${ld}${sr}</head><body><a href="https://x.com/about">a</a><script>window.base="https://x.com";</script></body></html>`;
+  const built = transformPage(page, cfg, { head: false });
+  truthy("shell-build - JSON-LD and speculation rules retain their exact bodies", built.text.includes(ld) && built.text.includes(sr), built.text);
+  truthy("shell-build - links and executable scripts outside islands are localized", built.text.includes('href="/about"') && built.text.includes('window.base="/"'), built.text);
+  eq("shell-build - each preserved island is counted once", built.hits.get("T-DATA-KEEP"), 2);
+  const custom = `<script type="application/json" id="cfg">{"api":"https://x.com/api"}</script>`;
+  const r2 = transformPage(custom, { ...cfg, keepIslands: [/(<script[^>]*id="cfg"[^>]*>)([\s\S]*?)(<\/script>)/g] }, { head: false });
+  truthy("shell-build - a configured script island retains its data", r2.text === custom && r2.hits.get("T-DATA-KEEP") === 1, r2.text);
+  const overlap = transformPage(ld, { ...cfg, keepIslands: [/application\/ld\+json/g] }, { head: false });
+  truthy("shell-build - overlapping selectors preserve one body without nested placeholders", overlap.text === ld && overlap.hits.get("T-DATA-KEEP") === 1, overlap.text);
+  const fx = `a="https://x.com/p";b="https://x.com";c="https:\\/\\/x.com\\/p";d="https:\\/\\/x.com";e="//x.com/q";`;
+  const localized = localizeShapes(fx, "x.com", "");
+  eq("shell-build - escaped bare origins map to an escaped home path", localized, `a="/p";b="/";c="\\/p";d="\\/";e="/q";`);
+  const R = W(path.join(TMP, "parity"), { "cfg.html": fx, "data.html": page });
+  const S = await serveOn(29978, R, ["--origin-host", "x.com"]);
+  try {
+    eq("serve - origin URL spellings match the build layer", await (await fetch(`${S.base}/cfg.html`)).text(), localized);
+    eq("serve - built-in data-island protection matches the build layer", await (await fetch(`${S.base}/data.html`)).text(), built.text);
+  } finally { await S.stop(); }
+}
+
+// Repeated formatting batches must retain earlier coordinates and disambiguate filenames.
+{
+  const B = W(path.join(TMP, "beautify batches"), { "one/shared bundle.js": "export const a=1;", "two/shared bundle.js": "export const b=2;" });
+  const args = (file) => [path.join(B, file), "--out", path.join(B, "pretty")];
+  const first = run("scripts/beautify-bundle.mjs", args("one/shared bundle.js"));
+  const second = run("scripts/beautify-bundle.mjs", args("two/shared bundle.js"));
+  const third = run("scripts/beautify-bundle.mjs", args("one/shared bundle.js"));
+  const ledger = readFileSync(path.join(B, "pretty/README.md"), "utf8");
+  truthy("beautify-bundle - repeated batches keep both ledger rows with spaced paths", [first, second, third].every((r) => r.code === 0) &&
+    ledger.split("\n").filter((line) => /^\| (?:shared bundle|two--shared bundle)\.js \|/.test(line)).length === 2, ledger);
+  truthy("beautify-bundle - a later basename collision cannot overwrite an earlier source", /export const a/.test(readFileSync(path.join(B, "pretty/shared bundle.js"), "utf8")) &&
+    /export const b/.test(readFileSync(path.join(B, "pretty/two--shared bundle.js"), "utf8")));
+}
+
+// JSON endpoint stubs return one registered response without interpreting request data.
+{
+  const D = W(path.join(TMP, "stubjson"), { "site/index.html": "<p>x</p>", "site/favicon.ico": "", "stub.json": JSON.stringify({ success: true, data: { message: "stubbed" } }), "invalid.json": "{broken" });
+  const S = await serveOn(29992, path.join(D, "site"), ["--stub-json", "/wp-admin/admin-ajax.php::" + path.join(D, "stub.json")]);
+  try {
+    const post = await fetch(`${S.base}/wp-admin/admin-ajax.php?action=llHandleContactFormSubmit`, { method: "POST", body: "a=1" });
+    truthy("serve - a JSON stub answers POST with the declared media type", post.status === 200 && /application\/json/.test(post.headers.get("content-type") || ""), `${post.status} ${post.headers.get("content-type")}`);
+    eq("serve - the stub body is preserved verbatim", await post.text(), readFileSync(path.join(D, "stub.json"), "utf8"));
+    eq("serve - GET selects the same stub by pathname", (await fetch(`${S.base}/wp-admin/admin-ajax.php`)).status, 200);
+    eq("serve - an unregistered adjacent path remains a 404", (await fetch(`${S.base}/wp-admin/other.php`)).status, 404);
+  } finally { await S.stop(); }
+  const args = ["--root", path.join(D, "site"), "--port", "29991", "--stub-json"];
+  red("serve - malformed stub specifications fail before listening", run("scripts/serve.mjs", [...args, "/x"]), /needs PATH::FILE/, 2);
+  red("serve - a stub path containing a query is rejected", run("scripts/serve.mjs", [...args, "/x?action=a::" + path.join(D, "stub.json")]), /needs PATH::FILE/, 2);
+  red("serve - an absent stub file fails before listening", run("scripts/serve.mjs", [...args, "/x::" + path.join(D, "nope.json")]), /not a readable JSON file/, 2);
+  red("serve - malformed JSON fails before listening", run("scripts/serve.mjs", [...args, "/x::" + path.join(D, "invalid.json")]), /not a readable JSON file/, 2);
+}
+
 finish(TMP);

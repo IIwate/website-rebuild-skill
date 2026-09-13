@@ -20,7 +20,7 @@
  *       [--out docs/sweep.tsv] [--cdp-port N] [--width 1280] [--height 800]
  *       [--routes /,/about] [--allow-errors <re>] [--allow-failures <re>]
  */
-import { readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { resolvePort, chromeSentinel, assertOwnBrowser } from "./lib/ports.mjs";
 import { findChrome, headlessArgs, launchChrome, preflightChrome } from "./lib/chrome.mjs";
@@ -60,6 +60,11 @@ const ALLOW_ERRORS = flag("allow-errors", null) ? new RegExp(flag("allow-errors"
 // that also returns 404 on the reference site.
 const ALLOW_FAILURES = flag("allow-failures", null) ? new RegExp(flag("allow-failures", null)) : null;
 const OUT = flag("out", null);
+// Reject directory outputs before starting the browser and collecting results.
+if (OUT && existsSync(OUT) && statSync(OUT).isDirectory()) {
+  console.error(`FATAL: --out ${OUT} is a directory; give the report FILE path (e.g. ${OUT.replace(/\/$/, "")}/sweep.tsv).`);
+  process.exit(2);
+}
 const W = Number(flag("width", "1280")), H = Number(flag("height", "800"));
 
 let routes = [];
@@ -256,6 +261,7 @@ const secs = ((Date.now() - t0) / 1000).toFixed(0);
 if (OUT) {
   const tsv = ["ROUTE\tVERDICT\tERRORS\tFAILURES\tEXTERNAL\tALLOWED_EXTERNAL\tALLOWED_FAILURES\tLIFECYCLE\tEVAL",
     ...rows.map((r) => [r.route, r.verdict, r.errors, r.failures, r.external, r.allowedExternal, r.allowedFailures, r.lifecycle, r.eval].join("\t"))].join("\n") + "\n";
+  mkdirSync(path.dirname(path.resolve(OUT)), { recursive: true });
   writeFileSync(path.resolve(OUT), tsv);
   console.log(`  -> ${OUT}`);
 }

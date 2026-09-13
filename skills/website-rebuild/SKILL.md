@@ -3,7 +3,7 @@ name: website-rebuild
 description: Rebuild a website from its client assets and recorded behavior, then compare the local result against the captured reference. Use for requested website reproduction, including WebGL, scroll animation, portfolio sites, and archived sites.
 compatibility: Node 22+, npm/npx, local Chrome or Chromium for browser checks, and a POSIX environment with process groups and ps. Some scripts invoke pinned npm tools and require those packages to be cached for offline use.
 metadata:
-  version: "0.3.22"
+  version: "0.3.23"
 ---
 
 # Website Rebuild

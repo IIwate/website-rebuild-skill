@@ -32,6 +32,7 @@
 
 
 import { writeFileSync, readFileSync, mkdirSync } from 'node:fs';
+import { createHash } from 'node:crypto';
 import { join } from 'node:path';
 import {
   assertDistinctSides,
@@ -119,6 +120,8 @@ if (FORMAT !== 'png' && (!Number.isInteger(QUALITY) || QUALITY < 1 || QUALITY > 
 }
 const EXT = FORMAT === 'jpeg' ? 'jpg' : FORMAT;
 const SETTLE = Number(flag('settle', 6000));
+// A pumped readiness predicate can leave a diagnostic string in window.__why.
+// It is printed if the frame budget is exhausted before readiness.
 const READY = flag('ready', null);
 // --after-ready N: align on STATE first (the frame where --ready turns true on each side), THEN pump N more frames.
 // Waiting for an absolute pump count instead differs by one mount phase between the sides (darkroom /work: 1.8–2.5 at
@@ -152,6 +155,8 @@ const HOLD_AFTER = Number(flag('hold-after', '0')) || 0;
 //
 // --drive is an expression re-evaluated after EVERY pump chunk. Write it
 // idempotently: it will run many times.
+// Record window.__walkScroll = { tag, max, target, landed } so the comparison
+// can check the actual scroll positions. Load-time patches belong in --seed.
 const DRIVE = flag('drive', null);
 // --pump "dt,frames" advances the shim's virtual clock through window.__pump.
 const PUMP = flag('pump', null);
@@ -270,7 +275,17 @@ const evalJs = async (expression) => {
 
 await cdp.send('Runtime.enable');
 await cdp.send('Page.enable');
+// HTTP cache reuse can change img.complete branches on the second capture.
+// Disable it for both sides; cookies and application storage are separate inputs.
+await cdp.send('Network.enable');
+await cdp.send('Network.setCacheDisabled', { cacheDisabled: true });
 await cdp.send('Emulation.setDeviceMetricsOverride', { width: W, height: H, deviceScaleFactor: 1, mobile: false });
+// Expression hashes expose stale copies in wrapper scripts. They identify
+// these inputs, not the entire browser environment or every capture option.
+{
+  const fp = (v) => v ? `${createHash('sha256').update(v).digest('hex').slice(0, 10)} (${v.length} chars)` : 'none';
+  console.log(`[pixel] instrument — seed ${fp(SEED)} · ready ${fp(READY)} · drive ${fp(DRIVE)}${FREEZE_CSS ? ' · freeze-css' : ''} · cold-cache`);
+}
 if (SEED) await cdp.send('Page.addScriptToEvaluateOnNewDocument', { source: SEED });
 if (FREEZE_CSS) {
   // Injected on new document so it applies before first paint, and re-applied
@@ -283,7 +298,7 @@ if (FREEZE_CSS) {
         transition: none !important;
       }\`;
       const put = () => {
-        if (document.getElementById('__freeze_css')) return;
+        if (!document.documentElement || document.getElementById('__freeze_css')) return;
         const s = document.createElement('style');
         s.id = '__freeze_css';
         s.textContent = css;
@@ -291,7 +306,8 @@ if (FREEZE_CSS) {
       };
       put();
       document.addEventListener('DOMContentLoaded', put);
-      new MutationObserver(put).observe(document.documentElement, { childList: true, subtree: true });
+      // New-document scripts can run before the root element exists.
+      new MutationObserver(put).observe(document, { childList: true, subtree: true });
     })()`,
   });
 }
@@ -311,6 +327,7 @@ function shotFatal(label, err) {
 
 let landA = null, landB = null;
 async function capture(url, label) {
+  await cdp.send('Network.clearBrowserCache');
   await cdp.send('Page.navigate', { url });
   //  --ready is NOT a pre-pump wait. Checking it before the pump can only ever
   // express "ready without any driving", and on a frozen page the states worth
@@ -384,6 +401,8 @@ async function capture(url, label) {
     // a marquee that starts 8–16 frames earlier on the single-bundle rebuild sits
     // entirely inside the default 6-frame chunk, and the two sides can only be
     // pinned to the same frame with a 1-frame chunk (darkroom /about 2.57 → 0.00).
+    // Chunk size also controls how often the pump yields to network and media
+    // work. A frame budget therefore depends on this setting and the real gaps.
     const chunk = Number(flag('chunk', '0')) > 0 ? Number(flag('chunk', '0')) : Math.max(1, Math.ceil(total / 40));
     const gap = Math.max(20, Math.floor(SETTLE / Math.ceil(total / chunk)));
     let readyAt = null;
@@ -414,6 +433,9 @@ async function capture(url, label) {
       // of the loading screen, and two of those agree perfectly.
       console.error(`[pixel] FATAL: ${label} never satisfied --ready within ${total} pumped frame(s).`);
       console.error(`        Raise --pump frames or --settle, or fix the predicate — do NOT compare this frame.`);
+      const why = await evalJs(`String(window.__why ?? '')`).catch(() => '');
+      if (why) console.error(`        window.__why: ${String(why).slice(0, 400)}`);
+      else console.error(`        No window.__why diagnostic was provided by the predicate.`);
       chrome.reap();
       process.exit(6);
     }
@@ -510,8 +532,9 @@ const census = await evalJs(`(async () => {
     console.log(`[pixel] measured at — A: ${fmt(landA)}   B: ${fmt(landB)}`);
     if (DRIVE && (!landA || !landB)) {
       console.error(`[pixel] FATAL: --drive was given but at least one side recorded no landing.`);
-      console.error(`        The driver never ran, or never found anything to drive. Any number below`);
-      console.error(`        is a comparison of two states nobody chose.`);
+    console.error(`        --drive must set window.__walkScroll = { tag, max, target, landed }.`);
+    console.error(`        Check that the scroll target exists and the driver records its landing.`);
+    console.error(`        Use --seed for load-time patches that do not drive scrolling.`);
       chrome.reap();
       process.exit(6);
     }
