@@ -26,13 +26,6 @@
   "bugs": {
     "url": "https://github.com/IIwate/website-rebuild-skill/issues"
   },
-  "bin": {
-    "website-rebuild-skill": "bin/install.mjs"
-  },
-  "files": [
-    "bin/",
-    "skills/website-rebuild/"
-  ],
   "engines": {
     "node": ">=22"
   },

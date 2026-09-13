@@ -27,3 +27,4 @@ Compared with [upstream/main](https://github.com/boyang-hu/website-rebuild-skill
 ### Repository
 
 - The repository package is private (`website-rebuild-skill-repo`) and identifies `IIwate/website-rebuild-skill` in its repository metadata. Root documentation is maintained as this fork comparison.
+- Drops the public npm installer script (`bin/install.mjs`) and packaging manifest entries in favor of direct repository and skill directory loading.
