@@ -1,21 +1,17 @@
 /**
- * shell-config.example.mjs — ANNOTATED EXAMPLE for the strategy-A build layer.
+ * Example configuration for DOM-shell generation and verification.
  *
- *   node scripts/build-site.mjs   --config scripts/shell-config.mjs
+ *   node scripts/build-site.mjs --config scripts/shell-config.mjs
  *   node scripts/verify-shell.mjs --config scripts/shell-config.mjs
  *
- * >>> EVERY VALUE BELOW IS EXAMPLE DATA <<< Copy this file to
- * scripts/shell-config.mjs, delete the entries, and rebuild them from YOUR
- * mirror. Read references/dom-shell-strategies.md §2 first — it defines what a
- * registered transform is and why the table has to be short.
+ * Adapt the example values and transforms to the captured mirror; see
+ * references/dom-shell-strategies.md §2.
  *
- * ⛔ THIS FILE MUST HAVE NO SIDE EFFECTS, AND THAT IS A GATE-SAFETY PROPERTY,
- * NOT A STYLE PREFERENCE. build-site.mjs (which produces site/) and
- * verify-shell.mjs (which audits site/) both import it. If the shared data
- * lived in build-site.mjs instead, importing it from the gate would RUN THE
- * BUILD, and the gate would audit output it had just written — measured on two
- * projects: inject a byte into a built shell, run the gate, it reports PASS and
- * the byte is gone afterwards (verification-gates.md §2.1.2).
+ * Both commands import this module, so importing it must not build or change
+ * artifacts. In two recorded projects, a verifier imported a build entrypoint,
+ * regenerated a modified shell and then passed. Keeping configuration free of
+ * such side effects lets verification inspect the existing output
+ * (verification-gates.md §2.1.2).
  */
 export default {
   /** Documents to build, relative to the mirror root. */
@@ -34,10 +30,9 @@ export default {
   originHosts: ["example.com", "www.example.com"],
 
   /**
-   * Hosts rewritten to /ext/<host>/ and then answered with a stub by serve.mjs.
-   * ⛔ MUST match the --stub-ext-hosts the MIRROR is served with: the mirror is
-   * the oracle, and two different host lists make the two sides differ for a
-   * reason that has nothing to do with the port.
+   * Hosts mapped to /ext/<host>/ and handled by serve.mjs stubs. Match the
+   * reference server's --stub-ext-hosts configuration so platform adaptation
+   * does not introduce a difference between the two sides.
    */
   stubExtHosts: ["www.googletagmanager.com", "connect.facebook.net"],
 
@@ -58,16 +53,13 @@ export default {
     "-->\n",
 
   /**
-   * Per-transform hit floors. ⛔ PER TRANSFORM, never a total: one
-   * high-frequency transform (url localisation fires thousands of times) would
-   * otherwise hold the guard green while a 4-hit noindex injection silently
-   * stopped firing (dom-shell-strategies.md §2 step 3).
+   * Minimum hit counts for individual transforms. A high-frequency URL rewrite
+   * can conceal a missing four-hit noindex insertion if only the total is checked
+   * (dom-shell-strategies.md §2, step 3).
    *
-   * ⭐ AND THE FLOOR IS NOT THE GUARANTEE. It says the transform still has a
-   * target; it says nothing about whether the transform achieved its purpose.
-   * Measured: an identifier-stripping transform fired 25x, cleared its floor,
-   * and the token it exists to remove was still in every built shell under a
-   * second spelling. For remove/replace transforms, add a `purpose` check below.
+   * A hit count confirms matching input, not the intended output. One identifier
+   * removal matched 25 times but left another spelling in every generated shell.
+   * Use purpose checks for the corresponding output condition.
    */
   floors: { "T-LOCALIZE": 100, "T-NOINDEX": 2, "T-SCRIPT": 2 },
 

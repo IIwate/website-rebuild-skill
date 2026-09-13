@@ -15,10 +15,7 @@
 // Zero dependencies: hand-written GLB (glTF binary) chunk + accessor reader.
 // Adapted from storytellingnoomo-rebuild/scripts/dump-timelines.mjs.
 //
-// 中文规格（自 scripts/README.md 迁入，v0.3.21；本表另一拼写：`dump-timelines.mjs`）
-// GLB 动画曲线 dump 成 JSON 数值账本
-// 手写 GLB 解析器，动画曲线 dump 成 JSON 数值账本——"数值基准先行"范例（先 dump 源数据再移植再数值验收）
-// `node dump-timelines.mjs mirror/timelines/cam.glb`
+
 import { readFile, writeFile, mkdir } from "node:fs/promises";
 import path from "node:path";
 import { cli } from "./lib/cli.mjs";
@@ -39,30 +36,71 @@ const outDir = path.resolve(flag("out", "docs/timeline-baseline"));
 await mkdir(outDir, { recursive: true });
 
 const COMPONENTS = { SCALAR: 1, VEC2: 2, VEC3: 3, VEC4: 4 };
-const ARRAYS = { 5120: Int8Array, 5121: Uint8Array, 5122: Int16Array, 5123: Uint16Array, 5125: Uint32Array, 5126: Float32Array };
+const COMPONENT_BYTES = { 5120: 1, 5121: 1, 5122: 2, 5123: 2, 5125: 4, 5126: 4 };
+const READERS = { 5120: "readInt8", 5121: "readUInt8", 5122: "readInt16LE", 5123: "readUInt16LE", 5125: "readUInt32LE", 5126: "readFloatLE" };
 
 function parseGlb(buf) {
+  if (buf.length < 20 || buf.readUInt32LE(0) !== 0x46546c67 || buf.readUInt32LE(4) !== 2) {
+    throw new Error("Expected a GLB 2.0 header");
+  }
+  if (buf.readUInt32LE(8) !== buf.length) throw new Error("GLB length does not match the file");
   const jsonLen = buf.readUInt32LE(12);
+  if (buf.readUInt32LE(16) !== 0x4e4f534a || jsonLen % 4 || jsonLen > buf.length - 20) {
+    throw new Error("Invalid GLB JSON chunk");
+  }
   const json = JSON.parse(buf.slice(20, 20 + jsonLen).toString());
   let bin = null;
   let off = 20 + jsonLen;
   while (off < buf.length) {
+    if (off + 8 > buf.length) throw new Error("Truncated GLB chunk header");
     const len = buf.readUInt32LE(off);
     const type = buf.readUInt32LE(off + 4);
-    if (type === 0x004e4942) bin = buf.slice(off + 8, off + 8 + len);
+    if (len % 4 || len > buf.length - off - 8) throw new Error("Invalid GLB chunk length");
+    if (type === 0x004e4942) {
+      if (bin) throw new Error("Multiple GLB BIN chunks are not supported");
+      bin = buf.subarray(off + 8, off + 8 + len);
+    }
     off += 8 + len;
   }
   return { json, bin };
 }
 
 function readAccessor(json, bin, idx) {
-  const acc = json.accessors[idx];
-  const bv = json.bufferViews[acc.bufferView];
-  const Arr = ARRAYS[acc.componentType];
+  const acc = json.accessors?.[idx];
+  if (!acc) throw new Error(`Missing accessor ${idx}`);
+  if (acc.sparse) throw new Error(`Sparse accessor ${idx} is not supported`);
+  const bv = json.bufferViews?.[acc.bufferView];
+  const buffer = json.buffers?.[0];
+  if (!bin || !bv || bv.buffer !== 0 || !buffer || buffer.uri) {
+    throw new Error(`Accessor ${idx} requires a bufferView in the embedded GLB buffer`);
+  }
+  const size = COMPONENT_BYTES[acc.componentType];
   const comps = COMPONENTS[acc.type];
-  const start = (bv.byteOffset || 0) + (acc.byteOffset || 0);
-  const arr = new Arr(bin.buffer, bin.byteOffset + start, acc.count * comps);
-  return { values: Array.from(arr), comps };
+  if (!size || !comps) throw new Error(`Unsupported accessor format at ${idx}`);
+  if (acc.normalized && ![5120, 5121, 5122, 5123].includes(acc.componentType)) {
+    throw new Error(`Invalid normalized component type at accessor ${idx}`);
+  }
+  const viewOffset = bv.byteOffset ?? 0, offset = acc.byteOffset ?? 0;
+  const stride = bv.byteStride ?? comps * size;
+  if (![viewOffset, offset, stride, acc.count, bv.byteLength, buffer.byteLength].every((n) => Number.isSafeInteger(n) && n >= 0) ||
+      acc.count === 0 || stride < comps * size || stride % size || (viewOffset + offset) % size ||
+      buffer.byteLength > bin.length || viewOffset + bv.byteLength > buffer.byteLength ||
+      offset + (acc.count - 1) * stride + comps * size > bv.byteLength) {
+    throw new Error(`Accessor ${idx} exceeds its bufferView or has an invalid layout`);
+  }
+  const values = [];
+  for (let i = 0; i < acc.count; i++) {
+    for (let c = 0; c < comps; c++) {
+      let value = bin[READERS[acc.componentType]](viewOffset + offset + i * stride + c * size);
+      if (!Number.isFinite(value)) throw new Error(`Non-finite value in accessor ${idx}`);
+      if (acc.normalized) {
+        const signed = acc.componentType === 5120 || acc.componentType === 5122;
+        value = Math.max(signed ? -1 : 0, value / (2 ** (size * 8 - (signed ? 1 : 0)) - 1));
+      }
+      values.push(value);
+    }
+  }
+  return { values, comps };
 }
 
 for (const file of FILES) {
@@ -88,7 +126,7 @@ for (const file of FILES) {
         values: output.values,
       });
     }
-    const duration = Math.max(...tracks.map((t) => t.times[t.times.length - 1] ?? 0));
+    const duration = tracks.reduce((max, t) => Math.max(max, t.times[t.times.length - 1] ?? 0), 0);
     out.animations.push({ name: anim.name, duration, tracks });
   }
   const dest = path.join(outDir, `${name}.json`);

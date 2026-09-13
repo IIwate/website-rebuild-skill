@@ -1,36 +1,19 @@
 #!/usr/bin/env node
-// side-by-side.mjs — the reviewable deliverable of a byte/pixel gate run.
-// Consumes the PNG pairs verification gates write under <dir>/*-check/
-// (mirror-<pose>.png + rebuild-<pose>.png), and for each pair renders a single
-// composite — [ mirror | rebuild | diff heatmap ] — into <dir>/side-by-side/,
-// plus a summary table from lib/png.mjs's compare(). The heatmap amplifies
-// per-pixel absolute difference 8x into red; a byte-identical pair renders
-// pure black.
+// Compose captured PNG pairs into reference, rebuild and difference panels.
+// Pairs are read from <dir>/*-check/ and written under <dir>/side-by-side/,
+// with summary measurements from lib/png.mjs. The heatmap scales the average
+// absolute RGB difference by eight in its red channel; matching decoded pixels
+// produce a black heatmap.
 //
-// No servers, no browser: this is a pure post-processing pass over whatever
-// the gates last captured. Run the gates first if the artifacts are stale.
-// (Nothing here spawns a process, so the process-group reaping in
-// lib/chrome.mjs does not apply — but the gate that PRODUCED these pairs does
-// spawn one, and it is the thing that has to reap it.)
+// This command processes existing PNG files and does not capture pages. Inputs
+// must use the PNG formats supported by lib/png.mjs. Converting a lossy capture
+// to PNG retains compression artifacts in the comparison.
 //
-// WHERE THE PAIRS COME FROM, AND WHY THEY MAY BE JPEG: the capturing gate pulls
-// each frame through CDP as one base64 WebSocket message, and Node's built-in
-// WebSocket dies above ~2.4 M chars — roughly a 1500x900 PNG (see
-// lib/chrome.mjs). Above that the capture side must fall back to JPEG q92, and
-// this script's per-pixel heatmap then measures encoder noise as well as real
-// difference. Prefer PNG pairs for byte gates; if a pair had to be JPEG, read
-// the heatmap as "where", not as "how much".
+//   node side-by-side.mjs [--dir docs] [--out docs/side-by-side]
 //
-// Usage: node side-by-side.mjs [--dir docs] [--out docs/side-by-side]
-//   Expects pairs named mirror-<pose>.png / rebuild-<pose>.png inside
-//   directories matching <dir>/*-check/.
-//
+// Pairs are named mirror-<pose>.png and rebuild-<pose>.png.
 // Adapted from careers-kimi-rebuild/scripts/side-by-side.mjs.
-//
-// 中文规格（自 scripts/README.md 迁入，v0.3.21；本表另一拼写：`side-by-side.mjs`）
-// 双侧截图并排合成图（对拍产物留证）
-// 消费门产出的 mirror-/rebuild- PNG 对，合成 [镜像\|重建\|8× 差异热力图] + 汇总表。本身不起任何进程（纯后处理）；但**上游采集**受 CDP 载荷硬顶约束，若某对帧是 JPEG 回退的产物，热力图读作“差在哪”而不是“差多少”
-// `node side-by-side.mjs --dir docs`
+
 
 import fs from "node:fs/promises";
 import path from "node:path";

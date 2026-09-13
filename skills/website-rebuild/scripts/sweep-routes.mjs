@@ -1,42 +1,24 @@
 #!/usr/bin/env node
 /**
- * sweep-routes.mjs — the RENDERED BREADTH gate: every route, ONE browser.
+ * Check configured routes using one Chrome process.
+ * Per route, records page/security errors, request failures and external
+ * requests, then optionally evaluates an interaction hook and a result expression.
+ * This covers configured route states; probe.mjs provides longer observation,
+ * scroll walks and screenshots for an individual route.
  *
- * Born from four projects' worth of the same hand-rolled shell loop
- * (`for route; do node probe.mjs ...; done`), which pays a full Chrome launch
- * per route — a 122-route site cost ~40 minutes and, run concurrently with
- * other probes, triggered the same-workspace orphan reaper against a LIVE
- * sibling's browser (measured: a walk's Chrome reaped mid-run by a sweep's
- * probe). verification-gates.md's own cost lesson says whole-site comparison
- * is priced in BROWSER LAUNCHES, not page loads — this gate launches one.
+ * External hosts named by --allow-external are reported without failing the
+ * route. Record those exclusions with the comparison scope. They are not
+ * automatically inferred from mirror/external.txt.
  *
- * Per route it records what probe.mjs records at the page level — page errors
- * (Runtime + Log + crash/renavigation lifecycle), request failures, external
- * requests — then optionally runs an INTERACTION hook (enter-with-sound
- * clicks, cookie dismissals: the states a load alone never reaches) and an
- * --eval expression whose result lands in the report.
+ * The shared-browser approach avoids a separate launch for each route; the
+ * earlier 122-route case took about 40 minutes with per-route probes.
  *
- * Division of labour: this is the BREADTH gate (every route, one state each,
- * cheap). probe.mjs remains the DEPTH tool (one route: scroll walk,
- * screenshots, long observation). Neither replaces the other.
- *
- * ⛔ EMBED hosts are the one legitimate external: content players
- * (YouTube/Vimeo) registered in mirror/external.txt still fire at runtime.
- * --allow-external names them; they are counted and reported but do not fail
- * the route. Every OTHER external request fails it — same contract as
- * probe --no-external.
- *
- *   node scripts/sweep-routes.mjs --base http://127.0.0.1:6571 --pages docs/pages.json
- *        [--wait 6000] [--interact "<js, runs after wait>"] [--interact-wait 4000]
- *        [--eval "<js, result recorded per route>"]
- *        [--allow-external vimeo.com,i.vimeocdn.com]
- *        [--out docs/sweep.tsv] [--cdp-port N] [--width 1280] [--height 800]
- *        [--routes /,/about] [--allow-errors <re>] [--allow-failures <re>]
- *
- * 中文规格（自 scripts/README.md 迁入，v0.3.21；本表另一拼写：`sweep-routes.mjs`）
- * **渲染广度门:全路由,一个浏览器**。
- * 逐路由记 page errors / 请求失败 / 外联,`--interact` 跑交互钩子(入场点击等 load 到不了的状态),`--eval` 逐路由采集(如音频池普查);`--allow-external` 放行已登记的 EMBED 主机——⭐ 允许主机上的 4xx 是它的离域行为不判红(域名锁 Vimeo 实测),自家 origin 的 4xx 照红。分工:本门管广度(每路由一状态),probe 管深度(单路由走查/截图/长观察)
- * `node sweep-routes.mjs --base <port> --pages docs/pages.json --interact '<js>' --eval '<js>' --allow-external vimeo.com --out docs/sweep.tsv`
+ * node scripts/sweep-routes.mjs --base http://127.0.0.1:6571 --pages docs/pages.json
+ *       [--wait 6000] [--interact "<js, runs after wait>"] [--interact-wait 4000]
+ *       [--eval "<js, result recorded per route>"]
+ *       [--allow-external vimeo.com,i.vimeocdn.com]
+ *       [--out docs/sweep.tsv] [--cdp-port N] [--width 1280] [--height 800]
+ *       [--routes /,/about] [--allow-errors <re>] [--allow-failures <re>]
  */
 import { readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
@@ -69,17 +51,13 @@ const ALLOW_EXTERNAL = new Set((flag("allow-external", "") || "").split(",").map
 const allowedExt = (h) =>
   ALLOW_EXTERNAL.has(h) ||
   [...ALLOW_EXTERNAL].some((a) => a.startsWith(".") && (h === a.slice(1) || h.endsWith(a)));
-// --allow-errors <regex>: a REGISTERED page-error pattern (deviation/quirk
-// table entry) counted and reported but not fatal. Exists for judgment calls a
-// dead-site rescue cannot settle against a live origin (e.g. Vue Router's
-// NavigationDuplicated on locale routes) — same contract as --allow-external:
-// what is registered stays visible, what is not stays red.
+// Keep matching page errors visible while excluding them from the failure
+// count. The pattern should correspond to a documented source behavior, such
+// as Vue Router NavigationDuplicated on a captured locale route.
 const ALLOW_ERRORS = flag("allow-errors", null) ? new RegExp(flag("allow-errors", null)) : null;
-// --allow-failures <regex>: same contract, for NETWORK failures. Exists for
-// REGISTERED holes whose 404 is itself faithful — a dead avatar the live
-// origin also 404s (external.txt row), a favicon the origin never had. The
-// row stays visible in the report; only the verdict stops bleeding for what
-// is registered. What is not registered stays red.
+// Keep matching network failures visible while excluding them from the
+// failure count. Use this for documented missing resources, such as an avatar
+// that also returns 404 on the reference site.
 const ALLOW_FAILURES = flag("allow-failures", null) ? new RegExp(flag("allow-failures", null)) : null;
 const OUT = flag("out", null);
 const W = Number(flag("width", "1280")), H = Number(flag("height", "800"));
@@ -131,7 +109,7 @@ const cleanup = (code) => {
 };
 
 const target = await assertOwnBrowser({ port, sentinel, tool: "sweep-routes.mjs", pid: chrome.pid });
-// Bounded calls + loud close on a dead socket: lib/cdp.mjs.
+// Bounded calls + close-error handling on a dead socket: lib/cdp.mjs.
 const cdp = await connectCdp(target.webSocketDebuggerUrl, { defaultTimeoutMs: 60000 });
 
 // Per-route collectors, reset before each navigation. Events between routes

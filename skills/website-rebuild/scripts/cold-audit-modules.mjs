@@ -1,42 +1,17 @@
 #!/usr/bin/env node
 /**
- * cold-audit-modules.mjs — M(n) closeout for a module-container bundle.
+ * Compare a bundle's module map with the supplied entry closure.
+ * Reports modules outside that closure, unresolved dependencies and possible
+ * computed require calls. Reachability is relative to the named entries and the
+ * dependency edges recognized by the map; other entry points need their own scope.
  *
- * Functional tests cannot see a whole missing module: the routes you drive
- * exercise what you built, and what you never built is never asked for. The
- * closeout answer is a LIST RECONCILIATION — every module the bundle defines,
- * matched against where it landed.
+ * Factory signatures and computed-call candidates are inspected heuristically.
+ * Shadowed parameter names can resemble require calls: all 13 candidates in one
+ * recorded bundle were such false positives. Candidates remain advisory, with
+ * coverage counts reported separately from the closure checks.
  *
- * For a packed bundle that is mechanical, and it asks two questions:
- *
- *   1. Which modules are NOT in the port, and are they genuinely unreachable?
- *   2. Does anything require a module by a COMPUTED id? A static closure is
- *      only complete if every require argument is a literal. One `r(someVar)`
- *      and the closure silently under-approximates — the port boots, the routes
- *      pass, and a feature reachable only through that call path is absent.
- *
- * ⛔ Only question 1 is DECIDED here; question 2 is REPORTED. This tool is
- * zero-dependency by stage rule, and deciding question 2 needs scope analysis:
- * the require parameter is routinely shadowed by an inner function's parameter
- * of the same one-letter name, so a text scan reports `i(i) { i.preventDefault()`
- * as a computed require. Thirteen such candidates on one bundle, none of them
- * real. ⚠ A check that cannot be decided must be printed for a human, never
- * dressed up as a verdict — an audit that cries wolf thirteen times is an audit
- * nobody reads the fourteenth time.
- *
- * ⚠ "Unreachable from the entry" is a claim about THIS entry. A bundle can have
- * several (lazy chunks, a second page's entry); this reconciles against the
- * entries you name and says so.
- *
- *   node scripts/cold-audit-modules.mjs --map docs/module-map.json \
- *        --closure docs/app-closure.json
- *
- * 中文规格（自 scripts/README.md 迁入，v0.3.21；本表另一拼写：`cold-audit-modules.mjs`）
- * Reconciles owning module ids, including aliases and cross-chunk edges in a
- * site-wide map. Container identity selects the factory signature; classic
- * and arrow factories are supported. Report n/N examined, count factories
- * without require bindings separately, and fail coverage below 80% even when
- * computed-require candidates are also reported for review.
+ * node scripts/cold-audit-modules.mjs --map docs/module-map.json \
+ *       --closure docs/app-closure.json
  */
 import { readFile } from "node:fs/promises";
 import path from "node:path";
@@ -48,11 +23,11 @@ const args = process.argv.slice(2);
 const flag = (n, d) => { const i = args.indexOf("--" + n); return i >= 0 && args[i + 1] !== undefined ? args[i + 1] : d; };
 const MAP = JSON.parse(await readFile(path.resolve(flag("map", "docs/module-map.json")), "utf8"));
 const CLO = JSON.parse(await readFile(path.resolve(flag("closure", "docs/app-closure.json")), "utf8"));
-// ⭐ A SITE is many chunks. A Next/Turbopack build ships dozens of chunk files,
+//  A SITE is many chunks. A Next/Turbopack build ships dozens of chunk files,
 // and a site-wide map (merged from per-chunk maps) tags every module with the
 // chunk it lives in. Read each module's own chunk; a single-file map still
 // works unchanged (no `chunk` field -> MAP.source).
-// ⭐ A MERGED map (tools/merge-module-maps.mjs) tags a module with `locations[]`
+//  A MERGED map (tools/merge-module-maps.mjs) tags a module with `locations[]`
 // — one entry per chunk it is packed into, each carrying its own `source` path
 // and line/char span — instead of a flat `chunk` + `startLine`. This audit used
 // to accept only the flat shape and to name the file `<chunk>.pretty.js` beside
@@ -95,7 +70,7 @@ console.log(`  unaccounted for  ${missing.length}\n`);
 let dynamic = [];
 const resolved = [];
 const KNOWN = new Set(byId.keys());
-// ⛔⛔ COUNT WHAT WAS ACTUALLY EXAMINED. This check reported
+//  COUNT WHAT WAS ACTUALLY EXAMINED. This check reported
 // "no call site resembles a require with a computed id" after scanning ZERO of
 // 20 modules: its signature probe only matched webpack's `function(m, e, r)`,
 // and a Turbopack factory is `ctx => {…}`, so every module fell through the
@@ -109,7 +84,7 @@ const TURBO = MAP.container === "TurbopackChunk";
 for (const m of all) {
   const SRC = await srcOf(m);
   const body = SRC.slice(m.startLine - 1, m.endLine).join("\n");
-  // ⛔ Take the signature from the module's FIRST LINE, not from the first match
+  //  Take the signature from the module's FIRST LINE, not from the first match
   // anywhere in its body. The body is full of inner functions, and the first
   // three-argument one is often a callback whose third parameter is unrelated —
   // which made this audit report `i(this.xhr.responseText, …)` as a computed
@@ -117,29 +92,21 @@ for (const m of all) {
   // Two packers, two signatures. webpack: `function (module, exports, require)`,
   // and the third parameter is the require. Turbopack: `ctx => {…}` or
   // `(ctx, …) => {…}`, and requires go through `ctx.i(id)` / `ctx.r(id)`.
-  // ⚠ A map can point past the end of the file (stale map, wrong source). Fail
-  // that loudly rather than throwing on `undefined.match`.
+  //  A map can point past the end of the file (stale map, wrong source). Fail
+  // that explicitly rather than throwing on `undefined.match`.
   const head = SRC[m.startLine - 1];
   if (head === undefined) {
     console.error(`FATAL — module ${m.id} starts at line ${m.startLine} but ${MAP.source} has ${SRC.length}.`);
     console.error(`        The map and the source disagree; regenerate the map.`);
     process.exit(5);
   }
-  // ⛔ THE CONTAINER DECIDES THE PACKER, not the shape of the factory. The
-  // version above computed TURBO and then never used it, so the rule degraded to
-  // "an arrow factory means Turbopack" — and webpack 5 emits
-  // `(module, exports, require) => {…}` on modern targets, which in Next.js
-  // output is literally `(e,t,r)=>{`. Guessing wrong fails two different ways:
-  //   1. the first parameter is taken for a ctx and searched for `e.i(`, which
-  //      matches nothing while STILL counting as examined — a silent miss under
-  //      a green coverage figure, the exact thing this check exists to prevent;
-  //   2. the `(?:^|[,[])` prefix that guess required is never satisfied by the
-  //      indented head js-beautify emits (`        4567: (e, t, r) => {`), so
-  //      every module falls through and coverage reads 0% on a valid bundle.
-  // Verified against six head shapes: webpack object/array/function containers
-  // and Turbopack keyed/bare/multi-parameter factories.
-  // ⚠ Revisit when a third container appears, or when a packer stops putting the
-  // require in the third parameter.
+  // Use the container to distinguish webpack from Turbopack. Webpack 5 can emit
+  // arrow factories such as (e,t,r)=>{}, so arrow syntax alone is insufficient.
+  // Treating e as a Turbopack context misses webpack's third-parameter require;
+  // requiring an array-style prefix also misses indented object module heads.
+  // Coverage fixtures include webpack object, array and function containers plus
+  // Turbopack keyed, bare and multi-parameter factories. Revisit these rules if
+  // another container form appears or the require parameter convention changes.
   let R = null, viaCtx = false, noReq = false;
   if (TURBO) {
     const tsig = head.match(/(?:\(\s*(\w+)[^)]*\)|(\b\w+))\s*=>/);
@@ -171,7 +138,7 @@ for (const m of all) {
     if (/^\s*["'`]/.test(after) || /^\s*\d/.test(after)) continue;
     if (/^\s*\)/.test(after)) continue;
 
-    // ⭐ Full scope analysis is not needed to clear most false positives — the
+    //  Full scope analysis is not needed to clear most false positives — the
     // require's CONTRACT rules them out. Reading the thirteen candidates this
     // produced on one bundle, every single one was the name shadowed by an
     // inner callback, and each broke one of these:
@@ -192,10 +159,10 @@ for (const m of all) {
     if (commas > 0) continue;
     //   • and the name must not have been redeclared inside this module
     if (new RegExp(`function\\s+${R}\\s*\\(|function\\s*\\(\\s*${R}\\s*[,)]`).test(body)) continue;
-    // ⛔ Report the CALL SITE's line, not the module's. A review list that
+    //  Report the CALL SITE's line, not the module's. A review list that
     // points at the top of a 1,500-line module is a list nobody can act on.
     const lineNo = m.startLine + body.slice(0, hit.index).split("\n").length - 1;
-    // ⭐ A computed argument is not automatically an unknown one. `i(t ? "a" : "b")`
+    //  A computed argument is not automatically an unknown one. `i(t ? "a" : "b")`
     // is computed, but both branches are literal ids — once the layer map records
     // them as edges the site is ACCOUNTED FOR, and leaving it on the review list
     // just trains the reader to skip the list.
@@ -215,20 +182,20 @@ if (resolved.length) {
 }
 const review = [...dynamic];
 dynamic = [];   // question 2 does not decide the exit code; see the header
-// ⛔⛔ COVERAGE IS ITS OWN VERDICT, independent of whether anything was found.
+//  COVERAGE IS ITS OWN VERDICT, independent of whether anything was found.
 // Written as an `else if` on the review branch, it was skipped entirely whenever
 // any call site looked suspicious. Measured on a real chunk (lights,
 // module-map-b30f9f2, 65 modules): 48 examined = 73.8%, well under the gate,
 // four review candidates printed, `dynamic` left empty, exit 0 PASS.
 //
-// ⚠ And the four candidates that switched the gate off were all FALSE POSITIVES
+//  And the four candidates that switched the gate off were all FALSE POSITIVES
 // — `n(r)`, `n(new Error("http status code: " + f.statusCode))` and friends, a
 // node-style error-first callback that survives the arity and `new` heuristics
 // below. So the gate was not traded away for a finding; it was traded away for
 // noise. That is the whole argument for keeping the two verdicts independent:
 // the advisory branch must never be able to decide the exit code, not even by
 // accident. A gate hanging off an `else` is not a gate.
-// ⚠ Revisit 0.8 only after reading noReqCount. If a packer legitimately emits
+//  Revisit 0.8 only after reading noReqCount. If a packer legitimately emits
 // many factories with no require binding, the question is whether there was
 // anything to look at — not whether the threshold is too strict.
 const coverage = all.length > 0 ? examined / all.length : 1;
@@ -236,7 +203,7 @@ const underCovered = coverage < 0.8;
 const tally = `${examined}/${all.length} module(s) examined`
   + (noReqCount ? `, ${noReqCount} of them have no require binding` : "");
 if (review.length) {
-  console.log(`  ⚠    ${review.length} call site(s) LOOK like a require with a computed id (${tally}). Read each one:`);
+  console.log(`      ${review.length} call site(s) LOOK like a require with a computed id (${tally}). Read each one:`);
   for (const d of review.slice(0, 12)) console.log(`         ${d.id}  L${d.line}  ${d.snippet}`);
   if (review.length > 12) console.log(`         … ${review.length - 12} more`);
   console.log(`       Most are the require parameter SHADOWED by an inner function's parameter of`);
@@ -245,11 +212,9 @@ if (review.length) {
 } else if (!underCovered) {
   console.log(`  ok   no call site resembles a require with a computed id (${tally})`);
 }
-// ⛔ "Did it examine ANYTHING" is the wrong threshold. A version guarding only
-// on zero reported `ok` after examining 1 of 20 modules — as blind as zero,
-// and now wearing a green tick. What a check has to state is COVERAGE, and a
-// check that reached under four fifths of its subjects has not looked.
-// ⛔ Evaluated unconditionally, attached to no `else` — that is the whole point.
+// Apply the coverage threshold independently of individual findings. A scan
+// that examined only 1 of 20 modules previously passed a nonzero-count check;
+// this implementation requires at least 80% of listed modules to be examined.
 if (underCovered) {
   console.log(`  FAIL the computed-require check examined only ${examined} of ${all.length} module(s) — it could`);
   console.log(`       not recognise this packer's factory signature on the rest, so its silence`);
@@ -265,10 +230,10 @@ if (missing.length) {
     const requiredBy = all.filter((x) => requiresOf(x).includes(String(m.id))).map((x) => String(x.id));
     const inPort = requiredBy.filter((r) => ported.has(r));
     console.log(`    ${String(m.id).padEnd(22)} ${String(m.lines).padStart(6)}  ${String(m.requires.length).padStart(8)}  ${requiredBy.length === 0 ? "(nobody)" : `${requiredBy.length}, ${inPort.length} of them ported`}`);
-    // ⛔ A module nothing requires is dead. A module a PORTED module requires is
+    //  A module nothing requires is dead. A module a PORTED module requires is
     // a hole in the closure, and the closure claimed to be closed.
     if (inPort.length) {
-      console.log(`      ⛔ required by ported module(s): ${inPort.slice(0, 4).join(", ")} — the closure is NOT closed`);
+      console.log(`       required by ported module(s): ${inPort.slice(0, 4).join(", ")} — the closure is NOT closed`);
       dynamic.push({ id: m.id, line: m.startLine, snippet: "required by a ported module but absent from the closure" });
     }
   }
@@ -280,5 +245,5 @@ const decided = dynamic.length;   // only closure-not-closed sets this
 console.log(decided
   ? `\nFAIL — the module list does not reconcile.`
   : `\nPASS — ${ported.size} ported; ${missing.length} unported and none of them required by a ported module.`
-    + (review.length ? `\n       ⚠ ${review.length} call site(s) still need a human read (above) — this PASS does not cover them.` : ""));
+    + (review.length ? `\n        ${review.length} call site(s) still need a human read (above) — this PASS does not cover them.` : ""));
 process.exit(dynamic.length ? 1 : 0);

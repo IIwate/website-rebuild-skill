@@ -1,15 +1,7 @@
 /**
- * lib/hash.mjs — the one sha256 spelling.
- *
- * 23 call sites in 19 files each wrote `createHash("sha256").update(x).digest("hex")`
- * by hand, and three of them re-implemented the streaming file form. None was
- * wrong; the point is that a ledger row, an inventory line and a verify-mirror
- * check must agree on what "the sha256 of this file" means, and one spelling
- * cannot disagree with itself (verification-gates.md §2.1.1).
- *
- * 中文规格（自 scripts/README.md 迁入，v0.3.21；本表另一拼写：`lib/hash.mjs`）
- * **唯一的 sha256 拼写**：`sha256(buf)` / `sha256Short(buf, n)` / `sha256File(path)`（流式）。
- * `import { sha256, sha256File } from "./lib/hash.mjs"`
+ * SHA-256 helpers shared by mirror manifests, inventories and file checks.
+ * Digests use lowercase hexadecimal; file hashing streams the input so memory
+ * use does not scale with media size (verification-gates.md §2.1.1).
  */
 import { createHash } from "node:crypto";
 import { createReadStream } from "node:fs";
@@ -20,7 +12,7 @@ export const sha256 = (data) => createHash("sha256").update(data).digest("hex");
 /** First `n` hex chars — the short form used for ids in generated file names. */
 export const sha256Short = (data, n = 12) => sha256(data).slice(0, n);
 
-/** Hex sha256 of a file, streamed — for ledgers over media the size of a movie. */
+/** Hex SHA-256 of a file, read as a stream. */
 export function sha256File(p) {
   return new Promise((resolve, reject) => {
     const h = createHash("sha256");

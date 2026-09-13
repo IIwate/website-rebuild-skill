@@ -1,36 +1,20 @@
 #!/usr/bin/env node
 /**
- * verify-standalone.mjs — will src/ still run once it leaves this repo?
+ * Check whether a source tree depends on files outside its deliverable.
+ * A development server can resolve dependencies from the parent repository,
+ * masking missing assets, packages or configuration in a copied tree.
  *
- * The M(n+1) contract (readable-source.md §2) is: copy src/ anywhere, install
- * offline, run, and the site comes up. In place, that contract is untestable —
- * the project root sits one directory up with node_modules, mirror/ and its own
- * package.json, and those three are exactly what self-containment has to do
- * without. A dev server started in src/ resolves them happily and proves
- * nothing (verification-gates.md §2.1: a gate must not depend on the thing it
- * audits being nearby).
+ * The default mode scans for supported escaping references and repository paths.
+ * --full copies the tree outside the repository, installs packages with npm's
+ * offline option and runs its build script when one is declared. The required
+ * packages must already be cached; package lifecycle and build scripts can still
+ * perform their own network operations.
  *
- * Two halves:
- *
- *   static (default)  Scan every file for references that escape src/: "../",
- *                     absolute paths into this repo, and mirror//port/ mentions.
- *                     Cheap, deterministic, catches most breaks.
- *
- *   --full            Actually copy src/ to a temp dir outside the repo,
- *                     npm install --offline, npm run build. Proves it.
- *                     Then point probe.mjs at the result for CLEAN + no-egress.
- *
- * ⚠ Green here means "the ROUTES YOU BUILT resolve". An asset only referenced by
- * an untested route can be missing and both halves still pass — run probe with
- * --walk against the copy, and keep the asset ledger complete (§2.2: assets may
- * be skipped for technical reasons only, never legal ones).
+ * Neither mode exercises every browser route. Probe the copy's relevant routes
+ * and interactions to check runtime loading within the agreed asset scope
+ * (readable-source.md §2 and verification-gates.md §2.1).
  *
  *   node scripts/verify-standalone.mjs [--src src] [--full] [--keep]
- *
- * 中文规格（自 scripts/README.md 迁入，v0.3.21；本表另一拼写：`verify-standalone.mjs`）
- * **自包含门**：把 `src/` 复制到临时目录 → 断网 → 安装 → 构建 → 跑 CLEAN 与零外联。⛔ **必须复制出去跑**——原地跑会命中项目根的 `node_modules`/`mirror/`/根 `package.json`，而这三样恰好是自包含要证伪的东西
- * **自足副本门**：M(n+1) 的契约是"src/ 拷到任何地方、离线安装、跑起来"——这在仓内不可测，所以真拷贝到仓外、真装、真跑、真探针
- * `node verify-standalone.mjs`
  */
 import { readFile, readdir, stat, cp, mkdtemp, rm } from "node:fs/promises";
 import { spawn } from "node:child_process";
@@ -72,7 +56,7 @@ async function files(dir) {
 
 // Escapes worth reporting. Each one is a concrete way the directory stops being
 // portable, so each gets its own label rather than one generic "bad path".
-// ⛔ `../` is not by itself an escape, and treating it as one made this gate's
+//  `../` is not by itself an escape, and treating it as one made this gate's
 // first real run 102 false positives deep: `src/engine/*.js` importing
 // `../vendor-aliases.js` resolves to `src/vendor-aliases.js`, which is inside.
 // The question is where the path LANDS, so resolve it and compare.
@@ -117,7 +101,7 @@ for (const f of all.filter((f) => TEXT.test(f))) {
       // Prose is not a dependency. A README pointing at ../REBUILD_PLAN.md
       // describes where things live in the development repo; it cannot make the
       // copied directory fail to run. Only code can actually reach for a path.
-      // ⚠ It CAN go stale in the copy, though — say "a mirror", not "../mirror".
+      //  It CAN go stale in the copy, though — say "a mirror", not "../mirror".
       if (esc.codeOnly && !/\.(m?[jt]sx?|vue|astro|svelte|css|scss|html|json)$/i.test(f)) return;
       for (const m of l.matchAll(esc.re)) {
         if (esc.resolve && !escapesSrc(f, m[0])) continue;
@@ -158,12 +142,12 @@ if (hits.length) {
 } else console.log(`  ok   no references escape src/ (${all.length} files scanned)`);
 
 if (!has("full")) {
-  console.log(`\n  ⚠    static half only. Run with --full to copy out, install offline and build.`);
+  console.log(`\n      static half only. Run with --full to copy out, install offline and build.`);
   console.log(fail ? `\nFAIL — ${fail} assertion(s) failed.` : `\nPASS — static assertions only.`);
   process.exit(fail ? 1 : 0);
 }
 
-// --- full half: prove it outside the repo ---------------------------------
+// Copy, install and run the declared build outside the repository.
 const run = (cmd, cwd) =>
   new Promise((res) => {
     const p = spawn(cmd[0], cmd.slice(1), { cwd, stdio: ["ignore", "pipe", "pipe"] });
@@ -179,7 +163,7 @@ const dest = path.join(tmp, "src");
 console.log(`\n  copying to ${dest} (outside ${ROOT})`);
 await cp(SRC, dest, { recursive: true, filter: (s) => !SKIP_DIRS.has(path.basename(s)) });
 
-// ⛔ Not every deliverable has a build step, and assuming one made this gate
+//  Not every deliverable has a build step, and assuming one made this gate
 // FAIL on a project that was fine: a site loaded through an importmap ships its
 // module tree as-is, so there is nothing to bundle. Run what the package
 // actually declares; say plainly when there is no build rather than inventing
@@ -203,7 +187,7 @@ for (const step of steps) {
 if (has("keep")) console.log(`\n  kept: ${dest}`);
 else await rm(tmp, { recursive: true, force: true });
 
-console.log(`\n  ⚠    build success ≠ correct. Point probe.mjs --walk and the pixel gate at the`);
+console.log(`\n      build success ≠ correct. Point probe.mjs --walk and the pixel gate at the`);
 console.log(`       copy: an asset only reachable from an untested route can still be missing.`);
 console.log(fail ? `\nFAIL — ${fail} assertion(s) failed.` : `\nPASS — copied out, installed offline, built.`);
 process.exit(fail ? 1 : 0);

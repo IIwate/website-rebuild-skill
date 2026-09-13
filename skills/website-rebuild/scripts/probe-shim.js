@@ -1,41 +1,17 @@
-// probe-shim.js — deterministic driver shim for A/B same-frame comparison.
-// Adapted from storytellingnoomo-rebuild/scripts/probe-shim.js.
-// Lineage: storytellingnoomo-rebuild (rAF pump, timer queue, visibility pin)
-//   -> shopifydesign-rebuild (froze the rest of the entropy surface:
-//      performance.now, Date.now, new Date, setInterval, seeded Math.random).
+// Instrument page clocks and selected inputs for controlled browser comparisons.
+// serve.mjs injects this file for ?__probe. Apply the same instrumentation to
+// both sides, then advance window.__pump(dt, frames) with identical inputs.
 //
-// Usage: inject into <head> of HTML responses at the SERVING layer (serve.mjs
-// does this for requests carrying ?__probe) on BOTH the mirror and the rebuild,
-// then from a CDP probe call window.__pump(dt, frames) to advance both sides by
-// identical dt sequences and screenshot the same frame. Directly reusable for
-// any scroll- or time-driven animation site, including sites whose source
-// bundle is minified and cannot be instrumented from inside.
+// The shim controls rAF, timer queues, Date/performance clocks, Math.random and
+// selected visibility/observer behavior. It does not control network completion,
+// worker clocks, cryptographic randomness, media decoding or GPU scheduling.
+// Use repeated captures and native-observer controls to check those boundaries.
 //
-// Verification instrumentation only: when the page is opened with ?__probe,
-// replace requestAnimationFrame with a manually pumped queue and pin the
-// visibility API to "visible/focused", so BOTH the mirror (source bundle) and
-// the rebuild can be driven deterministically in a background tab. Timestamps
-// start at 0 so time-driven shader phases line up across tabs pumped with
-// identical dt sequences. Not part of source behavior; injected at the serving
-// layer (mirror) / a pre plugin (rebuild).
-//
-// EVERY clock and entropy source must be taken over, not just rAF. Freezing rAF
-// and setTimeout while performance.now(), Date.now(), new Date(), setInterval
-// and Math.random() keep running live does not make the page deterministic —
-// it only hides which parts are still free-running. Field case: transitions
-// interpolating on (performance.now() - start), a track picked by
-// Math.floor(Date.now() / 18e4 % n), scatter positions from Math.random(), and
-// a countdown on setInterval left two consecutive dumps of the SAME mirror
-// disagreeing on 7 numeric fields. With all of them pinned, __pump's time is
-// the only clock in the page and A/B comparison is frame-exact.
-//
-// 中文规格（自 scripts/README.md 迁入，v0.3.21；本表另一拼写：`probe-shim.js`）
-// Freezes registered clocks, timers, visibility, Math.random and IO delivery.
-// IO uses viewport intersections; root, rootMargin and threshold are normalized
-// and discarded options are reported. Use ?__probe&__noio for a native IO control.
-// CSS animations require pixelcompare --freeze-css or a separate unfrozen check.
-// __pump(dt, frames) advances the registered clocks; it does not prove that
-// every entropy source of an arbitrary page is covered.
+// The storytellingnoomo implementation supplied the initial frame/timer pump.
+// In shopifydesign, seven numeric fields still varied until additional page
+// clocks and random consumption were controlled. Those observations motivate
+// the covered APIs; they do not establish determinism for every site.
+
 (function () {
   if (typeof location === "undefined" || !location.search.includes("__probe")) return;
 
@@ -184,7 +160,7 @@
       }
   };
   // --- IntersectionObserver -------------------------------------------------
-  // ⛔ IO is a CLOCK THIS SHIM DOES NOT OWN, and on a scroll-reveal site it is
+  //  IO is a CLOCK THIS SHIM DOES NOT OWN, and on a scroll-reveal site it is
   // the one that matters. The browser delivers intersection records on its own
   // schedule, off the main thread's frame loop, so two captures of the same
   // frozen page can start their entrance animations at different pump counts —
@@ -194,34 +170,23 @@
   // Measured on a CSS/IO-driven target: the same side compared with itself
   // drifted 0.2–0.31 meanAbsDiff and no amount of settling converged it.
   //
-  // ⭐ So take it over: record every observer, and deliver its records ON THE
+  //  So take it over: record every observer, and deliver its records ON THE
   // PUMP, synchronously, in registration order. Both sides then see the same
   // callbacks at the same virtual frame.
   //
-  // ⚠ This changes WHEN callbacks fire, not WHETHER they do — and it is
+  //  This changes WHEN callbacks fire, not WHETHER they do — and it is
   // verification instrumentation, active only under ?__probe. A page that never
   // pumps still gets its records, because the first pump delivers the backlog.
   var NativeIO = window.IntersectionObserver;
   var observers = [];
-  // ⛔⛔ THIS TAKEOVER NORMALISES IO SEMANTICS, and the normalisation can itself
-  // manufacture a cross-side false green. deliverIntersections measures against
-  // the viewport with isIntersecting = (ratio > 0), discarding root, rootMargin
-  // and threshold entirely. Both sides run the same shim, so:
-  //   * a reveal configured at threshold 0.5 fires at 1% visible;
-  //   * an observer rooted on a scroll container (Lenis / Locomotive / an
-  //     overflow div) is measured against the wrong box completely;
-  //   * a rebuild and a mirror that genuinely DISAGREE on these options get
-  //     flattened onto the same frame and pass — a real porting difference
-  //     erased by the instrument, which is the failure this skill keeps warning
-  //     about.
-  // ⭐ The trade is still worth taking by default: on a CSS/IO-driven target the
-  // measured self-comparison bandwidth goes 0.31 -> 0.04. So keep it on, but
-  // leave ?__probe&__noio as the way out, and SAY which options were discarded
-  // whenever an observer actually used them. A normalised measurement that goes
-  // undisclosed is not a measurement.
-  // ⚠ Revisit once deliverIntersections honours root/rootMargin/threshold: the
-  // warning goes away then, though the opt-out is still worth keeping as a
-  // control run.
+  // The optional IntersectionObserver shim measures viewport overlap using
+  // ratio > 0. It ignores root, rootMargin and threshold, which can hide real
+  // differences: a threshold of 0.5 can trigger at 1% visibility, and observers
+  // rooted in scroll containers use the viewport instead.
+  // In one CSS/IO target, the measured self-comparison band fell from 0.31 to
+  // 0.04 with this normalization. Report ignored options and use ?__probe&__noio
+  // when native observer behavior is part of the comparison. Revisit the warning
+  // if deliverIntersections gains support for these options.
   var IO_SHIM = String(location.search).indexOf("__noio") < 0;
   if (NativeIO && IO_SHIM) {
     window.IntersectionObserver = function (cb, opts) {
@@ -238,7 +203,7 @@
       observers.push(rec);
       this.observe = function (el) { if (targets.indexOf(el) < 0) targets.push(el); };
       this.unobserve = function (el) { var i = targets.indexOf(el); if (i >= 0) targets.splice(i, 1); };
-      // ⛔ disconnect must REMOVE the record, not just empty its targets. Left in
+      //  disconnect must REMOVE the record, not just empty its targets. Left in
       // place it is still walked on every pump, costing a forced layout per frame,
       // and still holds its element references — a real leak on an SPA that mounts
       // and unmounts the same components repeatedly.
@@ -254,7 +219,7 @@
       this.thresholds = [].concat((opts && opts.threshold) || 0);
       void self;
     };
-    // ⚠ The prototype is no longer flattened to {}. instanceof and class-extends
+    //  The prototype is no longer flattened to {}. instanceof and class-extends
     // both work either way, so flattening only cost the constructor - leave the
     // default prototype so a library probing for one at least finds it.
   }
@@ -263,7 +228,7 @@
   // deliver only on CHANGE — an observer that fires every frame is a different
   // observer, and would keep re-triggering one-shot reveals.
   function deliverIntersections() {
-    // ⛔ Walk a SNAPSHOT, not the live array. The standard one-shot reveal calls
+    //  Walk a SNAPSHOT, not the live array. The standard one-shot reveal calls
     // observer.disconnect() from inside its own callback, which now splices the
     // record out; walking by index would let the next observer shift into the
     // current slot and be skipped by o++, losing a delivery for that frame.
@@ -310,7 +275,7 @@
       now += dt;
       __t = now; // keep the frozen clocks in lockstep with the rAF timestamp
       runDueTimers();
-      // ⚠ Before the frame's callbacks, so a reveal triggered this frame is
+      //  Before the frame's callbacks, so a reveal triggered this frame is
       // animating within it — the order the browser would produce.
       deliverIntersections();
       var batch = queue.splice(0, queue.length);

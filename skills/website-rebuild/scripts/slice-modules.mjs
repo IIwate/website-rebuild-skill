@@ -8,7 +8,7 @@
  * down, so the slice table is just a list of module ids and the tool can verify
  * itself against the map.
  *
- * ⛔ Byte-verbatim. Each module's text is copied between the offsets the parser
+ *  Byte-verbatim. Each module's text is copied between the offsets the parser
  * reported; nothing is retyped, reformatted or corrected (porting-discipline.md
  * §1.3). The generated file re-declares the webpack runtime so the slice runs on
  * its own, and that runtime is the ONE thing here that is transcribed rather
@@ -20,10 +20,6 @@
  *                                [--out port/_gen/tween.gen.js] [--check]
  *                                [--format esm|classic --entry <id>] [--packer auto|webpack|turbopack]
  *
- * 中文规格（自 scripts/README.md 迁入，v0.3.21；本表另一拼写：`slice-modules.mjs`）
- * **按模块 id 逐字切片**：边界由打包器给定，所以切片表就是一串 id，且工具能自校（`--check` 重切须字节一致）。转写的 webpack 运行时在文件头登记为偏差。⛔ **容器不是整个文件**（v0.3.15）：Turbopack chunk 容器外的字节（Sentry `_debugIds` 前奏、`//# debugId` 尾注）逐字带走，否则 `verify-tokens` 对每个 chunk 恒差 87 token 而无处登记（raycastkbd 0/54 → 61/61）
- * 按模块 id 逐字切片；`--check` 重切须字节一致。转写的 webpack 运行时在文件头登记为偏差。⛔ **Turbopack 容器外的字节也逐字带走**（v0.3.15）：每个 chunk 开头的 Sentry `_debugIds` 前奏与结尾的 `//# debugId` 尾注是浏览器执行过的字节，丢掉它们 = token 门 0/54 红且无处登记（raycastkbd 285 B/87 token 每 chunk）；gen 头写明 prologue/epilogue 字符数与**完整**再生成命令行（`--in/--map/--closure/--out`——此前只写 `--closure`，照抄即 ENOENT）
- * `node scripts/slice-modules.mjs --in mirror/_pretty/X.js --map docs/survey/X.json --closure docs/closures/X.json --out port/_gen/X.gen.js`
  */
 import { readFile, writeFile, mkdir } from "node:fs/promises";
 import path from "node:path";
@@ -35,7 +31,7 @@ cli({ known: ["closure", "map", "in", "out", "format", "entry", "packer"], bools
 const args = process.argv.slice(2);
 const flag = (n, d) => { const i = args.indexOf("--" + n); return i >= 0 && args[i + 1] !== undefined ? args[i + 1] : d; };
 const CHECK = args.includes("--check");
-// ⛔ How the port is LOADED is part of the port. The source's bundle is a
+//  How the port is LOADED is part of the port. The source's bundle is a
 // classic script — parser-blocking, executed where it sits. An ESM build of the
 // same bytes is deferred by default, so swapping one for the other changes when
 // every module top-level side effect runs, and that difference has nothing to do
@@ -43,14 +39,14 @@ const CHECK = args.includes("--check");
 // IIFE that boots exactly like the original instead of registering a deviation
 // for a difference that did not have to exist.
 const FORMAT = flag("format", "esm");
-// ⭐ A Turbopack port does not need a transcribed runtime at all. Its modules are
+//  A Turbopack port does not need a transcribed runtime at all. Its modules are
 // registered into the SAME `globalThis.TURBOPACK` array the origin's own runtime
 // drains, so re-emitting the container verbatim lets the real runtime resolve
 // ids that live in OTHER chunks — which is exactly what the site's modules do
 // when they require React. No re-implementation, therefore no deviation to
 // register for one, and the module bodies stay byte-identical.
 //
-// ⛔ This is only available because the port replaces ONE chunk and the rest of
+//  This is only available because the port replaces ONE chunk and the rest of
 // the packer's output stays in place. A port that replaces the whole bundle has
 // no runtime to lean on and must transcribe one.
 const PACKER = flag("packer", "auto");
@@ -75,9 +71,8 @@ const map = JSON.parse(await readFile(MAP, "utf8"));
 const closure = JSON.parse(await readFile(CLOSURE, "utf8"));
 const byId = new Map(map.modules.map((m) => [m.id, m]));
 
-// ⛔ The map is an input, and an input can go stale. Re-derive the source's
-// sha256 and refuse if it moved — a slice table pointing into a file that has
-// changed is the F26 failure (a recorded green whose input was regenerated).
+// Check the source digest before applying map coordinates. The recorded F26
+// failure used coordinates from an earlier source after the input was regenerated.
 const srcHash = sha256(src);
 
 const wanted = closure.modules.filter((id) => byId.has(id));
@@ -98,7 +93,7 @@ const mods = wanted.map((id) => byId.get(id)).sort((a, b) => a.startLine - b.sta
 
 const parts = [];
 for (const m of mods) {
-  // ⭐ Prefer character offsets when the map recorded them: a factory can begin
+  //  Prefer character offsets when the map recorded them: a factory can begin
   // mid-line, and a line slice would then carry its neighbour's tail with it.
   const text = (m.startChar != null && m.endChar != null)
     ? src.slice(m.startChar, m.endChar)
@@ -116,10 +111,10 @@ const header = [
   `// Regenerate:  node scripts/slice-modules.mjs --closure ${path.relative(process.cwd(), CLOSURE)}`,
   `// Verify:      node scripts/slice-modules.mjs --closure ${path.relative(process.cwd(), CLOSURE)} --check`,
   `//`,
-  `// ⛔ Nothing below the runtime was retyped, reformatted or corrected. Source-site`,
+  `//  Nothing below the runtime was retyped, reformatted or corrected. Source-site`,
   `// bugs, dead code and odd spellings are present ON PURPOSE — they are the port.`,
   `//`,
-  `// ⚠ REGISTERED DEVIATION: the webpack runtime below is TRANSCRIBED, not sliced.`,
+  `//  REGISTERED DEVIATION: the webpack runtime below is TRANSCRIBED, not sliced.`,
   `// The original is one closure wrapping the whole 597-module container; carrying`,
   `// it verbatim would carry all 597. This is the smallest re-implementation that`,
   `// preserves the contract the modules were compiled against: require by id,`,
@@ -143,7 +138,7 @@ const header = [
 ].join("\n");
 
 // A classic script must not leak the runtime into global scope, so everything
-// goes inside an IIFE. ⚠ Inserted after the comment header so the provenance
+// goes inside an IIFE.  Inserted after the comment header so the provenance
 // block stays the first thing anyone reads.
 const openIife = FORMAT === "classic" ? "(function () {\n" : "";
 
@@ -161,7 +156,7 @@ const footer = FORMAT === "esm"
       `// \`i(i.s = <entry>)\`, so the entry module runs as the script is executed.`,
       `__req(${JSON.stringify(ENTRY)});`,
       ``,
-      `// ⚠ Exposed for probes and gates only. The source does not publish this;`,
+      `//  Exposed for probes and gates only. The source does not publish this;`,
       `// nothing in the port may reach for it.`,
       `window.__req = __req;`,
       `})();`,
@@ -170,18 +165,17 @@ const footer = FORMAT === "esm"
 
 let out;
 if (packer === "turbopack") {
-  // Re-emit the packer's own container, verbatim. ⭐ No runtime is transcribed:
+  // Re-emit the packer's own container, verbatim.  No runtime is transcribed:
   // these modules register into the same globalThis.TURBOPACK array the origin's
   // runtime drains, so ids that live in other chunks (React, Next) resolve
   // exactly as before.
   // Cross-chunk dependency ids the map recorded from the container's prologue.
   const deps = (map.chunkDeps || []).map(String);
-  // ⛔ THE CONTAINER IS NOT THE WHOLE FILE. Bytes before the push call (a Sentry
-  // `_debugIds` registration — 285 B on every raycastkbd chunk) and after it
-  // (`//# debugId=` / sourceMappingURL) are bytes the browser executed. A slice
-  // that keeps only the container re-emits a chunk 87 tokens short of the
-  // original: verify-tokens 0/54 red with nothing to point at, and the drop is
-  // registered nowhere. Carry both ends verbatim and say so in the header.
+  // Preserve code and comments outside the module container. Raycastkbd chunks
+  // had a 285-byte Sentry _debugIds registration before the push and debugId or
+  // sourceMappingURL comments after it. Omitting this material removed 87 tokens
+  // and made all 54 token comparisons fail. These bytes remain part of the
+  // captured chunk even though they are outside its module table.
   const first = mods[0], last = mods[mods.length - 1];
   const head = first.startChar != null ? src.slice(0, first.startChar) : lines.slice(0, first.startLine - 1).join("\n");
   const kOpen = head.search(/\(?\s*globalThis\.TURBOPACK\s*\|\|/);
@@ -201,17 +195,17 @@ if (packer === "turbopack") {
     `// Regenerate:  node scripts/slice-modules.mjs ${CLI}`,
     `// Verify:      node scripts/slice-modules.mjs ${CLI} --check`,
     `//`,
-    `// ⭐ NO RUNTIME IS TRANSCRIBED HERE. This file is a Turbopack chunk like the`,
+    `//  NO RUNTIME IS TRANSCRIBED HERE. This file is a Turbopack chunk like the`,
     `// one it replaces: it pushes (id, factory) pairs into globalThis.TURBOPACK,`,
     `// and the origin's own runtime — still served from the mirror — resolves`,
     `// them, including ids that live in other chunks.`,
     `//`,
-    `// ⛔ Nothing below was retyped, reformatted or corrected. Source-site bugs,`,
+    `//  Nothing below was retyped, reformatted or corrected. Source-site bugs,`,
     `// dead code and odd spellings are present ON PURPOSE — they are the port.`,
     ``,
     ...(prologue
       ? [
-          `// ⛔ PROLOGUE — bytes that precede the container in the original chunk,`,
+          `//  PROLOGUE — bytes that precede the container in the original chunk,`,
           `// carried verbatim (${prologue.length} chars). The browser ran them; the token`,
           `// gate counts them. Typically a Sentry debug-id registration.`,
           prologue,
@@ -223,7 +217,7 @@ if (packer === "turbopack") {
     ...(deps.length
       ? [
           ``,
-          `    // ⛔ The container's PROLOGUE: bare ids this chunk DEPENDS on, carried`,
+          `    //  The container's PROLOGUE: bare ids this chunk DEPENDS on, carried`,
           `    // verbatim from the original. They declare "these must already be`,
           `    // registered before my modules evaluate". Dropping them does not fail`,
           `    // at load — it fails later, when a module evaluates and the runtime`,
@@ -234,10 +228,10 @@ if (packer === "turbopack") {
       : []),
     ``,
   ].join("\n");
-  // ⛔ Each entry is `<id>, <factory>` — the container is a flat alternating
+  //  Each entry is `<id>, <factory>` — the container is a flat alternating
   // list, so emitting only the factories produces a chunk the runtime reads as
   // ids and drops on the floor.
-  // ⛔ Emit EVERY id the module answers to. A Turbopack entry can be
+  //  Emit EVERY id the module answers to. A Turbopack entry can be
   // `id, id, …, id, factory` — several ids sharing one body. Emitting only the
   // canonical one leaves the others unregistered, and the runtime throws
   // "module <alias> … the module factory is not available" from a chunk that

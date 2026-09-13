@@ -1,17 +1,13 @@
 #!/usr/bin/env node
-// check-cases.mjs — the zero-loss guard for moving war stories out of a reference doc.
+// Compare unchanged prose before and after moving it between documentation files.
 //
-//   node selftest/check-cases.mjs <name>            # e.g. mirroring, or SKILL, or scripts
+//   node selftest/check-cases.mjs <name>  # mirroring, SKILL, or scripts
 //
-// Baseline = the doc as committed at HEAD (git show). Every sentence of the
-// baseline (≥ 10 chars, headings excluded) must appear VERBATIM in either the
-// rewritten doc or its case-studies companion. Prints the missing sentences and
-// exits 1 if any. Also prints sizes so the split can be judged.
-//
-// `scripts` (v0.3.21) has a THIRD legal destination: a script's own header
-// comment — exactly what `--help` prints (lib/cli.mjs headerOf), so the check
-// reads it through the same function. A spec sentence that left the README
-// must be answerable by `node scripts/<x>.mjs --help`.
+// The baseline is the document at HEAD. Sentences of at least 10 characters,
+// excluding headings, must occur verbatim in the current document or its case
+// study. For the scripts index, script headers are also eligible destinations.
+// This checks relocation without wording changes; it is not a semantic review
+// of edited documentation. Missing sentences produce exit 1.
 import { execFileSync } from "node:child_process";
 import { readFileSync, existsSync } from "node:fs";
 import path from "node:path";

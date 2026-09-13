@@ -60,7 +60,7 @@ export default {
     })()`,
   },
 
-  // Test cases matrix: client-side SPA navigation & direct SSR / deep-link hydration
+  // Cases cover client-side navigation and direct loading of a route.
   cases: [
     {
       name: "About Page Navigation",
@@ -76,7 +76,7 @@ export default {
         "About Us",
         "We are a creative studio",
       ],
-      // Stability assertion: target container opacity must stay '1' for >= stabilityMs
+      // URL, visible container, text and opacity are sampled throughout this interval.
       stabilityMs: 2000,
       timeoutMs: 20000,
     },
@@ -97,7 +97,7 @@ export default {
       timeoutMs: 20000,
     },
     {
-      name: "Direct Load & Hydration of About Page",
+      name: "Direct Load of About Page",
       type: "direct",
       targetPath: "/about",
       expectedSelector: ".page-about",

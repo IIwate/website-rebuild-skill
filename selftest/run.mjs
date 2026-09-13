@@ -1,19 +1,13 @@
 #!/usr/bin/env node
-// selftest/run.mjs — the repo's smoke harness: `npm test`.
+// Offline regression suite: npm test.
 //
-// Scope: fast, offline, zero-dependency. It guards the toolchain's PURE LOGIC
-// (the shared libs every gate and crawler lean on) plus repo-level invariants
-// (syntax of all 50+ scripts, the zero-dep discipline, doc link integrity).
-// It does NOT drive Chrome or the network. The browser-driven gates get their
-// own lane — selftest/browser.mjs, `npm run test:browser` (v0.3.22) — which
-// launches a real headless Chrome against loopback fixtures; it is slower and
-// needs a browser on the machine, so it is a separate script and a separate
-// CI job, never folded into this one.
+// Covers shared helpers, CLI behavior, source syntax and local documentation
+// references. HTTP fixtures use loopback. Some checks invoke pinned npm tools;
+// offline execution requires those packages in the npm cache.
+// Browser checks run separately through npm run test:browser.
 //
-// Fixture philosophy: fixtures are GENERATED inline from the measured field
-// cases named by the version labels below (srcset candidates, escaped spellings,
-// paren balance, spelling twins, …). Each assertion cites the version that
-// bled for it, so a regression names the lesson it just unlearned.
+// Fixtures include URL forms, bundle layouts and payload encodings observed in
+// the named projects. Positive and negative cases check observable behavior.
 import { readdirSync, readFileSync, writeFileSync, mkdirSync, rmSync, existsSync, statSync } from "node:fs";
 import { execFileSync } from "node:child_process";
 import path from "node:path";
@@ -43,10 +37,7 @@ const TMP = scratch(".tmp");
 
 // ------------------------------------------------------------- 2. zero-dep
 {
-  try {
-    execFileSync(process.execPath, ["scripts/verify-zerodep.mjs"], { cwd: SKILL, stdio: "pipe" });
-    ok("verify-zerodep — scripts/ imports only node:, gates import no producer");
-  } catch (e) { bad("verify-zerodep", String(e.stdout || e.message).split("\n").pop()); }
+  green("verify-zerodep - script imports satisfy dependency checks", run("scripts/verify-zerodep.mjs", [], { cwd: SKILL }));
 }
 
 // ------------------------------------------------- 3. lib/urlpath fixtures
@@ -177,7 +168,7 @@ const TMP = scratch(".tmp");
   eq("negotiate — sanityEvidence counts", [ev.autoFormat, ev.keyFields], [1, 2]);
   // darkroom.engineering (v0.3.9): a flight :HC preconnect names the bare host
   // with NO asset path — Sanity is in the stack while the page shows zero
-  // project refs. cdnRefs must catch it or the fingerprint prints "无".
+  // project references. cdnRefs must still detect the host without an asset path.
   const hc = sanityEvidence(`:HC\\"https:\\/\\/cdn.sanity.io\\"`);
   truthy("negotiate — bare :HC preconnect counted, no fake project (v0.3.9)",
     hc.cdnRefs === 1 && hc.projects.length === 0, JSON.stringify(hc));
@@ -186,7 +177,7 @@ const TMP = scratch(".tmp");
 // ------------------------------------- 5. verify-mirror end-to-end fixture
 {
   // A miniature mirror: ledger-consistent, closure-complete. PASS expected;
-  // then corrupt one byte and expect the bytes gate to go red (v0.1.14 family).
+  // then corrupt one byte and expect the bytes gate to fail (v0.1.14 family).
   const { createHash } = await import("node:crypto");
   const M = path.join(TMP, "mini-mirror");
   mkdirSync(M, { recursive: true });
@@ -336,7 +327,7 @@ const TMP = scratch(".tmp");
   truthy("verify-flight — bijection audit actually collects pairs (v0.3.2)", (() => { const g = gateOut(); return g.ok && /双射:1 对/.test(g.out); })());
   // One origin module answered by two rebuild modules (basement 528233: a single
   // source file exporting SocialLinks/InternalLinks/Copyright, regenerated as
-  // three files) — trees equal, bijection violated, gate must go red.
+  // three files) — trees equal, bijection violated, gate must fail.
   writeFileSync(path.join(BUILT, "index.html"), wrap(mkStream({ moduleId: 456, chunk: "fedcba98", moduleId2: 789 })));
   truthy("verify-flight — one origin module split in two goes red (v0.3.2)", (() => { const g = gateOut(); return !g.ok && g.out.includes("123"); })());
   // v0.3.12 / darkroom: Turbopack css-module hashes are not always 8 hex (a 7-hex
@@ -350,11 +341,10 @@ const TMP = scratch(".tmp");
 
 // --------------- 5c. module graph: turbopack merged/async shapes (v0.3.3)
 {
-  // The three shapes basement.studio bled for: scope hoisting registers a merged
-  // sub-module via e.s([exports], subId); e.A(id) is the async-loader edge; and
-  // an e.v(cb) loader stub resolves cb(<id>) after pulling sibling chunks. Miss
-  // any of them and the closure is silently blind — the site's entire 3D scene
-  // sat two hops behind an e.A / e.v pair.
+  // The basement.studio scene depends on three Turbopack edge forms:
+  // e.s([exports], subId) aliases a scope-hoisted module; e.A(id) loads asynchronously;
+  // and e.v(cb) resolves cb(<id>) after loading sibling chunks. The scene was two hops
+  // behind an e.A/e.v pair, so a direct-entry fixture would not cover these edges.
   const CH = path.join(TMP, "graph-chunk.js");
   writeFileSync(CH, `(globalThis.TURBOPACK = globalThis.TURBOPACK || []).push([
   "object" == typeof document ? document.currentScript : void 0,
@@ -478,6 +468,27 @@ const TMP = scratch(".tmp");
   truthy("verify-tokens — whitespace-only reformat is token-identical (v0.3.10)", vt(T0, T1));
   truthy("verify-tokens — beautifier-style template mangling goes red (v0.3.10)", !vt(T0, T2));
 
+  writeFileSync(T0, "const re = /alpha/g;\n");
+  writeFileSync(T1, "const re=/alpha/g;\n");
+  truthy("verify-tokens - equivalent regular expressions pass", vt(T0, T1));
+  writeFileSync(T1, "const re = /beta/g;\n");
+  truthy("verify-tokens - changed regular-expression pattern fails", !vt(T0, T1));
+  writeFileSync(T1, "const re = /alpha/i;\n");
+  truthy("verify-tokens - changed regular-expression flags fail", !vt(T0, T1));
+
+  const MD = W(path.join(TMP, "module-literals"));
+  const factory = '(e)=>{return /alpha/g.test(e)}';
+  W(MD, {
+    "source.js": factory,
+    "map.json": JSON.stringify({ source: path.join(MD, "source.js"), modules: [{ id: 1, startChar: 0, endChar: factory.length }] }),
+    "closure.json": JSON.stringify({ modules: [1] }),
+    "src/modules/check.js": '// module `1`\nexport default (module)=>{return /alpha/g.test(module)}\n',
+  });
+  const moduleArgs = ["--map", path.join(MD, "map.json"), "--closure", path.join(MD, "closure.json"), "--src", path.join(MD, "src")];
+  green("verify-module-map - wrapper rename preserves a regular expression", run("scripts/verify-module-map.mjs", moduleArgs));
+  writeFileSync(path.join(MD, "src/modules/check.js"), '// module `1`\nexport default (module)=>{return /beta/i.test(module)}\n');
+  red("verify-module-map - different regular-expression values fail", run("scripts/verify-module-map.mjs", moduleArgs), /literal/);
+
   // F3: emit-webpack-chunk re-emits a pretty webpack chunk part-by-part and
   // its reassembly gate must be byte-exact; consumes module-map's field names.
   const PRETTY = path.join(TMP, "wp-pretty.js");
@@ -494,7 +505,7 @@ const TMP = scratch(".tmp");
   } catch (e) { bad("emit-webpack-chunk", String(e.stderr || e.stdout || e.message).split("\n")[0]); }
 
   // F2: verify-nextdata reads a pages-router mirror DIRECTORY (offline) and
-  // compares __NEXT_DATA__ with _next/data; a changed prop goes red.
+  // compares __NEXT_DATA__ with _next/data; a changed prop fails.
   const ND = path.join(TMP, "nd-a"), NDB = path.join(TMP, "nd-b");
   const nd = (dir, title) => {
     mkdirSync(path.join(dir, "_next/data/BUILD1"), { recursive: true });
@@ -818,9 +829,84 @@ const TMP = scratch(".tmp");
   finally { srv.close(); }
 }
 
-// ------------------------------- v0.3.16: reference docs — unique section ids, resolvable citations, complete References list
-// A rule only written in the docs decays: three duplicate-id families and a
-// dangling §3.4 lived in verification-gates.md until a cold review counted them.
+// HLS capture: playlist references, query variants and shared mirror records.
+{
+  const { createServer } = await import("node:http");
+  const { execFile } = await import("node:child_process");
+  const { createHash } = await import("node:crypto");
+  const digest = (bytes) => createHash("sha256").update(bytes).digest("hex");
+  const master = '#EXTM3U\n#EXT-X-STREAM-INF:BANDWIDTH=100\nv.m3u8?q=1&tracking=a\n#EXT-X-STREAM-INF:BANDWIDTH=200\nv.m3u8?q=2&tracking=b\n#EXT-X-MEDIA:TYPE=AUDIO,URI="audio.m3u8"\n';
+  const variant = '#EXTM3U\n#EXT-X-MAP:URI="init.mp4?q=1"\n#EXT-X-KEY:METHOD=AES-128,URI="key.bin"\n#EXTINF:1,\nseg.ts?q=1#start\n';
+  const routes = {
+    "/master.m3u8": master,
+    "/v.m3u8?q=1&tracking=a": variant,
+    "/v.m3u8?q=2&tracking=b": "#EXTM3U\n#EXTINF:1,\nseg.ts?q=2\n",
+    "/audio.m3u8": "#EXTM3U\n#EXTINF:1,\ncached.ts\n",
+    "/init.mp4?q=1": "initialization data",
+    "/key.bin": "0123456789abcdef",
+    "/seg.ts?q=1": "first media variant",
+    "/seg.ts?q=2": "second media variant",
+    "/cached.ts": "cached media",
+    "/invalid.m3u8": "<html>Unavailable stream</html>",
+    "/unsafe.m3u8": "#EXTM3U\n#EXTINF:1,\n/%2e%2e%2fescape.ts\n",
+  };
+  const requests = [];
+  const srv = createServer((req, res) => {
+    requests.push(req.url);
+    const body = routes[req.url];
+    res.writeHead(body === undefined ? 404 : 200, { "content-type": req.url.split("?")[0].endsWith(".m3u8") ? "application/vnd.apple.mpegurl" : "application/octet-stream" });
+    res.end(body ?? "Not found");
+  });
+  await new Promise((resolve) => srv.listen(0, "127.0.0.1", resolve));
+  const origin = `http://127.0.0.1:${srv.address().port}`;
+  const output = path.join(TMP, "hls");
+  const preserved = { path: "keep.txt", bytes: 4, sha256: digest("kept"), type: "text/plain" };
+  W(output, {
+    "master.m3u8": master,
+    "cached.ts": "cached media",
+    "keep.txt": "kept",
+    "mirror-manifest.json": JSON.stringify({ origin, files: { [`${origin}/keep.txt`]: preserved } }),
+    "urlpath-policy.json": JSON.stringify({ ignore: ["tracking"] }),
+  });
+  const capture = (out, entry = "/master.m3u8", flags = []) => new Promise((resolve) => execFile(process.execPath,
+    [path.join(SKILL, "scripts/gapfill-video.mjs"), "--master", origin + entry, "--origin", origin, "--out", out, "--delay", "0", ...flags],
+    { cwd: TMP, timeout: 20000 }, (err, stdout, stderr) => resolve({ code: err ? err.code : 0, out: String(stdout) + String(stderr) })));
+  try {
+    const result = await capture(output);
+    truthy("gapfill-video - captures nested playlists and distinct query variants", result.code === 0 &&
+      readFileSync(path.join(output, "v@@q=1.m3u8"), "utf8") === variant &&
+      readFileSync(path.join(output, "seg@@q=1.ts"), "utf8") === routes["/seg.ts?q=1"] &&
+      readFileSync(path.join(output, "seg@@q=2.ts"), "utf8") === routes["/seg.ts?q=2"], result.out.slice(-300));
+    const files = JSON.parse(readFileSync(path.join(output, "mirror-manifest.json"), "utf8")).files;
+    const inventory = new Set(readFileSync(path.join(output, "inventory.tsv"), "utf8").trim().split("\n").slice(1));
+    truthy("gapfill-video - every captured file has matching byte counts and hashes in both records", Object.keys(files).length === 10 && inventory.size === 10 &&
+      Object.entries(files).every(([url, row]) => {
+        const bytes = readFileSync(path.join(output, row.path));
+        return !url.includes("#") && row.bytes === bytes.length && row.sha256 === digest(bytes) &&
+          inventory.has([row.sha256, row.bytes, row.path, url].join("\t"));
+      }));
+    truthy("gapfill-video - records cached files and preserves unrelated entries", !requests.includes("/master.m3u8") && !requests.includes("/cached.ts") &&
+      JSON.stringify(files[`${origin}/keep.txt`]) === JSON.stringify(preserved));
+    const dryOutput = path.join(TMP, "hls-dry");
+    const dry = await capture(dryOutput, "/master.m3u8", ["--dry-run"]);
+    truthy("gapfill-video - dry run creates no output files", dry.code === 0 && !existsSync(dryOutput), dry.out.slice(-300));
+    const corrupt = W(path.join(TMP, "hls-corrupt"), { "mirror-manifest.json": "{broken" });
+    const requestCount = requests.length;
+    const rejected = await capture(corrupt);
+    truthy("gapfill-video - rejects a corrupt manifest before fetching or overwriting it", rejected.code !== 0 && requests.length === requestCount &&
+      readFileSync(path.join(corrupt, "mirror-manifest.json"), "utf8") === "{broken");
+    const invalid = path.join(TMP, "hls-invalid");
+    const invalidResult = await capture(invalid, "/invalid.m3u8");
+    truthy("gapfill-video - rejects non-playlist responses before storing them", invalidResult.code === 1 && !existsSync(invalid), invalidResult.out.slice(-300));
+    const unsafe = await capture(path.join(TMP, "hls-unsafe"), "/unsafe.m3u8");
+    truthy("gapfill-video - encoded path traversal cannot write outside the mirror", unsafe.code === 1 && /maps outside the mirror/.test(unsafe.out) && !existsSync(path.join(TMP, "escape.ts")), unsafe.out.slice(-300));
+    const noWorkers = await capture(output, "/master.m3u8", ["--workers", "invalid"]);
+    truthy("gapfill-video - rejects an invalid worker count", noWorkers.code === 2, noWorkers.out.slice(-300));
+  } catch (e) { bad("gapfill-video loopback capture", e.message); }
+  finally { await new Promise((resolve) => srv.close(resolve)); }
+}
+
+// Reference navigation: unique section IDs, resolvable citations and entrypoint links.
 {
   const REF = path.join(SKILL, "references");
   const docs = readdirSync(REF).filter((f) => f.endsWith(".md"));
@@ -846,9 +932,10 @@ const TMP = scratch(".tmp");
     });
   }
   truthy("docs — every `<doc> §x.y` citation resolves to a heading (v0.3.16)", unresolved.length === 0, unresolved.slice(0, 5).join("; "));
-  const refList = readFileSync(path.join(SKILL, "SKILL.md"), "utf8").split("## References")[1] || "";
-  const unlisted = docs.filter((d) => !refList.includes(`references/${d}`));
-  truthy("docs — SKILL.md References list names every references/*.md (v0.3.16)", unlisted.length === 0, unlisted.join(", "));
+  const skillText = readFileSync(path.join(SKILL, "SKILL.md"), "utf8");
+  const linkedRefs = new Set([...skillText.matchAll(/\]\(references\/([^\s)#]+)(?:#[^\s)]*)?\)/g)].map((m) => m[1]));
+  const unlisted = docs.filter((d) => !linkedRefs.has(d));
+  truthy("docs - SKILL.md links to every reference document", unlisted.length === 0, unlisted.join(", "));
 }
 
 // ------------------------------- v0.3.17: one argv contract for every script (lib/cli.mjs)
@@ -987,7 +1074,7 @@ const TMP = scratch(".tmp");
   truthy("negotiate — an unreachable origin yields res null and names the failure (v0.3.18)", unreachable.res === null && unreachable.error.length > 0, JSON.stringify(unreachable));
 }
 
-// ------------------------------- v0.3.18: lib/chrome — one flag set, one candidate list; lib/cdp — a dead port fails loudly
+// ------------------------------- v0.3.18: lib/chrome — one flag set, one candidate list; lib/cdp — a dead port fails explicitly
 {
   const { headlessArgs, CHROME_CANDIDATES } = await import(path.join(SKILL, "scripts/lib/chrome.mjs"));
   const args = headlessArgs({ port: 21012, width: 100, height: 50, sentinelUrl: "about:blank" });
@@ -1002,7 +1089,7 @@ const TMP = scratch(".tmp");
   truthy("cdp — cdpUrlFor gives up and says so (v0.3.18)", /could not reach CDP/.test(reach), reach);
 }
 
-// ------------------------------- v0.3.19: case-studies mirror their parent doc (战史外置的不变量)
+// Case-study references and numbered sections must remain resolvable.
 // Stories moved out of references/*.md into references/case-studies/<name>.md.
 // Three things must stay true as both sides evolve: every case file has a parent
 // doc; every numbered heading in a case file exists in the parent (same id);
@@ -1020,7 +1107,7 @@ const TMP = scratch(".tmp");
     if (!existsSync(parent)) { orphans.push(f); continue; }
     if (f === "skill.md") continue; // SKILL.md sections are unnumbered; pointers use section names
     if (f === "scripts.md") { // v0.3.21: headings are script paths (one per index row) or README section names, not § numbers
-      const sec = (l) => l.replace(/^## /, "").replace(/（.*$/, "").replace(/[⚠ ]/g, "").trim();
+      const sec = (l) => l.replace(/^## /, "").replace(/（.*$/, "").replace(/[ ]/g, "").trim();
       const readmeHeads = new Set(readFileSync(parent, "utf8").split("\n").filter((l) => /^## /.test(l)).map(sec));
       for (const h of readFileSync(path.join(CS, f), "utf8").split("\n").filter((l) => /^## /.test(l)).map((l) => l.replace(/^## /, "").trim()))
         if (!readmeHeads.has(h) && h !== "本文件的形态史" && !existsSync(path.join(SKILL, "scripts", h))) badHeadings.push(`${f} ## ${h}`);
@@ -1034,38 +1121,57 @@ const TMP = scratch(".tmp");
   }
   truthy(`docs — every case-studies file has a parent doc (${caseFiles.length} case files)`, orphans.length === 0, orphans.join(", "));
   truthy("docs — every case-studies heading exists in its parent doc", badHeadings.length === 0, badHeadings.slice(0, 8).join("; "));
-  truthy("docs — every 实证 pointer lands on a section the case file has", badPointers.length === 0, badPointers.slice(0, 8).join("; "));
+  truthy("docs - every case-study reference names an existing section", badPointers.length === 0, badPointers.slice(0, 8).join("; "));
 }
 
-// ------------------------------- v0.3.20: every offline gate has a RED twin
-// 143 checks proved the gates go green on good input; six proved a gate goes
-// red on bad input. A gate that has quietly stopped failing is invisible from
-// the green side — it files a perfect report that measures nothing (the same
-// 假绿 scripts/README warns about for port collisions). So each offline gate
-// below is driven twice from ONE fixture: as shipped (exit 0, says PASS) and
-// with one deliberate defect (exit 1, and the message NAMES the defect). Where
-// a gate has a "nothing to check" branch it is pinned to exit 5, never 0.
-// Out of scope, by the header: browser-driven gates (probe, pixelcompare,
-// pixel-walk, verify-routes, verify-crossside, verify-tween, verify-harvest)
-// and verify-module-map (npx acorn). Their arithmetic is covered where it is
-// separable (lib/png below).
+// Exercise CLI checks with valid inputs and deliberate defects.
+// Assertions verify both the exit code and the reported failure. Empty-input
+// cases distinguish an unavailable check from a successful comparison.
+// Browser-dependent cases are covered in selftest/browser.mjs.
 {
   const { chmodSync, utimesSync } = await import("node:fs");
   const { sha256: sha } = await import(path.join(SKILL, "scripts/lib/hash.mjs"));
   // run / green / red / W / serveOn come from harness.mjs (v0.3.22: shared with the browser lane)
 
-  // verify-zerodep — the discipline every other gate's credibility rests on.
+  // verify-zerodep - literal dependency and producer-import checks.
   {
     const D = path.join(TMP, "red-zerodep");
-    W(D, { "scripts/a.mjs": 'import { readFileSync } from "node:fs";\nimport "./lib/x.mjs";\n', "scripts/lib/x.mjs": "export const x = 1;\n" });
+    W(D, {
+      "scripts/a.mjs": 'import { readFileSync } from "node:fs";\nimport "./lib/x.mjs";\n',
+      "scripts/lib/x.mjs": "export const x = 1;\n",
+      "scripts/examples.mjs": [
+        'const keyword = "import", other = "from";',
+        'const snippet = \'import("external-package")\';',
+        'const pattern = /import\\("external-package"\\)/;',
+        'const template = `import("external-package")`;',
+        '// import "external-package";',
+        '/* export * from "external-package"; */',
+      ].join("\n"),
+    });
     const A = ["--dir", path.join(D, "scripts")];
-    green("verify-zerodep — node:/relative imports only → PASS (v0.3.20)", run("scripts/verify-zerodep.mjs", A));
+    green("verify-zerodep - accepts local imports and ignores dependency examples in literals and comments", run("scripts/verify-zerodep.mjs", A));
     writeFileSync(path.join(D, "scripts/b.mjs"), 'import _ from "lodash";\n');
-    red("verify-zerodep — one bare specifier reds and is named (v0.3.20)", run("scripts/verify-zerodep.mjs", A), /FAIL 1 external import[\s\S]*b\.mjs\s+->\s+lodash/);
+    red("verify-zerodep - reports the source file and bare dependency", run("scripts/verify-zerodep.mjs", A), /b\.mjs\s+->\s+lodash/);
+    rmSync(path.join(D, "scripts/b.mjs"));
+    for (const source of [
+      'import "external-package";',
+      'export { value } from "external-package";',
+      'export * from "external-package";',
+      'const dep=require("external-package");',
+      'const dep=import("external-package");',
+      'import /* dependency */ "external-package";',
+      'import "external\\x2dpackage";',
+      'const value = `${import("external-package")}`;',
+    ]) {
+      writeFileSync(path.join(D, "scripts/b.mjs"), source);
+      red(`verify-zerodep - rejects ${source}`, run("scripts/verify-zerodep.mjs", A), /b\.mjs\s+->\s+external-package/);
+    }
     rmSync(path.join(D, "scripts/b.mjs"));
     writeFileSync(path.join(D, "scripts/c.mjs"), 'import { make } from "../tools/make.mjs";\n');
-    red("verify-zerodep — a gate importing tools/ reds: the checker cannot be the producer (v0.3.20)", run("scripts/verify-zerodep.mjs", A), /import a producer[\s\S]*c\.mjs/);
-    red("verify-zerodep — an empty directory is FATAL 5, not a pass (v0.3.20)", run("scripts/verify-zerodep.mjs", ["--dir", W(path.join(D, "empty"))]), /finds nothing agrees with everything/, 5);
+    red("verify-zerodep - reports imports from the tools directory", run("scripts/verify-zerodep.mjs", A), /c\.mjs\s+->\s+\.\.\/tools\/make\.mjs/);
+    writeFileSync(path.join(D, "scripts/c.mjs"), 'import { missing from "external-package";');
+    red("verify-zerodep - a parse failure is unavailable input", run("scripts/verify-zerodep.mjs", A), /could not parse .*c\.mjs/, 5);
+    red("verify-zerodep - an empty directory has no dependencies to examine", run("scripts/verify-zerodep.mjs", ["--dir", W(path.join(D, "empty"))]), /no scripts found/, 5);
   }
 
   // verify-reassembly — "the parts ARE the chunk", re-derived from bytes.
@@ -1244,6 +1350,16 @@ const TMP = scratch(".tmp");
     truthy("png.compare — one pixel 100 levels off is not 0.00 (v0.3.20)", compare(a, one).meanAbsDiff > 0, String(compare(a, one).meanAbsDiff));
     let threw = null; try { compare(a, frame(4, 4, () => 0)); } catch (e) { threw = e.message; }
     truthy("png.compare — frames of different size refuse rather than compare what overlaps (v0.3.20)", /size mismatch/.test(threw || ""), threw || "did not throw");
+
+    const pixels = Buffer.alloc(100 * 100 * 4);
+    for (let i = 0; i < 10000; i++) { pixels[i * 4] = i % 256; pixels[i * 4 + 3] = 255; }
+    const dense = path.join(TMP, "dense.png"), dominant = path.join(TMP, "dominant.png");
+    writeFileSync(dense, encodePng(100, 100, pixels));
+    green("frame-census - accepts a frame with varied colours", run("scripts/frame-census.mjs", [dense]));
+    for (let i = 100; i < 10000; i++) pixels[i * 4] = 0;
+    writeFileSync(dominant, encodePng(100, 100, pixels));
+    red("frame-census - dominant background fails even with many colours and a valid second frame",
+      run("scripts/frame-census.mjs", [dominant, dense]), /FAIL suspected blank frame.*dominant.*99\.0%/);
   }
 }
 
@@ -1268,10 +1384,46 @@ const TMP = scratch(".tmp");
   const tr = readFileSync(path.join(SKILL, "tools/README.md"), "utf8");
   const tmiss = readdirSync(path.join(SKILL, "tools")).filter((f) => f.endsWith(".mjs") && !tr.includes(f));
   truthy("tools/README — every tools/*.mjs is mentioned (v0.3.21)", tmiss.length === 0, tmiss.join(", "));
-  // the spec that left the README is reachable where the README now points: --help
-  const { headerOf } = await import(path.join(SKILL, "scripts/lib/cli.mjs"));
-  const moved = rows.filter((r) => headerOf(path.join(SKILL, r)).includes("中文规格（自 scripts/README.md 迁入"));
-  truthy(`scripts/README — the moved spec answers --help (${moved.length}/${rows.length} rows carry a 中文规格 block) (v0.3.21)`, moved.length >= 55, `${moved.length}`);
+}
+
+// GLB exports must preserve accessor layout and reject unsupported input.
+{
+  const D = W(path.join(TMP, "glb"));
+  const bin = Buffer.alloc(40);
+  [0, 1, 1, 2, 3, 99, 4, 5, 6, 99].forEach((v, i) => bin.writeFloatLE(v, i * 4));
+  const gltf = {
+    asset: { version: "2.0" }, buffers: [{ byteLength: bin.length }],
+    bufferViews: [{ buffer: 0, byteOffset: 0, byteLength: 8 }, { buffer: 0, byteOffset: 8, byteLength: 32, byteStride: 16 }],
+    accessors: [{ bufferView: 0, componentType: 5126, count: 2, type: "SCALAR" }, { bufferView: 1, componentType: 5126, count: 2, type: "VEC3" }],
+    nodes: [{ name: "camera" }],
+    animations: [{ name: "move", channels: [{ sampler: 0, target: { node: 0, path: "translation" } }], samplers: [{ input: 0, output: 1 }] }],
+  };
+  const writeGlb = () => {
+    const json = Buffer.from(JSON.stringify(gltf));
+    const padded = Buffer.alloc(Math.ceil(json.length / 4) * 4, 0x20);
+    json.copy(padded);
+    const header = Buffer.alloc(20), binHeader = Buffer.alloc(8);
+    header.writeUInt32LE(0x46546c67); header.writeUInt32LE(2, 4);
+    header.writeUInt32LE(28 + padded.length + bin.length, 8);
+    header.writeUInt32LE(padded.length, 12); header.writeUInt32LE(0x4e4f534a, 16);
+    binHeader.writeUInt32LE(bin.length); binHeader.writeUInt32LE(0x004e4942, 4);
+    writeFileSync(path.join(D, "curve.glb"), Buffer.concat([header, padded, binHeader, bin]));
+  };
+  const args = [path.join(D, "curve.glb"), "--out", path.join(D, "out")];
+  writeGlb();
+  green("dump-timelines - reads strided values without including padding", run("scripts/dump-timelines.mjs", args), /1 clips, 1 tracks/);
+  const track = JSON.parse(readFileSync(path.join(D, "out/curve.json"), "utf8")).animations[0].tracks[0];
+  eq("dump-timelines - exported times and values match the source data", [track.times, track.values], [[0, 1], [1, 2, 3, 4, 5, 6]]);
+  gltf.accessors[1].count = 3;
+  writeGlb();
+  red("dump-timelines - rejects an accessor outside its view", run("scripts/dump-timelines.mjs", args), /exceeds its bufferView/);
+  gltf.accessors[1].count = 2;
+  gltf.accessors[1].sparse = { count: 1 };
+  writeGlb();
+  red("dump-timelines - rejects sparse data instead of omitting overrides", run("scripts/dump-timelines.mjs", args), /Sparse accessor 1 is not supported/);
+  const invalid = readFileSync(path.join(D, "curve.glb")); invalid.writeUInt32LE(0, 0);
+  writeFileSync(path.join(D, "curve.glb"), invalid);
+  red("dump-timelines - rejects a non-GLB header", run("scripts/dump-timelines.mjs", args), /Expected a GLB 2.0 header/);
 }
 
 // ---------------------------------------------------------------- summary

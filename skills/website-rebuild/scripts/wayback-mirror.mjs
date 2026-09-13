@@ -1,49 +1,25 @@
 #!/usr/bin/env node
 /**
- * wayback-mirror.mjs — rescue a DEAD site out of the Wayback Machine into a
- * STANDARD mirror, so every downstream gate works unchanged.
+ * Build a local mirror from eligible Wayback captures.
+ * Uses id_ replay URLs to request captured content without the replay toolbar,
+ * and records local paths, file hashes and capture provenance.
  *
- * X-class targets (29% of award sites, measured) have no origin to crawl. The
- * Internet Archive holds captures, but raw material comes wrapped: replay URLs
- * are rewritten, a toolbar is injected, and the CDX index mixes eras — a
- * squatted domain's 2025 redirect junk sits next to the real site's 2020
- * captures. This tool turns that into the same artifact mirror-site.mjs
- * produces: mirror/ tree via lib/urlpath.mjs + mirror-manifest.json with
- * sha256 — verify-mirror, serve, sweep, the shell build all run as on a live
- * site.
+ * An anchor and date window constrain capture selection. The closest eligible
+ * capture is selected per URL; this does not establish that all files belong to
+ * one release. Verify dependencies when combining dates or using filename aliases.
  *
- * The three decisions that make the output evidence, not soup:
+ * Unresolved references are recorded in wayback-holes.txt with their referrers.
+ * That file can be used as verify-mirror's explicit exclusion list. A missing
+ * capture means unavailable within the searched scope, not permanently absent
+ * from every archive. Excluded gaps remain missing in the deliverable.
  *
- * 1. ⭐ RAW BYTES ONLY: every fetch uses the `id_` (identity) replay flag —
- *    `https://web.archive.org/web/<ts>id_/<original>` returns the capture's
- *    original bytes, no rewriting, no toolbar. Never mirror the replay HTML.
- * 2. ⭐ ONE COHERENT MOMENT: an --anchor timestamp (default: the root page's
- *    best-covered 200 capture) plus a --window (default 365 days each way)
- *    select, per URL, the in-window 200 capture CLOSEST to the anchor. A
- *    mirror stitched from arbitrary years is a site that never existed;
- *    out-of-window junk (squatter redirects) is excluded by construction.
- * 3. ⛔ HOLES ARE PERMANENT AND MUST BE HONEST: on a live site the closure
- *    gate demands ∅ and a re-crawl can fill gaps. A dead site's holes are
- *    facts — a reference the archive never captured stays missing forever.
- *    They land in mirror/wayback-holes.txt (URL + who references it), which
- *    doubles as the --allow-missing list for verify-mirror: the gate stays
- *    green over REGISTERED holes and red over unregistered ones.
+ * wayback-provenance.json records the anchor, window, timestamps and CDX digests.
+ * Requests use a bounded worker pool and retry backoff for rate/service errors.
  *
- * Provenance: mirror/wayback-provenance.json records anchor, window, and per
- * file the capture timestamp + CDX digest — the coordinate system a dead-site
- * rebuild cites instead of "the origin said so".
- *
- * Politeness: web.archive.org throttles hard. Default 2 workers, 350ms gap,
- * exponential backoff on 429/503. A rescue is not a race.
- *
- *   node scripts/wayback-mirror.mjs --origin https://darknetflix.io \
- *        [--hosts cdn.example.com] [--anchor 20200626202014 | auto]
- *        [--window-days 365] [--out mirror] [--workers 2] [--include-3xx]
- *        [--limit N] [--seeds urls.txt]
- *
- * 中文规格（自 scripts/README.md 迁入，v0.3.21；本表另一拼写：`wayback-mirror.mjs`）
- * **X 类抢救:死站 → 标准镜像**(`references/archival-rescue.md`)。CDX 枚举 → 锚点+时间窗逐 URL 选连贯捕获(auto 锚点 = 根页 200 最密年代取中位,抢注者时代的 301 垃圾靠状态码+窗口出局)→ `id_` 旗抓**原始字节**(绝不镜像被注入改写的回放 HTML)→ 产出与 mirror-site 同构的 mirror/ + 账本 + `wayback-provenance.json`(逐文件捕获时间戳/digest,死站的坐标系)。⛔ **洞是既成事实**:登记进 `wayback-holes.txt`(即 verify-mirror 的 --allow-missing 清单);⭐ **别名回填**——洞的同名文件在窗口内有捕获时抓来存到被引用路径,单列 FILLED BY ALIAS 段,推断不冒充捕获。默认 2 worker + 350ms + 指数退避:**抢救不是竞速**
- * `node wayback-mirror.mjs --origin https://dead.example --anchor auto --window-days 365`
+ * node scripts/wayback-mirror.mjs --origin https://darknetflix.io \
+ *       [--hosts cdn.example.com] [--anchor 20200626202014 | auto]
+ *       [--window-days 365] [--out mirror] [--workers 2] [--include-3xx]
+ *       [--limit N] [--seeds urls.txt]
  */
 import { mkdir, writeFile, readFile } from "node:fs/promises";
 import path from "node:path";
@@ -193,7 +169,7 @@ console.log(`  anchor ${ANCHOR} (±${WINDOW_DAYS}d window)`);
 // `warc/revisit` row has no bytes of its own — but an in-window 200 with a
 // real digest exists whenever the URL was truly there; revisits are skipped
 // and the earlier identical capture wins through normal selection.
-// ⛔ SPELLING TWINS COLLIDE ON DISK. The archive stores `http://x/` and
+//  SPELLING TWINS COLLIDE ON DISK. The archive stores `http://x/` and
 // `http://x:80/` as two originals; `f.eot` and `f.eot?` (the IE eot hack)
 // likewise — each pair maps to ONE local path, and whichever fetch lands last
 // wins while the ledger describes the loser. Dedup on the CANONICAL spelling
@@ -211,7 +187,7 @@ for (const c of captures) {
   byUrl.get(key).push({ ...c, original: key });
 }
 for (const [, arr] of byUrl) arr.sort((a, b) => Math.abs(tsToMs(a.timestamp) - anchorMs) - Math.abs(tsToMs(b.timestamp) - anchorMs));
-// ⛔ TRAILING-SLASH TWINS COLLIDE. A live crawl sees `/en` 301 to `/en/` and
+//  TRAILING-SLASH TWINS COLLIDE. A live crawl sees `/en` 301 to `/en/` and
 // fetches one; the archive holds BOTH as 200 documents, and both map to
 // en/index.html — whichever fetch lands last wins, and the ledger then
 // describes the loser (measured: injectivity + sha mismatch in one shot).
@@ -231,7 +207,7 @@ const manifest = {};
 const failures = [];
 let done = 0, bytes = 0;
 let idx = 0;
-// ⛔ A DOMAIN CAN DIE INSIDE THE WINDOW. Parking services answer 200, so the
+//  A DOMAIN CAN DIE INSIDE THE WINDOW. Parking services answer 200, so the
 // status filter cannot see them, and a parked capture nearest the anchor WINS
 // selection — measured: a root page whose 2018-12 "200" was a Sedo lot while
 // the real site lived eight months earlier in the same window. Every fetched
@@ -286,12 +262,10 @@ await writeFile(path.join(OUT, "wayback-provenance.json"), JSON.stringify({
   collapsedVariants,
 }, null, 2));
 
-// ---- 6. the honest-holes account -------------------------------------------
-// Closure over what we HAVE, against what the archive EVER had. A reference
-// that resolves to no in-window file is a permanent hole: registered with its
-// referrers, never silently dropped. This file is verify-mirror's
-// --allow-missing input — the gate then stays green over what is REGISTERED
-// and red over anything that is not.
+// Record unresolved archive references and their referrers. The resulting
+// file is verify-mirror's --allow-missing input; listed gaps remain visible but
+// do not fail that check. A missing in-window capture does not establish that
+// the resource never existed outside the queried archive coverage.
 const offHostCensus = new Map();
 // The extractor must SEE every host the ledger holds (verify-mirror's closure
 // does exactly this) — a site self-references under www./bare spellings, and
@@ -303,7 +277,7 @@ const extract = createRefExtractor({
   origin: ORIGIN,
   originHost: ORIGIN_HOST,
   assetHosts: LEDGER_HOSTS,
-  // ⛔ The extractor's contract is onOffHost(host, href) — a BARE host, not a
+  //  The extractor's contract is onOffHost(host, href) — a BARE host, not a
   // URL. The first version here did `new URL(u).host` on it, which THROWS on a
   // bare host, and the catch {} swallowed every call: the census printed
   // nothing for a page that references fonts.googleapis.com and player.vimeo.com
@@ -318,7 +292,7 @@ for (const [u, m] of Object.entries(manifest)) {
   if (!isTextRefSource({ url: u, contentType: m.type, head: buf })) continue;
   for (const ref of extract(buf.toString("utf8"), u)) {
     if (manifest[ref] || manifest[canon(ref)]) continue;
-    // ⚠ A site references itself under www./bare spellings interchangeably,
+    //  A site references itself under www./bare spellings interchangeably,
     // and the Wayback urlkey treats them as one — so must the hole register:
     // an unregistered cross-spelling hole fails closure while looking foreign.
     try {
@@ -334,7 +308,7 @@ if (offHostCensus.size) {
   for (const [h, n] of [...offHostCensus].sort((a, b) => b[1] - a[1]).slice(0, 8)) console.log(`    x ${String(n).padStart(3)}  ${h}`);
 }
 // ---- 6b. alias fill ---------------------------------------------------------
-// ⭐ THE ARCHIVE MAY KNOW A HOLE BY ANOTHER NAME. Measured: a site referenced
+//  THE ARCHIVE MAY KNOW A HOLE BY ANOTHER NAME. Measured: a site referenced
 // icons under a cache-busting prefix (`/version/<ts>/js/menu.svg`) the crawler
 // never captured — while `/menu.svg` sits in the archive, in-window, 200. For
 // each hole, one CDX basename query; an in-window 200 whose basename matches
@@ -359,7 +333,7 @@ for (const [holeUrl] of [...holeRefs]) {
   const fr = await politeFetch(`https://web.archive.org/web/${ts}id_/${archivedAs}`); await sleep(350);
   if (!fr || fr.status !== 200) continue;
   const buf = Buffer.from(await fr.arrayBuffer());
-  // ⛔ AN ALIAS CANDIDATE CAN BE A CATCH-ALL SHELL. Measured: an SPA answered
+  //  AN ALIAS CANDIDATE CAN BE A CATCH-ALL SHELL. Measured: an SPA answered
   // 200 with its index.html on EVERY path — the archive dutifully captured
   // `/reddit.svg` whose body is the app shell, and the first alias fill wrote
   // 82 identical-looking "SVGs" that were all HTML. The bytes must be
@@ -394,21 +368,21 @@ if (aliasFilled.size) {
 }
 
 const holeLines = [
-  "# wayback-holes.txt — 永久洞登记(死站抢救)",
-  `# 锚点 ${ANCHOR} ±${WINDOW_DAYS}d;引用存在于镜像文本里,但存档在窗口内没有该 URL 的 200 捕获。`,
-  "# ⛔ 死站的洞是既成事实:补不回来,只能登记。本文件同时是 verify-mirror 的 --allow-missing 清单。",
+  "# wayback-holes.txt - unresolved archive references",
+  `# Anchor ${ANCHOR}, window +/-${WINDOW_DAYS} days; no usable capture was retrieved within the searched scope.`,
+  "# This file can be used as verify-mirror's --allow-missing list. Excluded references remain missing from the deliverable.",
   "#",
   ...(aliasFilled.size ? [
-    "# ---- 别名回填(FILLED BY ALIAS — 字节来自存档的同名异路捕获,路径映射是推断,逐个目验) ----",
+    "# Alias fills: captured bytes from another path with the same basename; inspect the inferred mapping.",
     ...[...aliasFilled.entries()].map(([u, a]) => `#   ${u}\n#     <= ${a.archivedAs} @${a.timestamp}`),
     "#",
-    "# ---- 真·永久洞 ----",
+    "# Unresolved references",
   ] : []),
   ...[...holeRefs.entries()].map(([u, refs]) => `${u}\n#   <- ${[...new Set(refs)].slice(0, 3).join(", ")}`),
 ];
 await writeFile(path.join(OUT, "wayback-holes.txt"), holeLines.join("\n") + "\n");
 
-console.log(`\n  ledgers written; ${holeRefs.size} PERMANENT HOLE(S) registered in wayback-holes.txt`);
+console.log(`\n  ledgers written; ${holeRefs.size} unresolved reference(s) recorded in wayback-holes.txt`);
 if (failures.length) {
   console.log(`  ${failures.length} fetch failure(s) recorded in wayback-provenance.json:`);
   for (const f of failures.slice(0, 8)) console.log(`    ${f}`);

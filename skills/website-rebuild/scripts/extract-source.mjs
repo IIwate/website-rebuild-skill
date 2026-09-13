@@ -1,63 +1,15 @@
 #!/usr/bin/env node
 /**
- * extract-source.mjs — verbatim BYTE SLICER. Builds a ported source file by
- * cutting pinned line ranges out of a beautified source bundle and
- * concatenating them IN SOURCE ORDER, instead of retyping them.
+ * Extract configured line ranges from a fixed source file in source order.
+ * The source hash protects coordinates; --check detects missing or stale output.
+ * Slices must include complete syntax. Adjust boundaries instead of inserting
+ * keywords that change source semantics. Site paths, imports and aliases belong
+ * in slices.config.mjs. The shopifydesign configuration used 41 source slices.
  *
- *   node extract-source.mjs --slices slices.config.mjs            # (re)generate
- *   node extract-source.mjs --slices slices.config.mjs --check    # gate: fail if stale
- *   node extract-source.mjs --slices slices.config.mjs --balance-check
+ *   node scripts/extract-source.mjs --slices slices.config.mjs [--check] [--balance-check]
  *
- * WHY THIS EXISTS
- * ---------------
- * "源站代码是唯一裁决" (references/porting-discipline.md §1.1). The strongest
- * form of that discipline for a minified bundle is not "retype it carefully" —
- * it is "copy the bytes". Nothing is renamed, reformatted or "improved" (source
- * bugs and dead code ride along verbatim, §1.3), so the generated file is
- * directly `diff`-able against the bundle and transcription typos are
- * physically impossible.
- *
- * ===> READ references/porting-discipline.md §2.2 BEFORE USING THIS. <===
- * That section is the contract this script implements: the mandatory trio
- * (slice table / source sha256 guard / symbol alias table), the `--check` gate,
- * the feasibility test for a slice boundary (a symbol is sliceable only if its
- * whole top-level declaration is), what to slice vs. what to transcribe
- * statement-by-statement, and the one violation no gate can catch —
- * **绝不偷偷补 keyword**: if a slice does not parse on its own, fix the
- * boundary, transcribe and register the deviation, or keep the symbol stubbed
- * (§6.2) — never add a `const` to make it parse.
- *
- * MACHINE vs DATA
- * ---------------
- * This file is the machine only: sha256 guard, line-range slicing, source-order
- * concatenation, `--check`, and the AUTO-GENERATED header. Everything
- * site-specific — paths, the pinned sha256, the slice table, the alias/stub
- * import tables — lives in the config file. Start from
- * `scripts/slices.config.example.mjs` (annotated).
- *
- * EXIT CODES (all designed to be used as gates)
- *   0  generated / in sync
- *   1  --check: the file on disk is missing or stale -> rerun without --check
- *   2  usage or config error (bad flags, malformed slice table, range out of file)
- *   3  SOURCE SHA256 MISMATCH — the coordinate system moved; every L#### note
- *      in engine-notes.md / REBUILD_PLAN is void until re-derived
- *   4  --balance-check: the concatenated slices do not parse (a slice boundary
- *      is wrong — see porting-discipline.md §6.2 (c) step 2)
- *
- * Zero dependencies (Node 22+ builtins only).
- *
- * Adapted from shopifydesign-rebuild/scripts/extract-source.mjs, where 41
- * pinned slices of a beautified Vite bundle are assembled into
- * src/engine/_gen/engine.gen.js. Generalized here: the slice table, alias
- * table, pending-stub table, source/output paths and pinned sha256 were all
- * hardcoded there and are now config data; imports are an arbitrary list of
- * groups (alias table, stub file, anything else) instead of two fixed ones;
- * per-symbol provenance notes and the `--balance-check` boundary test are new.
- *
- * 中文规格（自 scripts/README.md 迁入，v0.3.21；本表另一拼写：`extract-source.mjs`）
- * 字节切片器：按钉死行号区间切 `_pretty/` 拼成生成文件（sha256 守卫 + 切片表 + 别名/桩表，`--check` 进门），逐字移植首选形式（§2.2；配置样例 `scripts/slices.config.example.mjs`）
- * 字节切片器：按钉死行号区间从 `_pretty/` 切字节、按**源序**拼成生成文件（`AUTO-GENERATED … DO NOT EDIT BY HAND` 头注 + 别名/桩 import + 导出表），逐字移植的首选实现形式（纪律见 [porting-discipline.md §2.2](../references/porting-discipline.md)）。三件套齐备：切片表 `{from,to,note,symbols}`（`to` 含尾行）/ 源文件 **sha256 守卫**（不符退 3 并打印"坐标系已移动，全部 `L####` 引用作废"，而不是静默切错行）/ **符号别名表**（可逐符号注明解析依据，与桩文件同为 import 组）。`--check` 生成物过期即失败（直接进验收门）；`--balance-check` 用 `new Function()` 抓切片边界错（§6.2 (c)）。**机器与数据分离**：路径/sha256/切片表/别名表全在 `--slices` 配置（`.mjs` 或 `.json`），带注释样例见同目录 `slices.config.example.mjs`
- * `node extract-source.mjs --slices slices.config.mjs`；门：`node extract-source.mjs --slices slices.config.mjs --check`
+ * Exit codes: 0 generated/current, 1 stale output, 2 invalid input/config,
+ * 3 source hash mismatch, 4 concatenated slices fail the syntax check.
  */
 import { readFile, writeFile, mkdir } from "node:fs/promises";
 import { pathToFileURL } from "node:url";
@@ -178,7 +130,7 @@ if (sha !== PINNED_SHA256) {
 // ------------------------------------------------------------ slice table ---
 
 const lines = raw.split("\n");
-// A trailing newline yields a phantom empty element; it is not a line an
+// A trailing newline yields a spurious empty element; it is not a line an
 // editor would show, and no slice may end on it.
 const lineCount = raw.endsWith("\n") ? lines.length - 1 : lines.length;
 const slices = cfg.slices.map((s, i) => {
@@ -276,7 +228,7 @@ const out = parts.join("\n");
 // Strips the generated import/export scaffolding and parses the slices alone:
 // this is what catches a range that ends one line before its closing brace.
 if (BALANCE) {
-  // ⚠ AND the whole file, scaffolding included. Stripping the scaffolding is
+  //  AND the whole file, scaffolding included. Stripping the scaffolding is
   // right for finding a bad slice boundary, but it makes this check
   // structurally blind to errors the SCAFFOLDING itself causes. Field case: the
   // generated `export {...}` block is fine in a module and a hard

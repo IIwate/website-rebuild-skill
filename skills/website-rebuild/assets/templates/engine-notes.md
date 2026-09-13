@@ -1,122 +1,118 @@
-# engine-notes 逆向笔记模板
+# 逆向分析笔记模板
 
-> **何时使用本模板**：M1 逆向阶段复制为 `<项目根>/docs/engine-notes.md`，**在写任何复刻代码之前产出**（oryzo 把它列为独立里程碑 M2.0——"文档先行显著降低了后面每轮的返工"）。`<!-- -->` 注释是填写说明，落盘后删除；`{...}` 是占位符。
-
----
-
-# {项目名} 逆向笔记（engine-notes）
-
-> **纪律**：本文档只陈述源站事实，不做"应该怎么改"的判断；未坐实的一律标注 **[未确认]**，不猜【kimi】【noomo】。
-> **坐标系**：全部行号引用 `mirror/_pretty/` 展开产物（js-beautify@{版本，钉死} 生成，再生成命令见 `_pretty/README.md`）。换 beautifier 版本行号会漂移，整套引用作废【samsy】【noomo】。
-
-<!-- 三段式总结构【samsy】【noomo】：第一部分 源站事实 / 第二部分 怪癖清单（照抄不修）/ 第三部分 对复刻的直接结论。大型站可按 lando 拆成多份编号笔记（00-boot / 01-rive / 02-gl-core / …），但每份内部仍守三段式与行号纪律。 -->
+在需要记录来源坐标、架构与行为依据时, 按项目规模选用本模板. 只保留相关章节, 填入已确认的事实、推断与未解决项. `{...}` 为占位符, HTML 注释为填写说明.
 
 ---
 
-<!-- 无容器(Vite)目标:先跑 census-bundles --md docs/chunk-graph.md,把 chunk 依赖图与别名证据挂进本笔记的坐标系。 -->
+# {项目名} 逆向分析笔记
 
-## 第一部分：源站事实
+- 目标范围: {路由、功能与版本}
+- 原始依据: {镜像文件、响应或运行记录}
+- 源码坐标: {文件、格式化工具版本与再生成命令; 必要时附文件摘要}
 
-### 1. bundle 区段地图
+<!-- Formatting changes can move line references. Retain the source identity and regenerate affected citations when the coordinate basis changes. -->
 
-<!-- 先画地图再挖矿【lando】：全 bundle 逐段标行号，vendor 边界与应用代码分开。这张表决定后面所有 grep 的范围。 -->
+## 第一部分: 源站事实
 
-| 行号区间（pretty） | 区段 | 性质 |
+### 1. Bundle 区段与模块
+
+<!-- Record application/vendor boundaries with source coordinates. For scope-hoisted chunks, census-bundles can supply dependencies and import aliases. -->
+
+| 来源位置 | 区段或模块 | 归属依据 |
 |---|---|---|
-| L{起}-L{止} | {如 GSAP} | vendor |
-| L{起}-L{止} | {如 three} | vendor |
-| L{起}-L{止} | {如 taxi 装配 / home 页逻辑} | 应用代码 |
+| {文件与行号} | {名称} | {vendor / 应用代码 / 未确认} |
 
-### 2. 技术栈取证表
+### 2. 技术栈证据
 
-<!-- 每行必须有 bundle 内证据。grep 混淆代码搜值不搜名：版本号字面量、十进制颜色字面量、GLSL 特征串比标识符可靠【noomo】。 -->
+<!-- Version literals, package paths and recognizable APIs are evidence candidates. Confirm them at their definitions or call sites. -->
 
-| 依赖 | 版本 | 证据（值 + 行号） |
+| 依赖 | 版本或范围 | 证据 |
 |---|---|---|
-| {three} | {0.179.0} | {如 `const nv="179"`，L19973} |
+| {three} | {0.179.0} | {例如 REVISION = "179", 文件与行号} |
 
-### 3. 混淆名对照表
+### 3. 符号对照
 
-<!-- 逐个坐实的混淆符号 → 语义名映射【noomo】。移植代码可沿用混淆别名作 import 别名，使代码、笔记、pretty 源三方可互相对照【lando】。 -->
+<!-- Preserve the original identifier beside the proposed meaning. Import aliases can keep source and port citations traceable. -->
 
-| 混淆名 | 语义 | 定义行号 |
+| 原符号 | 含义 | 定义与使用位置 |
 |---|---|---|
-| {nn} | {RenderingPipeline} | L{NNNN} |
+| {nn} | {RenderingPipeline} | {文件与行号} |
 
-### 4. 启动链
+### 4. 启动与生命周期
 
-<!-- 从入口到首帧的时序：boot 顺序、preloader 编排、路由装配、事件门控。带行号。 -->
+<!-- Follow entry, preloader, route initialization and first render. Record prerequisites that affect their order. -->
 
-{逐步描述，每步带 L 行号}
+{步骤、条件与来源位置}
 
-### 5. {渲染管线 / 材质清单 / 后处理链}（按站型取舍）
+### 5. 渲染与布局
 
-<!-- WebGL 站填：场景层级、RenderTarget 清单、材质逐项、后处理 pass 拓扑【samsy】【noomo】。DOM 站填：CSS 变量清单、场景编排机制、像素渲染器常数【kimi】。逐项带行号。 -->
+<!-- WebGL examples: scene hierarchy, render targets, materials and postprocessing. DOM examples: CSS variables, layout dependencies and Canvas constants. -->
 
-### 6. 协议与数据 schema
+{相关结构与来源位置}
 
-<!-- 私有二进制格式布局（如 .buf 的 [uint32 头长][JSON 头][顺序属性载荷] 与量化解包公式【oryzo】）、worker 协议、实时协议、数据文件 schema、i18n 表结构。数据驱动的动画先 dump 成数值账本（JSON），在此登记账本路径（如 docs/timeline-baseline/）【noomo】。 -->
+### 6. 协议与数据
 
-### 7. 路由与状态（store）
+<!-- Record binary layouts, worker messages and data schemas. The oryzo .buf example uses a uint32 header length, JSON metadata and ordered attribute payloads. For baked animation, link the exported numeric baseline. -->
 
-<!-- 路由表、守卫怪癖、store 逐字段用途（state/getters/actions 全签名，含死代码）【samsy】【noomo】。带行号。 -->
+{格式、字段、解码方式与数据路径}
 
-### 8. GLSL / shader 清单
+### 7. 路由与状态
 
-<!-- WebGL 站必填：shader 定位方式（如搜 `#define GLSLIFY 1` 标记【oryzo】）、逐段行号；登记提取落点（集中存放 + "Do not edit by hand" 头注释，逐字提取不做优化【oryzo】）。 -->
+{路由表、状态字段、守卫与影响目标行为的调用关系}
 
-| shader | 行号 | 提取落点 |
+### 8. Shader 清单
+
+<!-- A marker such as #define GLSLIFY 1 can locate shader text. Record both the source span and extraction destination. -->
+
+| Shader | 来源位置 | 提取路径 |
 |---|---|---|
-| {名称/用途} | L{NNNN} | {文件路径} |
+| {名称或用途} | {文件与行号} | {路径} |
 
-### 9. 动画/交互参数抄录表
+### 9. 动画与输入参数
 
-<!-- 复刻"手感"的唯一合法来源。GSAP 时间轴/缓动/延迟逐字抄录（含贝塞尔控制点公式、ScrollTrigger start/end/scrub 配置）【lando】【noomo】；输入魔数（如 wheelEaseCoeff=12）【oryzo】；滚轮/触摸状态机阈值【kimi】。全部带行号，禁止"大概是这个值"。 -->
+<!-- Record values that affect behavior: easing control points, ScrollTrigger ranges, delays and wheel/touch thresholds. Examples include wheelEaseCoeff=12 in oryzo. Mark inferred values explicitly. -->
 
-| 参数 | 值（逐字） | 行号 |
+| 参数 | 值 | 依据 |
 |---|---|---|
-| {如 Lenis 配置 / 缓动 / 阈值} | {原样抄录} | L{NNNN} |
+| {名称} | {值} | {源码位置或运行记录} |
 
-### 10. 平台层/HTML 契约（平台导出站适用）
+### 10. 平台与 HTML 约定
 
-<!-- 平台运行时当行为契约逆向【lando 05-webflow-html】：哪些模块必须保留及原因、页面骨架顺序、head 契约、data-* 属性命名体系、静态烘焙数据的字段字典。 -->
+{平台模块、脚本顺序、head 内容、data-* 属性及其运行用途}
 
-### 11. bundle 内联资产提取登记
+### 11. 内联资产
 
-<!-- base64 内嵌的纹理/LUT/查找表提取到 mirror/_extracted/ 并在此登记，注明缺失后果（如"缺 colorsMap 玻璃会变灰白"）【noomo】。 -->
+<!-- Record extracted base64 textures, LUTs and tables with provenance. The noomo colorsMap case changed glass appearance when the asset was absent. -->
 
-### 12. 页面 init/destroy 矩阵
+{原始位置、提取路径与缺失影响}
 
-<!-- 每个页面/路由的初始化与销毁函数及行号【lando】——这张表直接变成移植任务清单。 -->
+### 12. 页面初始化与销毁
 
-| 页面 | init | destroy |
+| 页面 | 初始化 | 销毁 |
 |---|---|---|
-| {data-page 值} | {函数名 L{NNNN}} | {函数名 L{NNNN}} |
+| {路由或页面标识} | {函数与位置} | {函数与位置} |
 
-### 13. 已证伪的假设
+### 13. 已核对的假设
 
-<!-- signature grep 只能提假设不能当结论【kimi】。把证伪结果显式留档，防止后来者重走弯路：如 "leva/swr 为子串误命中"【kimi】、"有 GPU compute 证伪——dispatchWorkgroups 全部来自 three 内部"【samsy】、"依赖表里有 three.js 但不是 WebGL 站"【kimi】。 -->
+<!-- Record useful counterevidence. In prior cases, leva/swr were substring matches and dispatchWorkgroups calls belonged to three.js internals. A dependency name alone did not establish the page's rendering architecture. -->
 
-| 假设 | 结论 | 证据 |
+| 假设 | 状态 | 证据 |
 |---|---|---|
-| {假设内容} | 证伪 / 证实 / [未确认] | {行号 / 实测} |
+| {内容} | 已确认 / 已证伪 / 未确认 | {位置或观测} |
 
----
+## 第二部分: 源站特殊行为
 
-## 第二部分：怪癖清单（照抄不修）
+<!-- Record behavior that another implementation might accidentally change. Existing examples include noomo Q1-Q14, 26 kimi entries and 13 samsy entries. Keep the observation separate from the chosen treatment. -->
 
-<!-- 源站自己的 bug / 死代码 / 怪写法，逐条编号 Q1..Qn，带行号证据【noomo Q1-Q14】【kimi 26 条】【samsy 13 条】。这里只登记事实，处置（照抄）与验证记录同步进 REBUILD_PLAN §Q。"修好它才是偏离"【kimi】。 -->
+| 编号 | 现象 | 依据 | 处理及影响 |
+|---|---|---|---|
+| Q1 | {源站行为} | {位置或观测} | {保持行为或有意偏差} |
 
-| # | 怪癖 | 行号 |
-|---|---|---|
-| Q1 | {现象描述} | L{NNNN} |
+## 第三部分: 实现依据与未解决项
 
----
+<!-- Derive implementation order and scope from the evidence above. Code present in a bundle may not be active; verify reachability before excluding it. -->
 
-## 第三部分：对复刻的直接结论
-
-<!-- 唯一允许"面向复刻"下判断的一节，与事实部分严格分离【samsy】【noomo】。写成编号指令，如 noomo 的 10 条："先实现三个元系统再写任何材质"、"缺 colorsMap 玻璃会变灰白"；samsy §16 的"不要发明"清单（哪些能力在 bundle 里存在但从未挂载，复刻不做）。 -->
-
-1. {移植顺序结论：先做什么再做什么，为什么}
-2. {"不要发明"条目：bundle 里有但从未生效的能力，列明不做}
-3. {关键数据依赖：缺了哪个资产/账本会出什么症状}
+- 依赖顺序: {先决条件及其依据}
+- 范围边界: {目标内外能力及确认方式}
+- 关键数据: {资源、载荷或数值基线}
+- 未解决项: {缺口、影响与下一步可验证操作}

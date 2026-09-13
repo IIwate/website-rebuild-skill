@@ -27,9 +27,8 @@ export default {
   // Point `root` at the project root when the config lives in scripts/.
   root: "..",
 
-  // The beautified bundle to slice. NEVER slice the minified original: the
-  // whole coordinate system is `_pretty/` line numbers (beautify-bundle.mjs
-  // pins js-beautify@1.15.1 for exactly this reason).
+  // The slice coordinates refer to the beautified bundle. Use the same
+  // js-beautify version and source digest that produced those line numbers.
   source: "mirror/_pretty/_index-c3dAurQC.js",
 
   // TRIO #2 — the sha256 guard. `shasum -a 256 <source>`. If the beautifier

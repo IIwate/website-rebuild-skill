@@ -1,74 +1,28 @@
 #!/usr/bin/env node
 /**
- * lib/chrome.mjs — the child-process LIFECYCLE registry: launch, reap, sweep.
- * Every script in this directory that drives a browser over CDP goes through
- * here (probe.mjs, netcapture.mjs, pixelcompare.mjs, and any per-project gate
- * you copy from them), as does anything else that spawns a process which itself
- * forks (verify-routes.mjs's server under test — `npm run dev` execs node, so
- * killing npm leaves the server holding the port). Sibling of lib/ports.mjs:
- * that file answers "is this MY browser", this one answers "is my browser GONE
- * when I am gone".
+ * Manage child process groups and temporary Chrome profiles on POSIX systems.
  *
- * ===========================================================================
- * WHY THIS FILE EXISTS — a leaked renderer LOOSENS THE PIXEL GATE
- * ===========================================================================
- * Every one of these scripts used to end with `chrome.kill('SIGKILL')`. That
- * kills the browser process and NOTHING ELSE: by then Chrome has already forked
- * 6-8 renderer/GPU/network/utility children, they are not in the signal's blast
- * radius, and when their parent dies they are reparented to pid 1 and keep
- * running. Field measurement (objectandarchive-rebuild, M(n-1)a instrument log
- * #5): 129 live Chrome processes across ~16 leaked profiles, the oldest 2 days
- * 1 hour old, load average 8.7 on a machine where "nothing was running".
+ * spawnReaped() starts a detached process group. Handled exits signal the group,
+ * first with SIGTERM and then with SIGKILL after a grace period. Synchronous
+ * cleanup also runs from Node's exit handler. Termination that bypasses these
+ * handlers, or children that leave the group, may require later cleanup.
  *
- * For this toolchain that is NOT a tidiness problem, because of what the pixel
- * gate's tolerance is made of. The gate does not carry a hand-picked epsilon;
- * it derives its band from the REFERENCE SIDE COMPARED WITH ITSELF — the same
- * ruler, the same checkpoints, the mirror photographed N times (N >= 4). Any
- * background load makes those N runs disagree with each other more, the band is
- * the disagreement, and the cross-side test is `cross <= selfBand(cp) + k`. So:
+ * Chrome profiles include the workspace slot, role and port. Preflight can
+ * report and reap orphaned processes matching that slot and role. Slots are
+ * hashed into a finite range and can collide; they are allocation labels, not
+ * unique workspace identities. lib/ports.mjs checks browser sentinels and server
+ * identity separately.
  *
- *     leaked renderers  ->  noisier reference side  ->  WIDER self-comparison
- *     band  ->  a LOOSER pixel gate that silently forgives real cross-side
- *     residuals — a false green manufactured by a process-teardown bug.
+ * In objectandarchive, 129 Chrome processes remained across about 16 profiles;
+ * the oldest was two days and one hour old, with load average 8.7. Such load can
+ * change capture timing and the repeated-sample variation used by pixel checks.
+ * This module performs cleanup; it does not calculate comparison tolerances.
  *
- * The band is also invalidated by anything that changes mid-measurement, so a
- * leak that grows across the N sessions does not merely inflate the band, it
- * makes the N sessions incomparable. Reap before you measure.
+ *   node scripts/lib/chrome.mjs         # list instances for this workspace slot
+ *   node scripts/lib/chrome.mjs --all   # list instances across slots
+ *   node scripts/lib/chrome.mjs --reap  # reap listed orphans
  *
- * ===========================================================================
- * HOW IT IS FIXED
- * ===========================================================================
- *   1. PROCESS GROUP, NOT PROCESS. Chrome is spawned `detached: true`, which
- *      makes it a process-group (and session) leader; every child it forks
- *      inherits that group. Teardown signals the GROUP (`process.kill(-pid)`),
- *      so the renderers go with it. SIGTERM first, escalate to SIGKILL only
- *      after a grace period, so Chrome gets to close its profile cleanly.
- *   2. EVERY EXIT PATH, NOT JUST THE HAPPY ONE. The reaper is registered on
- *      'exit', SIGINT, SIGTERM, SIGHUP, uncaughtException and
- *      unhandledRejection. The 'exit' handler must be SYNCHRONOUS — that is why
- *      the wait loop below uses Atomics.wait and not a Promise.
- *   3. A TEMPORARY, SELF-DESCRIBING PROFILE. Each launch gets its own
- *      `<tmp>/wrs-chrome-s<slot>-<role>-p<port>-XXXXXX` user-data-dir, deleted
- *      on teardown. The name is the identity handle: it is what makes "which of
- *      these 129 Chromes are mine" a decidable question at all, and it scopes
- *      the sweep so this file can never touch your real browser.
- *   4. A PRE-FLIGHT SWEEP. Before allocating a port, each script looks for
- *      ORPHANED instances of its own role from this workspace (ppid == 1, i.e.
- *      the script that launched them is dead), reports them loudly with their
- *      age, and reaps them. Orphan is the precise criterion: a live sibling run
- *      still has a live parent and is never touched — port allocation
- *      (lib/ports.mjs) is what adjudicates that case, loudly.
- *
- * CLI:  node scripts/lib/chrome.mjs            # list this workspace's instances
- *       node scripts/lib/chrome.mjs --all      # every workspace on this machine
- *       node scripts/lib/chrome.mjs --reap     # reap the orphans it lists
- *
- * Zero dependencies (Node 22+ builtins only).
- *
- * 中文规格（自 scripts/README.md 迁入，v0.3.21；本表另一拼写：`lib/chrome.mjs`）
- * 无头浏览器生命周期（**进程组**收割 + 全退出路径 + 启动前孤儿自检；漏子进程会抬高参照侧自比带宽，把像素门调松）与 CDP 载荷硬顶常量。`node scripts/lib/chrome.mjs --all/--reap` 可查/回收残留
- * **浏览器/子进程生命周期注册表**（见本文件顶部一节）：`detached` 进程组启动、SIGTERM→SIGKILL 分级收割、六条退出路径全覆盖、临时 user-data-dir 即身份、启动前同角色**孤儿**自检并响亮回收；另收 CDP 载荷硬顶的实测常量与降级建议（`shotCeilingAdvice`）。`spawnReaped` 供非 Chrome 的子进程（被测服务）复用；v0.3.18 起也是 **`findChrome()` 与 `headlessArgs()` 的唯一出处**（此前三份候选路径表 + 一处写死的 macOS 路径）。带 CLI：列出/回收本机实例
- * `node scripts/lib/chrome.mjs --all`；脚本内 `import { preflightChrome, launchChrome } from "./lib/chrome.mjs"`
+ * Uses Node built-ins, POSIX process groups and ps.
  */
 import { execFileSync, spawn } from "node:child_process";
 import { accessSync, mkdtempSync, readdirSync, rmSync, statSync } from "node:fs";
@@ -189,7 +143,7 @@ export function listInstances({ role = null, slot = portSlot() } = {}) {
  * matched process whose parent is NOT one of ours — and ask whether that parent
  * is gone: reparented to pid 1, or no longer in the process table. Every member
  * of the tree inherits the root's answer.
- * ⛔ NOT "its parent is another matched Chrome". That predicate marked every
+ *  NOT "its parent is another matched Chrome". That predicate marked every
  * renderer of a LIVE sibling browser — same role, other side, the concurrent
  * mirror + rebuild probe that lib/ports.mjs exists to allow — as an orphan: a
  * false LEFTOVER report, a reap that could not touch them (a renderer is not a
@@ -474,38 +428,22 @@ export function launchChrome({ bin, role, port, tool = "(script)", args = [], st
 // --- CDP payload ceiling ----------------------------------------------------
 
 /**
- * Node's built-in WebSocket (the zero-dependency CDP transport this toolchain
- * uses) drops the connection with close code 1006 when a single message gets
- * too large, and `Page.captureScreenshot` returns the WHOLE image as one base64
- * message. Measured on one machine, one Chrome (objectandarchive-rebuild D-G6):
+ * Screenshot transport failures depend on image content and runtime versions.
+ * Page.captureScreenshot returns the encoded image in one base64 CDP message.
+ * The objectandarchive capture recorded these results on one machine:
+ *   1280x800 PNG:        2,395,616 characters, 280 ms, received;
+ *   390x844 PNG:           734,240 characters, received;
+ *   1728x1080 JPEG q100: 1,995,384 characters, 106 ms, received;
+ *   1728x1080 JPEG q92:    827,968 characters, 58 ms, received;
+ *   1728x1080 PNG:      about 3.6 million characters, connection closed with 1006.
+ * A second Chrome 150 / Node 22 setup received 3.33 million characters but failed
+ * on a noise image of about 7 million. These observations establish neither a
+ * portable size ceiling nor a maximum viewport.
  *
- *     1280x800  png        base64 2,395,616   OK   (280 ms)
- *     390x844   png        base64   734,240   OK
- *     1728x1080 jpeg q100  base64 1,995,384   OK   (106 ms)
- *     1728x1080 jpeg q92   base64   827,968   OK   ( 58 ms)
- *     1728x1080 png        base64 ~3,600,000  DEAD close 1006, and every later
- *                                                  CDP call then times out with
- *                                                  no error of its own
- *
- * The usable ceiling sat between 2.40 M and 2.72 M base64 chars there. It is NOT
- * a constant you can look up: on a second machine (Chrome 150, Node 22) an
- * inbound 3.33 M-char message came back fine while a 1728x1080 PNG of pure
- * noise (~7 M) still died with 1006, and an OUTBOUND 4.37 M-char message was
- * accepted — the two directions do not have the same headroom. So treat 2.4 M as
- * the line you can rely on, not the line where it breaks.
- *
- * Rule of thumb: PNG stops arriving somewhere above ~1500x900 for photographic
- * content, and the failure is a SILENT HANG unless the socket's close is turned
- * into an error — which is why every CDP client in this directory installs an
- * onclose handler that rejects the in-flight calls AND a per-call timeout
- * (grep `close 1006`). A gate that hangs tells you nothing; a gate that names
- * the payload, the viewport and the format tells you what to change.
- *
- * jpeg q92 is the escape hatch and it is cheap: 58 ms per frame, and in the
- * field the byte-fidelity cost was measured, not assumed — two consecutive
- * shots of the same static state were byte-identical at that quality, so the
- * encoder introduced no noise of its own. Use PNG while it fits (byte-exact
- * gates need it); drop to jpeg q92 when the viewport says you must.
+ * CDP close handlers and per-call deadlines turn transport failures into errors.
+ * JPEG can reduce message size for coarse visual checks, but its compression is
+ * lossy. Identical JPEG captures show repeatability of that sample, not equality
+ * with uncompressed pixels. Use PNG when the check requires lossless pixels.
  */
 export const SHOT_B64_SOFT_CEILING = 2_400_000;
 export const SHOT_PX_SOFT_CEILING = 1500 * 900;

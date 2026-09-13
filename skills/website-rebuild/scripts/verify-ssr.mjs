@@ -1,32 +1,20 @@
 #!/usr/bin/env node
-// verify-ssr.mjs — SSR byte-for-byte contract gate: every route's server-
-// rendered <body> DOM, serialized data payload and runtime config must match
-// the legacy mirror EXACTLY (build-specific values are masked first). Run the
-// rebuild's SSR server, then:
+// Compare selected Nuxt SSR output with captured mirror documents.
+// Compares the extracted body content, data island and runtime config as strings,
+// checks data/config script order, and expects a configured unknown route to 404.
+// The config comparison masks buildId. These extractors describe the supported
+// Nuxt serialization shape, not arbitrary SSR frameworks or hydrated behavior.
 //
-//   node verify-ssr.mjs            # port comes from scripts/lib/ports.mjs
-//   PORT=3100 node verify-ssr.mjs  # or name it yourself
+//   node verify-ssr.mjs            # allocated default port
+//   PORT=3100 node verify-ssr.mjs  # explicit target port
 //
-// The default port is allocated per workspace on the rebuild side, so this gate
-// cannot silently point at the mirror server or at another checkout's rebuild —
-// a byte gate aimed at the wrong server is either a mystery red or, if that
-// server happens to be the mirror, a perfect green (scripts/lib/ports.mjs).
-// Start the SSR server on the port this prints (or set PORT for both).
+// Configure PAGES, MASKS and NOT_FOUND_ROUTE for the project. MIRROR_DIR selects
+// the captured documents. Port allocation is a convention and can collide; this
+// script reports its target but does not authenticate the server's identity.
 //
-// Exits non-zero on any diff.
-//
-// The extractors below are written for Nuxt SSR output (NUXT_DATA JSON island
-// + window.__NUXT__.config tail script). For another SSR framework, keep the
-// gate's skeleton and swap the three extractors for the framework's own
-// serialized islands (e.g. Next's __NEXT_DATA__ / RSC payload).
-//
-// Adapted from storytellingnoomo-rebuild/scripts/verify-ssr.mjs
-// (its SSR-byte-gate-first discipline; masking only buildId).
-//
-// 中文规格（自 scripts/README.md 迁入，v0.3.21；本表另一拼写：`verify-ssr.mjs`）
-// SSR/DOM 逐字节门
-// SSR 逐字节门：body DOM / 数据 payload / config / 序列化顺序四项对镜像 byte-equal（buildId 掩码）
-// `node verify-ssr.mjs`（端口取自 `lib/ports.mjs` 并打印；`PORT=3100` 可覆盖；页面可自动发现）
+// Adapted from storytellingnoomo. Its unhead dependency changed data/config script
+// order while the main framework version stayed unchanged.
+
 
 import { readFileSync, readdirSync, existsSync, statSync } from "node:fs";
 import path from "node:path";
@@ -35,7 +23,7 @@ import { cli } from "./lib/cli.mjs";
 
 // No flags: everything this gate asserts lives in CONFIG below (PORT / MIRROR_DIR
 // come from the environment). cli() still runs so --help works and a stray
-// --flag fails loudly instead of being ignored.
+// --flag fails explicitly instead of being ignored.
 cli({ known: [], file: import.meta.url });
 
 // ---------------------------------------------------------------------------
@@ -147,5 +135,5 @@ const notFound = await fetch(BASE + NOT_FOUND_ROUTE);
 console.log(`${notFound.status === 404 ? "PASS" : "FAIL"} ${NOT_FOUND_ROUTE} -> ${notFound.status}`);
 if (notFound.status !== 404) failures++;
 
-console.log(failures === 0 ? "\nALL GATES GREEN" : `\n${failures} FAILURES`);
+console.log(failures === 0 ? "\nPASS - configured SSR comparisons passed" : `\nFAIL - ${failures} comparison(s) failed`);
 process.exit(failures === 0 ? 0 : 1);

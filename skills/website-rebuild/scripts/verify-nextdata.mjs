@@ -1,19 +1,16 @@
 #!/usr/bin/env node
-// verify-nextdata.mjs — Next **pages router** 的 SSG 载荷门（14islands 实战入库，F2）。
-// verify-payload.mjs 只认 nuxt2 / nuxt3 / React flight / sveltekit；pages router 的
-// <script id="__NEXT_DATA__" type="application/json"> 与 /_next/data/<buildId>/<route>.json
-// 是它的空白。本门：
-//   --a <base> [--b <base>] --routes /,/x [--build <id>] [--dump dir] [--normalize k1,k2]
-// <base> 可以是 http(s) 地址（伺服侧）或目录（镜像/产物目录：/x → <dir>/x/index.html
-// 或 <dir>/x.html，"/" → <dir>/index.html；载荷 → <dir>/_next/data/<build>/<route>.json）。
-// 单侧：每条路由的 __NEXT_DATA__ 与 _next/data JSON 各自解析、结构化落盘（基线），并断言
-//       二者 pageProps 一致（同一 getStaticProps 输出）；
-// 双侧：逐路由深比较（键序敏感、值逐字），差异按 JSON 路径列出；--normalize 只对登记过的
-//       字段名（如 ISR 纪元）删除后比较——⛔ Sanity `_key`/`_rev` 是化石，默认不 normalize。
-// 两侧同为非 200（源站对该路由本就无 data 载荷）视为一致。不 import 任何生产者。
-//
-// 中文规格（自 scripts/README.md 迁入，v0.3.21）
-// **pages router 载荷门**：`__NEXT_DATA__` 与 `/_next/data/<buildId>/<route>.json` 单侧自洽 + 双侧深比较（键序敏感、值逐字，两侧同 4xx/5xx 视为一致），`--a/--b` 可给伺服地址或镜像目录；`--normalize` 只删登记过的纪元字段，⛔ Sanity `_key` 是化石不 normalize。verify-payload 只认 nuxt/flight/sveltekit，这是它的空白
+/**
+ * Compare Next Pages Router __NEXT_DATA__ and SSG JSON payloads.
+ * A base can be an HTTP(S) URL or a local directory. Local routes resolve to
+ * <route>/index.html or <route>.html; data resolves under _next/data/<buildId>/.
+ * Checks pageProps within each side and compares records across two sides.
+ * --normalize removes explicitly named fields; Sanity _key/_rev remain by default.
+ * Use a route/status check as well: absent non-200 data responses are not compared
+ * as payloads. Based on the 14islands Pages Router case.
+ *
+ *   node scripts/verify-nextdata.mjs --a <url-or-dir> [--b <url-or-dir>] [--routes /,/about] [--normalize <fields>]
+ */
+
 import { mkdir, writeFile, readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { cli } from "./lib/cli.mjs";
@@ -38,7 +35,7 @@ async function get(base, p) {
     const r = await fetch(base + p, { headers: { "user-agent": UA } });
     return { status: r.status, text: await r.text() };
   }
-  // 目录模式：页面路由试 <dir>/<p>/index.html 与 <dir>/<p>.html；其它路径按字面
+  // Directory mode resolves page routes to index.html or .html; other paths are literal.
   const cands = p.endsWith(".json") ? [join(base, p)] : p === "/" ? [join(base, "index.html")] : [join(base, p, "index.html"), join(base, p + ".html")];
   for (const f of cands) {
     try { return { status: 200, text: await readFile(f, "utf8") }; } catch {}

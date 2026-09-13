@@ -1,55 +1,36 @@
 #!/usr/bin/env node
 /**
- * gapfill-video.mjs — backfill the HLS ladder (variant playlists + media
- * segments) that a static crawl structurally cannot see: only the master
- * .m3u8 is referenced in the HTML/JS, and everything below it — the rendition
- * playlists and every .ts/.m4s segment — is fetched by the player at runtime.
- * Give it a master playlist URL; it descends master -> variants -> segments,
- * writes each file to its mirror path, and appends the new URLs to the mirror
- * manifest so the ledger stays the single source of truth.
+ * Fetch an HLS playlist hierarchy and referenced media into a local mirror.
+ * Playlist references are resolved against each playlist URL. Recursion has
+ * cycle and depth checks; URI-bearing media, map and key tags are included.
+ * The mirror's query policy determines local paths. Successful files receive
+ * SHA-256 records in both the manifest and inventory.tsv.
  *
  * Usage:
- *   node gapfill-video.mjs --master https://cdn.example.com/vp/<id>/<id>.m3u8
- *     [--out mirror]        mirror root (must match mirror-site.mjs)
- *     [--origin https://example.com]  same-origin path rule + Referer header;
- *                                     defaults to the first master's origin
- *     [--master a.m3u8 --master b.m3u8]  repeatable (or comma-separated)
- *     [--workers 4] [--delay 60]   politeness: pool size, ms between requests
- *     [--force]                    re-download files already on disk
- *     [--dry-run]                  enumerate the ladder, write nothing
- *     [--manifest <path>]          default <out>/mirror-manifest.json
- *     [--referer <url>]            Referer header sent with every request; default <origin>/
+ *  node gapfill-video.mjs --master https://cdn.example.com/vp/<id>/<id>.m3u8
+ *    [--out mirror]        mirror root (must match mirror-site.mjs)
+ *    [--origin https://example.com]  same-origin path rule + Referer header;
+ *                                    defaults to the first master's origin
+ *    [--master a.m3u8 --master b.m3u8]  repeatable (or comma-separated)
+ *    [--workers 4] [--delay 60]   politeness: pool size, ms between requests
+ *    [--force]                    re-download files already on disk
+ *    [--dry-run]                  enumerate the ladder, write nothing
+ *    [--manifest <path>]          default <out>/mirror-manifest.json
+ *    [--referer <url>]            Referer header sent with every request; default <origin>/
  *
- * Find the master URL the way it surfaced in racingshop: probe.mjs / the
- * browser console reports 404s for the variant playlists, or netcapture.mjs
- * lists the runtime requests the mirror is missing.
- *
- * NOTE serve.mjs's MIME map has no .m3u8 / .ts entries — a mirror that must
- * actually play HLS needs "application/vnd.apple.mpegurl" and "video/mp2t"
- * added there (a bare `.ts` is MPEG-TS in a mirror, not TypeScript).
- *
- * NOTE query strings are dropped when mapping URL -> disk path (same rule as
- * mirror-site.mjs). Token-signed segment URLs therefore collapse onto one
- * path, which is what a static replay wants, but it means two segments that
- * differ only by query would collide.
- *
- * Adapted from racingshop-rebuild/scripts/gapfill-video.mjs, where the Daytona
- * hero's 3 renditions + 12 .ts segments were invisible to the BFS crawl until
- * the probe reported 404s. Generalized here: any master URL instead of a
- * hardcoded one, recursive descent with cycle/depth guards, URI-bearing tags
- * (EXT-X-MEDIA alternate renditions, I-FRAME playlists, EXT-X-MAP fMP4 init
- * segments, EXT-X-KEY), relative-URI resolution against each playlist's own
- * URL (subdirectory ladders, not just flat siblings), and manifest append.
- *
- * 中文规格（自 scripts/README.md 迁入，v0.3.21；本表另一拼写：`gapfill-video.mjs`）
- * HLS/DASH 流媒体阶梯补录（master → rendition → 分片），静态爬虫的结构性盲区
- * HLS 流媒体阶梯补录：master m3u8 → 递归取 variant/备用音轨/I-frame 播放列表 → 逐段下载 `.ts`/`.m4s`（含 EXT-X-MAP 初始化段、EXT-X-KEY）→ 追加进 manifest 账本。补的是静态爬虫的结构性盲区：HTML 里只有 master，其余全由播放器运行时 fetch，只有探针 404 才暴露（`serve.mjs` 的 MIME 表已含 `.m3u8`/`.ts`/`.m4s`/`.mpd`，补录后即可本地回放）
- * `node gapfill-video.mjs --master https://cdn.x.com/vp/<id>/<id>.m3u8 --origin https://example.com`（`--dry-run` 先看阶梯全貌）
+ * The racingshop Daytona hero referenced three renditions and 12 MPEG-TS
+ * segments through playlists. The static HTML/JS crawl had not discovered
+ * them; browser request failures identified the missing playlist hierarchy.
+ * serve.mjs includes HLS and MPEG-TS MIME types. Browser playback still depends
+ * on the site's player, codecs and any access requirements of the stream.
  */
 import { mkdir, readFile, writeFile, stat } from 'node:fs/promises';
-import { dirname, join, relative, extname } from 'node:path';
+import { dirname, join, relative, resolve } from 'node:path';
 import { BROWSER_UA } from './lib/negotiate.mjs';
 import { cli } from './lib/cli.mjs';
+import { canonicalUrl, localRelPath, loadPolicy } from './lib/urlpath.mjs';
+import { sha256, sha256File } from './lib/hash.mjs';
+import { writeInventory } from './lib/ledger.mjs';
 
 cli({
   known: ['master', 'out', 'origin', 'referer', 'manifest', 'workers', 'delay'],
@@ -89,7 +70,7 @@ const flagAll = (name) =>
   args.flatMap((a, i) => (a === '--' + name && args[i + 1] ? [args[i + 1]] : []));
 const has = (name) => args.includes('--' + name);
 
-const MASTERS = flagAll('master').flatMap((v) => v.split(',')).filter(Boolean);
+const MASTERS = flagAll('master').flatMap((v) => v.split(',')).filter(Boolean).map(canonicalUrl);
 if (!MASTERS.length) {
   console.error(
     'usage: gapfill-video.mjs --master https://cdn.example.com/vp/id/id.m3u8 [--out mirror]\n' +
@@ -98,33 +79,37 @@ if (!MASTERS.length) {
   process.exit(2);
 }
 
-const OUT = join(process.cwd(), flag('out', 'mirror'));
+const OUT = resolve(flag('out', 'mirror'));
 const ORIGIN = (flag('origin', null) || new URL(MASTERS[0]).origin).replace(/\/+$/, '');
 const ORIGIN_HOST = new URL(ORIGIN).hostname;
 const REFERER = flag('referer', ORIGIN + '/');
 const MANIFEST_PATH = flag('manifest', join(OUT, 'mirror-manifest.json'));
-const WORKERS = Math.max(1, Number(flag('workers', 4)));
-const DELAY_MS = Math.max(0, Number(flag('delay', 60)));
+const WORKERS = Number(flag('workers', 4));
+const DELAY_MS = Number(flag('delay', 60));
 const FORCE = has('force');
 const DRY_RUN = has('dry-run');
+if (!Number.isSafeInteger(WORKERS) || WORKERS < 1 || !Number.isFinite(DELAY_MS) || DELAY_MS < 0) {
+  console.error('usage: --workers must be a positive integer and --delay a nonnegative number');
+  process.exit(2);
+}
+const QUERY_POLICY = await loadPolicy(OUT);
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
-// Same URL -> disk mapping as mirror-site.mjs: same-origin assets keep their
-// path, cross-host assets live under assets/<host>/.
 function localPathFor(url) {
-  const u = new URL(url);
-  const path = decodeURIComponent(u.pathname);
-  if (u.hostname === ORIGIN_HOST) return join(OUT, path);
-  return join(OUT, 'assets', u.hostname, path);
+  const p = resolve(OUT, localRelPath(url, ORIGIN_HOST, QUERY_POLICY));
+  const rel = relative(OUT, p);
+  if (!rel || rel === '..' || rel.startsWith('../')) throw new Error(`URL maps outside the mirror: ${url}`);
+  return p;
 }
 
 async function exists(p) {
   try {
     await stat(p);
     return true;
-  } catch {
-    return false;
+  } catch (e) {
+    if (e.code === 'ENOENT') return false;
+    throw e;
   }
 }
 
@@ -153,18 +138,22 @@ try {
   manifestData = JSON.parse(raw);
   manifestIndent = detectIndent(raw);
   manifestExisted = true;
-  if (!manifestData.files) manifestData.files = {};
-} catch {
+  if (!manifestData || typeof manifestData.files !== 'object' || manifestData.files === null || Array.isArray(manifestData.files)) {
+    throw new Error(`${MANIFEST_PATH}: no files map in the document`);
+  }
+} catch (e) {
+  if (e.code !== 'ENOENT') throw e;
   console.warn(`[warn] no manifest at ${relative(process.cwd(), MANIFEST_PATH)} — one will be created`);
 }
 
 let ledgerAdds = 0;
-function record(url, p, bytes, type) {
+function record(url, p, bytes, type, hash) {
   manifestData.files[url] = {
+    ...manifestData.files[url],
     path: relative(OUT, p),
     bytes,
     type: type || '',
-    // Provenance: these URLs are runtime-only, never linked in crawled markup.
+    sha256: hash,
     source: 'gapfill-video',
   };
   ledgerAdds++;
@@ -176,7 +165,7 @@ async function save(url, buf, type) {
     await mkdir(dirname(p), { recursive: true });
     await writeFile(p, buf);
   }
-  record(url, p, buf.length, type);
+  record(url, p, buf.length, type, sha256(buf));
   return p;
 }
 
@@ -187,13 +176,14 @@ async function save(url, buf, type) {
 // own URL, so subdirectory ladders and ../ references work, not just the flat
 // sibling layout racingshop happened to have.
 function parsePlaylist(text, baseUrl) {
+  if (text.trimStart().split(/\r?\n/, 1)[0] !== '#EXTM3U') throw new Error('Missing HLS #EXTM3U header');
   const playlists = new Set();
   const assets = new Set();
   let expectVariantUri = false;
 
   const resolve = (ref) => {
     try {
-      return new URL(ref.trim(), baseUrl).href;
+      return canonicalUrl(new URL(ref.trim(), baseUrl).href);
     } catch {
       return null;
     }
@@ -242,37 +232,32 @@ async function walkPlaylist(url, depth) {
   if (seenPlaylists.has(url)) return;
   seenPlaylists.add(url);
   if (depth > MAX_PLAYLIST_DEPTH) {
-    console.warn(`[skip] depth ${depth} > ${MAX_PLAYLIST_DEPTH}: ${url}`);
+    failures.push([url, `playlist depth ${depth} exceeds ${MAX_PLAYLIST_DEPTH}`]);
     return;
   }
 
-  const p = localPathFor(url);
-  let text;
-  // The master is normally already mirrored — read it rather than refetch it.
-  if (!FORCE && (await exists(p))) {
-    text = await readFile(p, 'utf8');
-    playlistsFromDisk++;
-    console.log(`[playlist] ${'  '.repeat(depth)}${url.slice(0, 110)} (on disk, ${text.length}b)`);
-  } else {
-    try {
-      const { buf, type } = await get(url);
-      text = buf.toString('utf8');
+  try {
+    const p = localPathFor(url);
+    const cached = !FORCE && await exists(p);
+    const { buf, type } = cached
+      ? { buf: await readFile(p), type: manifestData.files[url]?.type || 'application/vnd.apple.mpegurl' }
+      : await get(url);
+    const { playlists, assets } = parsePlaylist(buf.toString('utf8'), url);
+    if (cached) {
+      record(url, p, buf.length, type, sha256(buf));
+      playlistsFromDisk++;
+    } else {
       await save(url, buf, type);
       playlistsFetched++;
-      console.log(`[playlist] ${'  '.repeat(depth)}${url.slice(0, 110)} (${buf.length}b)`);
-    } catch (e) {
-      failures.push([url, e.message]);
-      console.error(`[playlist FAIL] ${url}: ${e.message}`);
-      return;
     }
+    console.log(`[playlist] ${'  '.repeat(depth)}${url.slice(0, 110)} (${cached ? 'on disk, ' : ''}${buf.length}b)`);
+    for (const a of assets) pending.add(a);
+    console.log(`             ${'  '.repeat(depth)}-> ${playlists.size} nested playlist(s), ${assets.size} segment(s)`);
+    for (const child of playlists) await walkPlaylist(child, depth + 1);
+  } catch (e) {
+    failures.push([url, e.message]);
+    console.error(`[playlist FAIL] ${url}: ${e.message}`);
   }
-
-  const { playlists, assets } = parsePlaylist(text, url);
-  for (const a of assets) pending.add(a);
-  console.log(
-    `             ${'  '.repeat(depth)}-> ${playlists.size} nested playlist(s), ${assets.size} segment(s)`
-  );
-  for (const child of playlists) await walkPlaylist(child, depth + 1);
 }
 
 for (const master of MASTERS) await walkPlaylist(master, 0);
@@ -288,17 +273,18 @@ await Promise.all(
   Array.from({ length: WORKERS }, async () => {
     while (cursor < queue.length) {
       const url = queue[cursor++];
-      const p = localPathFor(url);
-      if (!FORCE && (await exists(p))) {
-        skipped++;
-        continue;
-      }
-      if (DRY_RUN) {
-        downloaded++;
-        console.log(`[would fetch] ${url.slice(0, 120)}`);
-        continue;
-      }
       try {
+        const p = localPathFor(url);
+        if (!FORCE && await exists(p)) {
+          record(url, p, (await stat(p)).size, manifestData.files[url]?.type || '', await sha256File(p));
+          skipped++;
+          continue;
+        }
+        if (DRY_RUN) {
+          downloaded++;
+          console.log(`[would fetch] ${url.slice(0, 120)}`);
+          continue;
+        }
         const { buf, type } = await get(url);
         await save(url, buf, type);
         downloaded++;
@@ -317,6 +303,7 @@ await Promise.all(
 if (!DRY_RUN && ledgerAdds) {
   if (!manifestExisted) await mkdir(dirname(MANIFEST_PATH), { recursive: true });
   await writeFile(MANIFEST_PATH, JSON.stringify(manifestData, null, manifestIndent) + '\n');
+  await writeInventory(OUT, manifestData.files);
 }
 
 console.log(
@@ -324,7 +311,7 @@ console.log(
     `${playlistsFetched} playlist(s) fetched, ${playlistsFromDisk} already mirrored, ` +
     `${downloaded} segment(s) ${DRY_RUN ? 'pending' : 'downloaded'}, ${skipped} already present, ` +
     `${failures.length} failed. ` +
-    (DRY_RUN ? 'Manifest untouched.' : `${ledgerAdds} manifest entries added.`)
+    (DRY_RUN ? 'Manifest untouched.' : `${ledgerAdds} file records written to the manifest and inventory.`)
 );
 if (failures.length) {
   for (const [u, m] of failures) console.error(`  FAIL ${m} ${u}`);

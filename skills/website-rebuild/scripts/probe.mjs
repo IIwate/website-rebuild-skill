@@ -1,68 +1,29 @@
 #!/usr/bin/env node
 /**
- * probe.mjs — zero-dependency headless-Chrome probe (raw CDP over Node's
- * built-in WebSocket, Node 22+). Loads a URL, collects console messages, page
- * errors and failed/non-2xx requests, optionally screenshots and evaluates
- * expressions, then exits 0 only if the run was CLEAN — so it slots into CI.
+ * Observe a page in headless Chrome through Node's built-in CDP WebSocket.
+ * Collects console/page/security errors and request failures; optional flags
+ * capture an image, evaluate expressions or exercise scroll positions.
+ * The exit status describes only events observed during the configured run.
  *
- *   node probe.mjs <url> [--shot out.png] [--wait 6000] [--width 1728]
- *        [--height 1080] [--scroll 0.5] [--eval "expr"]
- *        [--evalAfter "expr"] [--evalAfterDelay 2000] [--mobile]
- *        [--walk 24] [--walk-dwell 700] [--no-external]
- *        [--format png|jpeg] [--quality 92]
- *        [--side mirror|rebuild] [--expect-side mirror|rebuild] [--cdp-port N]
+ * node probe.mjs <url> [--shot out.png] [--wait 6000] [--width 1728]
+ *       [--height 1080] [--scroll 0.5] [--eval "expr"]
+ *       [--evalAfter "expr"] [--evalAfterDelay 2000] [--mobile]
+ *       [--walk 24] [--walk-dwell 700] [--no-external]
+ *       [--format png|jpeg] [--quality 92]
+ *       [--side mirror|rebuild] [--expect-side mirror|rebuild] [--cdp-port N]
  *
- * BROWSER LIFECYCLE (scripts/lib/chrome.mjs — read its header once):
- *   The browser is spawned as a PROCESS GROUP and the whole group is reaped on
- *   every exit path, because `chrome.kill()` leaves the 6-8 renderer children
- *   running: measured 129 orphaned Chrome processes, oldest 2 days old. On a
- *   toolchain whose pixel tolerance is derived from the reference side compared
- *   with itself, that background load WIDENS the tolerance — a leak here makes
- *   the pixel gate quietly forgive real differences.
+ * --no-external fails on requests outside the served origin. Without it, a
+ * successful external request is reported but is not an HTTP failure.
+ * --walk visits intermediate scroll positions that a single jump may skip.
+ * Neither option covers interactions the probe never performs.
  *
- * SCREENSHOTS HAVE A HARD CEILING: `Page.captureScreenshot` returns the frame as
- *   one base64 WebSocket message, and Node's built-in WebSocket dies (close
- *   1006) above ~2.4 M chars — roughly a 1500x900 PNG. Past that, PNG simply
- *   cannot arrive. --format jpeg --quality 92 is the escape hatch (measured
- *   827,968 chars / 58 ms at 1728x1080). The failure used to be a silent hang;
- *   it is now a named error with this advice attached.
+ * Browser ownership and server identity use lib/ports.mjs; process-group
+ * cleanup uses lib/chrome.mjs. Screenshot transport limits depend on runtime
+ * and content. JPEG can reduce payload size but is lossy; see lib/chrome.mjs.
  *
- * PORTS AND IDENTITY (scripts/lib/ports.mjs — read its header once):
- *   The debug port is allocated per (workspace, script, side) instead of being
- *   randomized, --side is inferred from the target URL when that URL is one of
- *   this toolchain's servers, a taken port is a loud exit, and after launch the
- *   probe attaches ONLY to its own sentinel page. That last check is the real
- *   gate: a probe that attaches to another script's browser reports that
- *   browser's console and that browser's traffic as if they were this URL's —
- *   the field case (§8.30) was exactly a "the rebuild calls the mirror" report
- *   produced by a probe that had landed in the mirror's browser. The outbound
- *   report below also names any loopback port it recognizes, so a stray request
- *   to a sibling gate reads as what it is instead of as a leak.
- *
- * --no-external and --walk exist because the offline gate asks for things this
- * probe could not otherwise assert:
- *   --no-external: the gate says "zero outbound calls", but the probe only
- *     failed on 4xx/loadingFailed. A mirror that quietly still fetches the live
- *     CDN passes that as CLEAN. With the flag, any request off the served
- *     origin counts as a failure (data:/blob: are not requests and never do).
- *   --walk: the gate wants CLEAN "including a full scroll". --scroll jumps to
- *     one offset, which never mounts the scenes in between; --walk steps the
- *     whole page so lazily-mounted scenes actually boot and get observed.
- *
- * Adapted from landonorris-rebuild/scripts/probe.mjs.
- * Lineage: rogierdeboeve-rebuild (CDP probe family, quantified acceptance)
- *   -> samsyninja-rebuild regression.mjs (anti-throttling flags, state walks)
- *   -> landonorris-rebuild (~190 lines; Log-domain listener fix: security/SRI
- *      errors surface on the CDP Log domain, NOT Runtime — a probe without
- *      Log.enable is blind to them and reports a false CLEAN)
- *   -> shopifydesign-rebuild (--no-external assertion for the offline gate,
- *      --walk full-page scroll walk).
- *
- * 中文规格（自 scripts/README.md 迁入，v0.3.21；本表另一拼写：`probe.mjs`）
- * CDP 无头探针（console/异常/网络 CLEAN 判定，退出码进 CI；`--no-external` 断言零外联、`--walk` 全滚动走查）
- * CDP 无头探针：console/异常/网络采集 + Log 域监听（SRI 拦截盲区修复）、`--eval/--evalAfter/--shot/--mobile`、CLEAN 判定退出码进 CI。`--no-external` 把"任何离开本服务 origin 的请求"记为失败（断网门要求的零外联，此前无人断言）；`--walk N` 全页滚动走查（`--scroll` 只跳单点，跳过的场景根本不挂载）。调试端口按 side 分配（side 从目标 URL 的端口自动反解，可用 `--side` 覆盖），attach 只认自己的 sentinel 页；外联清单里凡是本工具链的回环端口都会标注归属（`1x 127.0.0.1:25001 <- serve.mjs side MIRROR`），`--expect-side` 可断言对面服务确实是那一侧。浏览器生命周期走 `lib/chrome.mjs`（进程组收割 + 启动前孤儿自检）；`--shot` 支持 `--format jpeg --quality N`，撞上 CDP 载荷硬顶时响亮失败并给出降级清单（详见上文两节）。
- * 逐参数走 argv，旗标可以在 URL 前面
- * `node probe.mjs http://127.0.0.1:25001/ --shot out.png --walk 24 --no-external`；大视口截图 `--shot out.jpg --format jpeg --quality 92`
+ * Derived from rogierdeboeve, samsyninja, landonorris and shopifydesign probes.
+ * The landonorris case required CDP Log events to expose blocked SRI resources;
+ * Runtime events alone did not report them.
  */
 import { writeFile } from 'node:fs/promises';
 import {
@@ -85,22 +46,11 @@ import {
 import { connectCdp } from './lib/cdp.mjs';
 import { cli } from './lib/cli.mjs';
 
-// ⛔ AN UNKNOWN FLAG MUST BE FATAL, NOT SILENCE. This tool sat in a toolchain
-// whose sibling (netcapture.mjs) takes --settle; passing --settle HERE was
-// silently ignored and every "long" observation quietly ran at the 6-second
-// default. The cost was a multi-hour ghost hunt: a loader "stuck" at the same
-// 6.2s frame every run, a timer that "never fired" (it was 2s away), a
-// suspected reload loop, a suspected renderer crash, a suspected patched clock
-// — all of it an artifact of one misspelled flag that nothing rejected.
-// The check now lives in lib/cli.mjs (one contract for every script); this is
-// the set it validates against. Bools take no value; every other flag consumes
-// the next argument.
-// ⛔ WALK THE ARGV; do not `find` the first token without dashes. With a flag
-// ahead of the URL (`--wait 9000 http://…`) that token is the flag's VALUE, and
-// the probe died on `new URL('9000')` with a bare TypeError — after the flag
-// check, before saying what it was given. A value a known flag consumes is
-// never inspected as a flag or as the URL; the first bare token left is the URL
-// — cli() does that walk and hands the leftovers back as positionals.
+// Reject unknown flags and consume each known option's value before selecting
+// the positional URL. Passing netcapture's --settle to this probe once left
+// observations at the six-second default: captures stopped around 6.2s while
+// the expected timer needed another two seconds. A separate argument-order
+// failure treated --wait's value 9000 as the URL. cli() handles both cases.
 const { positionals } = cli({
   known: ['shot', 'format', 'quality', 'wait', 'scroll', 'walk', 'walk-dwell',
     'eval', 'evalAfter', 'evalAfterDelay', 'side', 'expect-side', 'cdp-port', 'width', 'height'],
@@ -203,13 +153,13 @@ const chrome = launchChrome({
     '--hide-scrollbars',
   ],
 });
-// ⛔ process.exit() truncates whatever stdout has not drained. Piped to another
+//  process.exit() truncates whatever stdout has not drained. Piped to another
 // process, stdout is async, so a single console.log larger than the 64 KiB pipe
 // buffer is CUT AT EXACTLY 65,536 BYTES — and what the caller receives is a
 // well-formed prefix, not an error. Measured: a 70,000-character --eval result
 // arrived as 65,536, and the JSON parse failure was the only symptom.
 //
-// Wait for the write to drain, then exit. ⚠ Do not "fix" this by setting only
+// Wait for the write to drain, then exit.  Do not "fix" this by setting only
 // process.exitCode: the browser's socket keeps the loop alive, so the process
 // would hang instead.
 const cleanup = (code) => {
@@ -225,7 +175,7 @@ const cleanup = (code) => {
 // another script's page, or even chrome://newtab.
 const target = await assertOwnBrowser({ port, sentinel, tool: 'probe.mjs', pid: chrome.pid });
 
-// A dead socket must fail LOUDLY (an oversized screenshot closes it with 1006,
+// A dead socket must fail explicitly (an oversized screenshot closes it with 1006,
 // see the header) and every call is bounded — both guards live in lib/cdp.mjs.
 const cdp = await connectCdp(target.webSocketDebuggerUrl, {
   defaultTimeoutMs: 60000,
@@ -273,15 +223,10 @@ cdp.on('*', (m) => {
       if (!m.params.canceled) failures.push(`FAILED ${m.params.errorText} ${u}`);
       break;
     }
-    // Landonorris lesson: security errors (e.g. SRI hash mismatches) arrive
-    // here, not on the Runtime domain. Without this case the probe green-lights
-    // pages whose scripts were silently blocked.
-    // ⛔ A CRASHED-AND-AUTORELOADED RENDERER IS INVISIBLE without these. The
-    // page dies (OOM under SwiftShader is the usual killer), Chrome reloads it,
-    // timers and clocks silently belong to a new document — and the report
-    // reads "0 errors, 0 failures" over a page that never survived long enough
-    // to finish anything. Measured on hubtown: performance.now() said 6s after
-    // a 180s settle, and nothing in the report explained why.
+    // Record renderer crashes and main-frame navigation so automatic reloads are
+    // visible in the report. On hubtown, performance.now() read six seconds after
+    // a 180-second settle because the renderer had restarted; error and request
+    // counts alone did not explain the reset.
     case 'Inspector.targetCrashed': {
       lifecycle.push('TARGET CRASHED');
       break;
@@ -355,7 +300,7 @@ if (walk > 0) {
 
 const evalExpr = flag('eval', null);
 if (evalExpr) {
-  // ⛔ awaitPromise, or an async expression silently returns `{}`. JSON.stringify
+  //  awaitPromise, or an async expression silently returns `{}`. JSON.stringify
   // of a pending Promise is an empty object, so the caller gets a well-formed
   // answer that contains nothing — and anything driving the page has to await a
   // frame, which means anything interesting here is async.
@@ -413,9 +358,8 @@ console.log(`=== request failures (${failures.length}) ===`);
 for (const f of failures.slice(0, 40)) console.log(f);
 const extCount = [...external.values()].reduce((a, b) => a + b, 0);
 console.log(`=== external requests (${extCount}${NO_EXTERNAL ? ', FATAL' : ''}) ===`);
-// annotateHost names a loopback port that belongs to this toolchain, so a hit
-// on a sibling gate reads as "that is the mirror's server" instead of as an
-// anonymous outbound call to an unknown host (the §8.30 false red).
+// Annotate recognized loopback ports to distinguish requests to another local
+// comparison service from unknown external hosts.
 for (const [h, n] of [...external].sort((a, b) => b[1] - a[1])) console.log(`${n}x ${h}${annotateHost(h)}`);
 
 const errCount =

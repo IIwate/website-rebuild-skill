@@ -1,48 +1,22 @@
 #!/usr/bin/env node
 /**
- * slice-esm.mjs — CONCATENATIVE decomposition of a scope-hoisted ESM chunk.
+ * Split a scope-hoisted ESM chunk into ordered text parts.
+ * Concatenating parts in manifest order must reproduce the input bytes. Parts
+ * are presentation units, not independently executable modules; shared scope
+ * and evaluation order belong to the reassembled file.
  *
- * The problem: Vite (and esbuild) erase module boundaries. A webpack container
- * WRITES boundaries down and modules-to-src.mjs just reads them; a
- * scope-hoisted chunk is one shared scope where hundreds of source modules
- * were concatenated, renamed, and interleaved — there is no boundary evidence
- * to read, and readable-source.md §3.1's three constraints (declaration order
- * = evaluation order, shared minified names, TDZ) make any REWRITING split a
- * silent-reorder machine.
+ * Candidate boundaries use token depth and statement shapes. Missing a useful
+ * boundary makes a larger part. Byte reassembly is checked before output, and
+ * verify-reassembly.mjs checks the files later. These checks cover the selected
+ * input, not equivalence of any earlier formatting step or the runtime environment.
  *
- * The escape is to not rewrite: SLICE the chunk into ordered files whose
- * concatenation reproduces the original BYTE FOR BYTE. The parts stay the same
- * program text, so evaluation order and scope are untouched by construction,
- * and the gate is one hash comparison (verify-reassembly.mjs) instead of a
- * semantic-equivalence argument. What is left to decide is only WHERE to cut
- * and WHAT to call each piece — evidence work, this skill's home ground.
- *
- * ⛔ Cut points must be PROVABLY safe, and provable is cheap here:
- *   depth 0  +  previous token is `;` or `}`  +  next token begins a
- *   declaration/import/export statement. Missing a boundary only makes a
- *   coarser slice; a wrong boundary would corrupt the program — so the rule
- *   only fires where it cannot be wrong, and everything else attaches to the
- *   preceding slice.
- * ⛔ Parts carry NO added headers. One added comment breaks reassembly; all
- *   metadata lives in the sidecar manifest (slices.json) and the chunk README.
- * ⭐ The tool re-concatenates and compares sha256 BEFORE writing anything —
- *   it refuses to emit a decomposition it cannot itself reassemble.
- *
- * File-grouping policy (presentation only — reassembly ignores it):
- *   a new file starts at each top-level `class X` / `const X = class` /
- *   license banner (`/*!`), or a named `function X` of >= --fn-lines lines;
- *   the leading import run becomes 000-imports.js (a chunk that opens with no
- *   import is named after its own first declaration instead), a trailing
- *   `export {…}` becomes the last part. Everything between anchors belongs to
- *   the anchor before it. Names are the declaration's own identifiers — tier-1
- *   literal evidence, never invented (a wrong name is worse than a hash).
+ * Names come from top-level classes, functions and license banners. An initial
+ * import run is grouped separately; an importless preamble uses its first
+ * declaration. Metadata lives in slices.json and the generated chunk README,
+ * so part contents remain unchanged.
  *
  *   node scripts/slice-esm.mjs --in src/site/_nuxt/DqcYvDA3.js \
  *        --out src/readable/DqcYvDA3 [--fn-lines 12]
- *
- * 中文规格（自 scripts/README.md 迁入，v0.3.21；本表另一拼写：`slice-esm.mjs`）
- * **拼接式分解切片器**（无容器 scope-hoisted 产物的语义源码层,`readable-source.md` §3.0.6）：把一个 ESM chunk 切成按声明命名的部件文件,**按序拼接逐字节等于原件**——不重写,求值顺序与作用域构造性不变。切点只在可证明安全处（深度 0 + 前 token `;`/`}` + 后 token 起始声明）,漏切只更粗、错切不可能;文件名取声明自己的标识符（一级证据）;写盘前先自证重拼
- * `node slice-esm.mjs --in src/site/_nuxt/X.js --out src/readable/X`
  */
 import { readFile, writeFile, mkdir, rm } from "node:fs/promises";
 import { spawnSync } from "node:child_process";
@@ -217,7 +191,7 @@ for (let k = 0; k + 1 < bounds.length; k++) {
   });
 }
 
-// ⭐ Prove reassembly BEFORE writing: the tool never emits a decomposition it
+//  Prove reassembly BEFORE writing: the tool never emits a decomposition it
 // cannot put back together.
 if (sha256(parts.map((p) => p.text).join("")) !== CHUNK_SHA) {
   console.error("FATAL — reassembled slices do not hash back to the input. Nothing written.");

@@ -3,7 +3,7 @@
   "private": true,
   "version": "0.3.22",
   "type": "module",
-  "description": "Agent Skill that rebuilds a website line by line from its own minified code and proves the rebuild with automated diffs — mirror-first forensics, verbatim porting, pixel-level verification gates. 复刻网站的 Agent Skill。",
+  "description": "Rebuild websites from captured client assets and behavior, with source mapping and automated resource, structural, and visual checks.",
   "keywords": [
     "agent-skill",
     "agent-skills",

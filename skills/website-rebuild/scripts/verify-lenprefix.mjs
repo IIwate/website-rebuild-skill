@@ -1,52 +1,23 @@
 #!/usr/bin/env node
 /**
- * verify-lenprefix.mjs — NO REWRITE MAY CHANGE A PAYLOAD'S LENGTH WITHOUT
- * RE-DECLARING IT.
+ * Validate declared byte lengths in captured Flight text rows.
+ * URL rewriting can change a row's UTF-8 payload length without updating its
+ * T<hex> prefix. The reader may then consume part of the next row as text.
  *
- * WHY THIS GATE EXISTS
- * ---------------------------------------------------------------------------
- * Both layers of this toolchain localise absolute URLs in text: the BUILD layer
- * bakes it into the port's bytes (T-LOCALIZE), the SERVE layer applies it to the
- * mirror on the way out. Both are string replacements, and both are safe in the
- * places they were designed for — href/src attributes, CSS url(), JSON blobs.
+ * In the recorded 115-route case, two routes rendered about 70 characters
+ * instead of 2,440. Serving the same files without response transforms restored
+ * the content, locating the defect in the response layer. Ledger and ordinary
+ * loading checks had not detected the malformed payload.
  *
- * ⛔ They are NOT safe inside a payload that carries its own length. React's
- * flight stream, which every Next.js App Router page embeds, is rows of
- *
- *     <id>:T<hex>,<exactly that many UTF-8 BYTES of text>
- *
- * Rewriting `https://media.host/x` to `/ext/media.host/x` inside such a row
- * shortens the text while `T<hex>` still claims the old count. The reader takes
- * the declared number of bytes, swallows the next row's header as content, and
- * dies somewhere unrelated:
- *
- *     TypeError: t.reason.enqueueModel is not a function
- *
- * ⭐ What makes this gate necessary rather than nice: EVERY OTHER GATE WAS
- * GREEN. Zero 404s. Zero request failures. The mirror's own ledger reconciled.
- * The chunk bytes were identical. The HTML was the right size. Two of 115
- * routes simply rendered 70 characters instead of 2,440, and the only reason it
- * was caught at all is that a `python3 -m http.server` on the same directory
- * rendered them perfectly — which located the fault in the SERVER, not in the
- * bytes it was serving.
- *
- * The check is cheap and exact, so it should run on both sides, always: walk
- * each row by its declared length and confirm the byte that follows is the row
- * separator. A correct stream lands on a newline every time; a corrupted one
- * lands mid-text on the first row a rewrite touched.
+ * Walks the supported row syntax and checks declared lengths. Run on files or
+ * served responses according to which layer transforms the payload.
  *
  *   node scripts/verify-lenprefix.mjs --dir site
  *   node scripts/verify-lenprefix.mjs --base http://127.0.0.1:8081 --routes /,/careers
  *
- * Exit 0 = PASS, or SKIPPED when no document carries a flight stream (not a Next App
- * Router build: the gate does not apply — say so in the plan, never count it green).
- * Exit 1 = a declared length is wrong. Exit 5 = no document to examine at all.
- *
- * 中文规格（自 scripts/README.md 迁入，v0.3.21；本表另一拼写：`verify-lenprefix.mjs`）
- * **自带长度的载荷门**：走 React flight 流（Next.js App Router 每页内联的 `self.__next_f.push`），逐行按声明的 `T<十六进制>` 字节数前进，确认落点仍是一个行首。⭐ **长度前缀行没有终止符**——下一行的行首就贴在声明的末尾，长度本身即分隔符。因此任何**改变字节数的文本改写**（本地化外链）都会让读取者把下一行的行首吞成正文。
- * 定位它的是拿 `python3 -m http.server` 伺服同一个目录——两条路由完美渲染，于是错处在服务器而不在字节。⛔ 这道门要**先拿源站校准**：第一版断言"行末必须是换行"，把包括源站自身字节在内的每份文档都判为损坏
- * **长度前缀门**：Next flight 等格式的行首声明长度，任何重写改了正文却不改声明，解析器会在错误的偏移继续读——逐条断言声明长度 = 实际内容长度
- * `node verify-lenprefix.mjs --dir site`
+ * Exit 0 indicates success or an explicitly reported SKIPPED result when no
+ * Flight stream is present. Exit 1 indicates malformed lengths; exit 5 indicates
+ * that no documents were examined. SKIPPED does not validate a Flight stream.
  */
 import { readdir, readFile } from "node:fs/promises";
 import path from "node:path";
@@ -98,7 +69,7 @@ function audit(stream) {
       bad.push(`row ${m[1]}: declares ${declared} B but only ${buf.length - start} B remain`);
       break;
     }
-    // ⛔ A length-prefixed row is NOT newline-terminated. The next row's header
+    //  A length-prefixed row is NOT newline-terminated. The next row's header
     // starts immediately at its declared end — the length IS the separator.
     // The first version of this gate asserted a trailing newline and reported
     // every document as corrupt, INCLUDING the live origin's own bytes. That a
@@ -154,7 +125,7 @@ for (const t of targets) {
   }
 }
 
-// ⭐ Report the coverage, not just the verdict: a gate that examined nothing and
+//  Report the coverage, not just the verdict: a gate that examined nothing and
 // a gate that examined everything both print no failures.
 console.log(`  ${withStream}/${targets.length} document(s) carry a flight stream; ${totalRows} length-prefixed row(s) walked`);
 if (!withStream) {

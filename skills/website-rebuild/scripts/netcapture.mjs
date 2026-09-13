@@ -1,29 +1,7 @@
 #!/usr/bin/env node
-// netcapture.mjs — second mirror pass: drive the live site in a real headless
-// Chrome, record every request it actually makes to the recorded hosts, then
-// diff that against what the static crawler (mirror-site.mjs) pulled to disk.
-//
-// A regex crawl cannot see assets whose URLs are computed at runtime — scene
-// textures built from an id, locale-suffixed sprites, media a component only
-// requests once it mounts. This pass is how those get found.
-//
-// Zero npm dependencies: raw CDP over Node's built-in WebSocket (needs Node 22+).
-//
-// PORTS AND IDENTITY (scripts/lib/ports.mjs — read its header once): the debug
-// port is allocated per (workspace, script) on the "live" side instead of a
-// fixed 9333, a taken port is a loud exit, and the browser must be the one this
-// script launched (sentinel page). Identity matters most here: this capture is
-// the evidence base for the whole mirror, and a session that recorded another
-// script's browser would produce a HAVE/GAP ledger for another program.
-//
-// BROWSER LIFECYCLE (scripts/lib/chrome.mjs — read its header once): Chrome is
-// spawned as a detached PROCESS GROUP and the group is reaped on every exit
-// path. `chrome.kill()` alone leaves the 6-8 renderer/GPU/network children
-// running (measured: 129 orphans, oldest 2 days), and this pass is the one that
-// runs longest and gets Ctrl-C'd most. Leaked renderers are not just untidy:
-// downstream, the pixel gate derives its tolerance from the reference side
-// compared with itself, so background load WIDENS that band and makes the gate
-// forgive real differences.
+// Capture browser requests and compare selected-host URLs with a local mirror.
+// Each route uses a fresh CDP target. The viewport and scroll walk determine
+// which requests can be observed; the report does not cover unvisited states.
 //
 // Usage:
 //   node netcapture.mjs --origin https://example.com [--mirror mirror]
@@ -38,47 +16,23 @@
 //     [--swiftshader]                   opt-in software GL (see the Chrome flag list below)
 //     [--cdp-port N]                    debug port; default allocated by lib/ports.mjs (CDP_PORT env also honoured)
 //
-// --hosts IS NOT OPTIONAL ON A CDN-BACKED SITE. Records are keyed by absolute
-// URL over an allow-list of hosts, whose semantics match mirror-site.mjs's
-// ASSET_HOSTS: pass this pass the same host list you passed the crawler. An
-// earlier version filtered on startsWith(ORIGIN), so on a site serving its
-// assets from a separate CDN host it recorded the HTML and nothing else and
-// then reported a triumphant GAP=0 having observed ~2% of the traffic (field
-// case: 208 of 246 URLs on cdn.shopify.com). Any host left off the list is
-// counted and printed at the end, and running without --hosts while off-list
-// traffic dominates prints a loud warning — a GAP=0 under that warning means
-// nothing.
+// Use the crawler's asset-host list. Off-list hosts are counted and reported,
+// but their requests do not enter the selected-host HAVE/GAP comparison.
+// In shopifydesign, 208 of 246 observed URLs used cdn.shopify.com; filtering
+// only the origin omitted most traffic while still reporting GAP=0.
 //
-// The scroll walk dispatches WheelEvents AND window.scrollTo per step: covers
-// both wheel-hijacking scene decks (advance one scene per wheel, then lock) and
-// normal scroll pages. Dwell long enough for each newly mounted scene to start
-// fetching, otherwise deep scenes' assets look like they do not exist.
-//
-// Adapted from careers-kimi-rebuild/legacy-mirror/_scripts/netcapture.mjs
-// (samsyninja had the same real-browser capture idea; storytellingnoomo
-// cross-checked with performance.getEntriesByType('resource'))
-//   -> shopifydesign-rebuild (--hosts allow-list replacing the same-origin
-//      filter, off-host census + under-observation warning, disk diff that
-//      knows the assets/<host>/ layout).
-//
-// 中文规格（自 scripts/README.md 迁入，v0.3.21；本表另一拼写：`netcapture.mjs`）
-// Each route gets a fresh CDP target. Unknown or empty viewport sets fail.
-// --hosts defines the observed asset hosts; unlisted hosts are reported.
-// --fetch downloads missing 200/206 resources with negotiated request headers
-// and appends both ledgers, preserving the full content type, profile and Vary.
-// A missing or corrupt manifest refuses fetching before any asset is written.
-// Each route gets a fresh CDP target. Unknown or empty viewport sets fail.
-// --hosts defines the observed asset hosts; unlisted hosts are reported.
-// --fetch downloads missing 200/206 resources with negotiated request headers
-// and appends both ledgers, preserving the full content type, profile and Vary.
-// A missing or corrupt manifest refuses fetching before any asset is written.
-// `node netcapture.mjs --origin https://example.com --hosts cdn.x.com --routes /,/about`
+// Wheel events and window.scrollTo cover different scrolling implementations.
+// Allow enough dwell time for newly mounted scenes to request their assets.
+// lib/ports.mjs verifies browser ownership; lib/chrome.mjs manages process groups.
+// Uses Node's built-in WebSocket. Adapted from careers-kimi and shopifydesign,
+// with related capture cases in samsyninja and storytellingnoomo.
+
 
 import fs from "node:fs/promises";
 import path from "node:path";
 import { assertOwnBrowser, chromeSentinel, resolvePort } from "./lib/ports.mjs";
 import { findChrome, launchChrome, preflightChrome } from "./lib/chrome.mjs";
-// The one CDP client (bounded calls, loud close) — lib/cdp.mjs.
+// The one CDP client (bounded calls, close-error handling) — lib/cdp.mjs.
 import { connectCdp, cdpUrlFor } from "./lib/cdp.mjs";
 // Shared, query-aware url -> local path. This pass keys its records by url+search
 // but used to resolve disk by pathname alone, so on a query-parameterised image
@@ -141,7 +95,7 @@ const VIEWPORT_DEFS = {
   desktop: { width: 1440, height: 900, mobile: false, deviceScaleFactor: 1 },
   mobile: { width: 390, height: 844, mobile: true, deviceScaleFactor: 2 },
 };
-// ⛔ AN UNRECOGNISED VIEWPORT USED TO BE DROPPED IN SILENCE. The selection was a
+//  AN UNRECOGNISED VIEWPORT USED TO BE DROPPED IN SILENCE. The selection was a
 // filter with no floor under it, so `--viewports mobil` (typo), `Mobile` (this
 // table is case-sensitive) or `desktop, mobile` (space after the comma) left an
 // EMPTY set, the capture loop below ran zero times, and the run still printed
@@ -196,7 +150,7 @@ const chrome = launchChrome({
     // capability-detection input: a site that tiers on the GPU name will read
     // "SwiftShader", drop to its low tier, and you are then capturing a
     // different program than the one you are rebuilding (determinism.md §2.9,
-    // environment-traps.md "快门速度"). For capture specifically the risk is
+    // environment-traps.md, capture timing). For capture specifically the risk is
     // narrow — a tier usually changes geometry/shader parameters, not which
     // files are fetched — but verify that on your target before relying on it,
     // because if the tier DOES switch asset variants your GAP=0 is measured
@@ -363,7 +317,7 @@ if (offHost.size) {
   for (const [h, n] of [...offHost].sort((a, b) => b[1] - a[1])) console.log(`  ${n}x ${h}`);
 }
 // A GAP=0 that was computed while most of the traffic went unobserved is worse
-// than no answer, because it reads as a pass. Say so, loudly, before the caller
+// than no answer, because it reads as a pass. Say so, explicitly, before the caller
 // records the number.
 if (offHostTotal && (offHostTotal >= rows.length || offHostTotal >= 10) && !HOSTS_FLAG.length) {
   const pct = Math.round((offHostTotal / (offHostTotal + rows.length)) * 100);
@@ -383,34 +337,31 @@ if (malformed.size) {
 
 const fetched = [];
 if (DO_FETCH && missing.length) {
-  // ⭐ ONE MIRROR, ONE LEDGER. This used to write bytes and no ledger row, with
+  //  ONE MIRROR, ONE LEDGER. This used to write bytes and no ledger row, with
   // a note recommending mirror-site.mjs --seeds instead. The note was correct
   // and it did not help: a run of --fetch left files that verify-mirror reports
   // forever as "nobody can name a URL for", and a second ledger that records
   // URLs without the PATHS they were written to cannot be reconciled against
   // disk at all. Measured on eightdesign: 324 files, every one of them fetched
-  // deliberately, none of them blessable by any gate.
+  // deliberately, none of which passes the file/ledger checks.
   //
-  // ⛔ A tool that can leave the artefact in a state no gate accepts is a
+  //  A tool that can leave the artefact in a state no gate accepts is a
   // footgun with a comment on it. Appending the row is fifteen lines.
-  // ⛔ The ledger must be READABLE before the first byte lands. Bytes that hit
+  //  The ledger must be READABLE before the first byte lands. Bytes that hit
   // disk with no row are off the books from that moment: the next capture sees
   // HAVE for every one of them and nothing ever ledgers them. So a --fetch into
-  // a mirror whose manifest cannot be read is refused up front, loudly, with
+  // a mirror whose manifest cannot be read is refused up front, explicitly, with
   // nothing written.
   await ledgerOrExit();
-  // Image URLs get the browser's own image Accept on the std rung, with the
-  // CDP-recorded type as the hint (lib/negotiate.mjs; basement D5: `accept: */*`
-  // lands the FALLBACK format on every `auto=format` CDN while every gate stays
-  // green). Same ladder mirror-site.mjs and reconcile-gaps.mjs climb — it is
-  // lib/negotiate.mjs `fetchLadder`, one implementation — so a row this pass
-  // writes is indistinguishable from a crawler row: profile and Vary on record.
-  // The bare rung is for header allergies (a CDN that 403s browser-shaped
-  // headers) and stays `*/*` on purpose.
+  // Use the browser image Accept header on the standard profile. In basement D5,
+  // a generic Accept header selected fallback formats on an auto=format CDN.
+  // fetchLadder shares the crawler's profiles and records the selected profile
+  // and Vary metadata. The minimal retry profile retains Accept: */* for servers
+  // that reject the browser header set.
   console.log("\nfetching gaps... (bytes AND ledger rows)");
   for (const m of missing) {
     // m.path is an absolute URL (records are keyed by host + path).
-    // ⛔ PER-URL TOLERANCE + PERIODIC LEDGERING. The first version had neither:
+    //  PER-URL TOLERANCE + PERIODIC LEDGERING. The first version had neither:
     // one thrown fetch (DNS, TLS, reset) aborted the WHOLE loop before
     // appendLedger ever ran, stranding every file already written as
     // off-the-books state — the exact condition appendLedger's own comment
@@ -428,7 +379,7 @@ if (DO_FETCH && missing.length) {
     const body = Buffer.from(await res.arrayBuffer());
     await fs.mkdir(path.dirname(out), { recursive: true });
     await fs.writeFile(out, body);
-    // ⭐ Carry the DECLARED TYPE into the ledger. serve.mjs answers extensionless
+    //  Carry the DECLARED TYPE into the ledger. serve.mjs answers extensionless
     // paths (Nuxt server routes) with the manifest's recorded type; a row
     // without one gets extension-guessed into text/html, and ofetch — which
     // parses by content-type — hands the app a string where it awaited JSON.
@@ -442,25 +393,13 @@ if (DO_FETCH && missing.length) {
 }
 
 /**
- * Append what --fetch landed to the mirror's ledgers — BOTH of them, in their
- * formats: mirror-manifest.json (url -> {path, bytes, sha256, type}) and
- * inventory.tsv (SHA256 / BYTES / PATH / URL). Rows already recorded are left
- * alone: a full crawl's row describes the same bytes and has no less provenance
- * than this pass does.
+ * Record fetched files in both mirror-manifest.json and inventory.tsv. The
+ * manifest maps URLs to path, bytes, SHA-256 and response type; the inventory
+ * stores SHA256, BYTES, PATH and URL columns. Existing entries are retained.
  *
- * ⛔ BOTH, NOT ONE — the comment above promised "one mirror, one ledger" and
- * this function used to write the inventory row only, which left the artefact in
- * precisely the state that comment says a tool must not leave it in.
- * mirror-manifest.json is THE ledger as far as verify-mirror.mjs is concerned,
- * so every --fetch'd file came back through the gate TWICE RED: once from the
- * coverage check (a file on disk "nobody can name a URL for") and once from the
- * inventory cross-check (a row "not in mirror-manifest.json"). Two failing gates
- * per fetched file, from a run whose whole purpose was closing the gap.
- * ⛔ And it does not merely stay red: any later mirror-site run REWRITES both
- * ledgers from the manifest, so a row that only ever reached inventory.tsv is
- * silently dropped again — the gap closes, then reopens with nothing to show it.
- * ⭐ Half a ledger is not a ledger, and the half that was missing was the half
- * every gate reads.
+ * An inventory-only update leaves files absent from the verifier's manifest
+ * and loses those inventory rows when a later crawl rewrites both records.
+ * Updating both formats keeps supplementary capture consistent with the crawl.
  */
 async function appendLedger(rows) {
   if (!rows.length) return;
@@ -471,7 +410,7 @@ async function appendLedger(rows) {
   // mirror-site run rewrites both ledgers from the manifest, so rows that only
   // ever reached inventory.tsv are silently dropped again.
   //
-  // ⛔ MANIFEST FIRST, INVENTORY SECOND, and a manifest that cannot be read is
+  //  MANIFEST FIRST, INVENTORY SECOND, and a manifest that cannot be read is
   // FATAL before inventory.tsv is touched — so the two ledgers can never
   // disagree about one batch (both carry its rows, or neither does). This was a
   // bare `catch {}`: a missing or corrupt manifest silently skipped the write
@@ -494,7 +433,7 @@ async function appendLedger(rows) {
   console.log(`  ledger — ${add.length} row(s) appended to ${path.relative(process.cwd(), path.join(ROOT, INVENTORY_FILE))}`);
 }
 
-/** The mirror's ledger, or a loud exit — never a silent skip (see appendLedger). */
+/** The mirror's ledger, or an explicit error exit — never a silent skip (see appendLedger). */
 async function ledgerOrExit() {
   let mf = null, why = "";
   // lib/ledger.mjs: null when the file is absent, throws when it exists but is

@@ -1,25 +1,14 @@
 /**
- * lib/ledger.mjs — the mirror's three ledgers, read and written in ONE place.
+ * Read and write the mirror's shared bookkeeping formats.
  *
- *   mirror-manifest.json   { origin, mirroredAt, files: { [url]: { path, bytes, sha256, type?, profile?, vary?, error? } } }
- *   inventory.tsv          SHA256 \t BYTES \t PATH \t URL   (one row per file on disk, sorted by path)
- *   redirects.tsv          CODE \t FROM \t TO               (source behaviour, replayed by serve.mjs; column
- *                                                            order is what serve's reader destructures — a
- *                                                            FROM-first ledger silently replays nothing)
+ * mirror-manifest.json: origin, mirroredAt and URL-keyed file records containing
+ * path, bytes, sha256 and optional response metadata.
+ * inventory.tsv: SHA256, BYTES, PATH, URL, sorted by local path.
+ * redirects.tsv: CODE, FROM, TO, in the order consumed by serve.mjs.
  *
- * Four scripts wrote these files (mirror-site, netcapture, reconcile-gaps,
- * wayback-mirror) and six read them, each with its own TSV formatter and parser.
- * They agreed by luck. A ledger is the mirror's contract with every gate; the
- * spelling of a row is not a per-script decision (verification-gates.md §2.1.1).
- *
- * Ledger files are BOOKKEEPING, not mirror content: the coverage check and the
- * closure gate must skip them, make-standalone must not ship them. LEDGER_FILES
- * is that list, once — verify-mirror and make-standalone used to carry their own
- * and they had drifted.
- *
- * 中文规格（自 scripts/README.md 迁入，v0.3.21；本表另一拼写：`lib/ledger.mjs`）
- * **镜像三本账的唯一读写实现**：manifest / inventory.tsv / redirects.tsv 的格式、排序、去重、追加，`writeLedgers` 一次写三本；`LEDGER_FILES` + `isBookkeeping` 是"哪些文件不是镜像"的唯一清单（此前 verify-mirror 与 make-standalone 各存一份且已漂移）
- * `import { readManifest, writeLedgers, appendInventory, isBookkeeping } from "./lib/ledger.mjs"`
+ * LEDGER_FILES and TOOL_DIRS distinguish metadata from captured content. Writers
+ * must keep the manifest and inventory consistent; shared serialization does
+ * not make separate writes transactional.
  */
 import { readFile, writeFile, mkdir } from "node:fs/promises";
 import path from "node:path";

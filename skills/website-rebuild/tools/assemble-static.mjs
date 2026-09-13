@@ -1,18 +1,11 @@
 #!/usr/bin/env node
-// assemble-static.mjs — 把 `next build` 的静态预渲染产物摊成 serve.mjs 能伺服的静态树，
-// 让像素门的两侧**同经 serve.mjs**（darkroom 实撞入库，v0.3.12）。
-//
-// 为什么存在：serve.mjs 只对自己伺服的 HTML 注入 probe-shim（`?__probe` 冻结时钟）；
-// 重建侧若直接跑 `next start`，它那一侧不冻结——镜像帧 BLANK / 重建帧有画，自比带宽
-// 不可比，跨侧差异全是"冻结不对称"制造的。把 `.next/server/app/**.html` 摊成
-// `<route>/index.html`、`_next/static` 与 `public/*` 软链进去，两侧就都是 serve.mjs
-// 伺服的静态树，同一份 shim、同一个 t。
-//
-//   node tools/assemble-static.mjs [--app rebuild/.next/server/app] [--static rebuild/.next/static]
-//        [--public rebuild/public] [--out rebuild/static-site]
-//
-// ⚠ 只供对拍：软导航的 `?_rsc=` 载荷不在此树（next start 拓扑才有），sweep 仍跑 next start。
-// ⚠ 文件约定的图标/OG 图由 Next 在运行时按路由生成，静态树里没有；像素门不依赖它们。
+/**
+ * Assemble Next prerendered HTML into a tree served by serve.mjs.
+ * Links _next/static and public assets. This permits the same probe injection on
+ * both comparison sides. It does not include runtime RSC navigation responses or
+ * all generated icon/OG routes, so test those against the application server.
+ * The darkroom case exposed asymmetric freezing when one side used next start.
+ */
 import { mkdir, readdir, symlink, copyFile, rm } from "node:fs/promises";
 import path from "node:path";
 import { cli } from "../scripts/lib/cli.mjs";

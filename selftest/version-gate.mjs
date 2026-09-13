@@ -21,7 +21,7 @@ const read = (...p) => readFileSync(path.join(ROOT, ...p), "utf8");
 
 const argv = process.argv.slice(2);
 if (argv.length > 1 || argv.some((a) => a.startsWith("-"))) {
-  console.error("⛔ usage: node selftest/version-gate.mjs [vX.Y.Z]");
+  console.error(" usage: node selftest/version-gate.mjs [vX.Y.Z]");
   process.exit(2);
 }
 
@@ -37,11 +37,11 @@ let bad = 0;
 for (const [where, got] of sources) {
   const ok = got === expected && got !== undefined;
   if (!ok) bad++;
-  console.log(`${ok ? "✅" : "❌"} ${String(got ?? "(not found)").padEnd(10)} ${where}`);
+  console.log(`${ok ? "PASS" : "FAIL"} ${String(got ?? "(not found)").padEnd(10)} ${where}`);
 }
 
 if (bad) {
-  console.error(`\n⛔ version drift: ${bad} of ${sources.length} disagree with \`${expected}\` (${sources[0][0]}).`);
+  console.error(`\n version drift: ${bad} of ${sources.length} disagree with \`${expected}\` (${sources[0][0]}).`);
   process.exit(1);
 }
-console.log(`\n✅ version ${expected} agrees across ${sources.length} sources.`);
+console.log(`\nPASS version ${expected} agrees across ${sources.length} sources.`);

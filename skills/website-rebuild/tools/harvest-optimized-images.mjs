@@ -1,12 +1,12 @@
 #!/usr/bin/env node
-// harvest-optimized-images.mjs — 把重建静态树（像素门的 REBUILD 侧）缺的 next/image 优化产物补齐
-// （darkroom 实战入库，v0.3.13；rsc-reconstruction.md §3.5）。
-// 为什么：镜像侧持有 Vercel 优化器的输出（w=1440 等变体），重建静态树没有优化器，serve.mjs 回落到
-// 原图——两侧源分辨率不同，浏览器重采样差就是 0.2 级的像素残差。
-// 做法：枚举静态树 HTML 里全部 `/_next/image?url=…&w=…&q=…`（src + srcset 全档），**镜像字节优先**
-// （同 url+w+q，忽略 Vercel 的 dpl 部署 id——源站发了什么才是参照），镜像没有的档位才向本机
-// `next start` 的优化器取（登记：这些档位是重建侧生成物），按 lib/urlpath 的查询变体命名落进静态树。
-//   node tools/harvest-optimized-images.mjs [--base http://127.0.0.1:3311] [--site rebuild/static-site] [--mirror mirror]
+/**
+ * Populate a static tree with referenced Next image-optimizer variants.
+ * Prefer matching mirror bytes by URL/width/quality, ignoring deployment IDs.
+ * Missing variants are fetched from the configured local Next optimizer and must
+ * be recorded as generated output. Paths use lib/urlpath query mapping.
+ * In darkroom, falling back to originals instead of optimizer outputs produced
+ * approximately 0.2 units of pixel difference through browser resampling.
+ */
 import { readFile, writeFile, mkdir, readdir } from "node:fs/promises";
 import { join, dirname } from "node:path";
 import { localRelPath, loadPolicy } from "../scripts/lib/urlpath.mjs";
@@ -30,7 +30,7 @@ for await (const f of htmls(SITE)) {
   for (const m of t.matchAll(/\/_next\/image\?url=[^"'\s,]+/g)) urls.add(m[0]);
 }
 console.log(`optimized image refs: ${urls.size}`);
-// 镜像账本必须在（lib/ledger.mjs：缺文件 -> null；坏文件 -> 抛）——没有账本就没有"镜像字节优先"可言。
+// Mirror-first selection requires a readable manifest; a missing or malformed one is an error.
 const mf = await readManifest(MIRROR);
 if (!mf) { console.error(`FATAL: no mirror-manifest.json under ${MIRROR}`); process.exit(1); }
 const manifest = mf.files;

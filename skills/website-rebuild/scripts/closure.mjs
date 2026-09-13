@@ -2,22 +2,18 @@
 /**
  * closure.mjs — transitive dependency closure of a set of seed modules.
  *
- * ⛔ An unknown seed id is FATAL, not skipped. Silently filtering ids the map
+ *  An unknown seed id is FATAL, not skipped. Silently filtering ids the map
  * does not know turns a typo into a smaller-but-plausible slice: the closure
  * still prints a sensible module count, the slicer still succeeds, and the
  * failure surfaces much later as `Cannot read properties of undefined` at run
  * time. Measured — an id transcribed from a TRUNCATED diagnostic line
  * (`048cb669e0` for `048cb669e0708ebf9629`) was dropped without a word.
  *
- * ⚠ Which is also why the tools print full ids now. A diagnostic that truncates
+ *  Which is also why the tools print full ids now. A diagnostic that truncates
  * an identifier invites it to be copied back in truncated.
  *
  *   node scripts/closure.mjs --seed <id>[,<id>...] [--map docs/module-map.json] [--out docs/slice-closure.json]
  *
- * 中文规格（自 scripts/README.md 迁入，v0.3.21；本表另一拼写：`closure.mjs`）
- * 从种子模块算**传递依赖闭包**，是竖切边界的唯一依据。⛔ **未知种子 ID 一律 FATAL** 并给出 did-you-mean——静默丢弃会产出一个“小一号但看似合理”的切片，失败推迟到运行时
- * 从种子模块算传递依赖闭包，竖切边界的唯一依据。⛔ 未知种子 ID 一律 FATAL + did-you-mean
- * `node scripts/closure.mjs --seed <id>`
  */
 import { readFile, writeFile, mkdir } from "node:fs/promises";
 import path from "node:path";
@@ -33,14 +29,14 @@ const seed = (flag("seed", "") || "").split(",").map((s) => s.trim()).filter(Boo
 if (!seed.length) { console.error("usage: closure.mjs --seed <id>[,<id>...]"); process.exit(2); }
 
 const map = JSON.parse(await readFile(MAP, "utf8"));
-// ⚠ Ids are not always strings: an array-style webpack container gives numeric
+//  Ids are not always strings: an array-style webpack container gives numeric
 // indices, and the object-style one gives hashes. Normalise before comparing,
 // or `id.startsWith` throws on the first numeric id it meets.
 const idOf = (m) => String(m.id);
 const byId = new Map(map.modules.map((m) => [idOf(m), m]));
-// ⛔ Aliases resolve too: a factory can answer to several ids (dedup runs) and to
+//  Aliases resolve too: a factory can answer to several ids (dedup runs) and to
 // scope-hoisted sub-module ids (ctx.s(…, subId)). A require of ANY of them must
-// land on the owning module, or the closure reports phantom missing ids.
+// land on the owning module, or the closure reports spurious missing ids.
 for (const m of map.modules) for (const a of m.aliases || []) if (!byId.has(String(a))) byId.set(String(a), m);
 
 const unknownSeeds = seed.filter((id) => !byId.has(id));
@@ -64,7 +60,7 @@ while (q.length) {
   for (const r of m.requires) { const rid = String(r); if (!seen.has(rid)) q.push(rid); }
 }
 const missing = [...seen].filter((id) => !byId.has(id));
-// ⛔ Dedup through aliases before counting. Several requested ids can resolve to
+//  Dedup through aliases before counting. Several requested ids can resolve to
 // ONE owning module (dedup runs, scope-hoisted sub-ids); counting per requested
 // id triples both the module count and the line total, and the slicer would cut
 // the same body once per alias. The closure's output is OWNING ids only.
@@ -86,13 +82,13 @@ if (missing.length) {
 }
 console.log(`  ok   closed — every require resolves inside the set`);
 
-// ⭐ CLOSED IS NOT THE SAME AS COMPLETE. `requires` is closed over this map by
+//  CLOSED IS NOT THE SAME AS COMPLETE. `requires` is closed over this map by
 // construction (module-map.mjs files an id it cannot resolve under
 // `externalRequires` instead), so the assertion above can only ever speak
 // about edges that stay inside the file. The edges that LEAVE it are the ones a
 // port trips over — the runtime throws "module N … the module factory is not
 // available" at evaluation time, from a slice that checked byte-identical.
-// ⚠ Not a failure: a chunk depending on another chunk is normal, and the mirror
+//  Not a failure: a chunk depending on another chunk is normal, and the mirror
 // serves the other chunk verbatim. It is only a failure once someone ports this
 // slice standalone, which is why it prints here rather than deciding the exit
 // code.
@@ -105,7 +101,7 @@ console.log(`  ok   closed — every require resolves inside the set`);
     }
   }
   if (outbound.size) {
-    console.log(`\n  ⚠    ${outbound.size} require target(s) in this closure live in ANOTHER chunk:`);
+    console.log(`\n      ${outbound.size} require target(s) in this closure live in ANOTHER chunk:`);
     for (const [t, from] of [...outbound].slice(0, 12)) {
       console.log(`         ${t}   <- ${from.slice(0, 4).join(", ")}${from.length > 4 ? ` … +${from.length - 4}` : ""}`);
     }

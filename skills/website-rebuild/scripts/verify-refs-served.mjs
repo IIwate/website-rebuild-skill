@@ -3,22 +3,18 @@
  * verify-refs-served.mjs — every asset reference in the built site must be
  * ANSWERED BY THE SERVER.
  *
- * ⭐ Asks the server, not a reimplementation of it. An offline check that walks
+ *  Asks the server, not a reimplementation of it. An offline check that walks
  * the mirror by hand is a second copy of url->path resolution, and a second
  * copy is a disagreement waiting to be reported as a hole — measured here: it
  * called 28 present images missing because it did not know the server's
  * query-variant fallback.
  *
- * ⚠ This is cheap on purpose: one HEAD per distinct reference, no browser. It
+ *  This is cheap on purpose: one HEAD per distinct reference, no browser. It
  * cannot see a URL assembled at runtime; that is the resource-level probe's job
  * (verification-gates.md §1.6 class 4).
  *
  *   node scripts/verify-refs-served.mjs --base http://127.0.0.1:6376 --dir site [--allow mirror/external.txt]
  *
- * 中文规格（自 scripts/README.md 迁入，v0.3.21；本表另一拼写：`verify-refs-served.mjs`）
- * **引用可达门**:把产出字节里的每一条资源引用**逐条问服务器**(一次 GET,不开浏览器)。⭐ 关键在于**问服务器,而不是再实现一遍它的解析**——一个自己走镜像的离线检查就是第二份 url→path 实现,而第二份实现就是一次等着被报成窟窿的分歧(实测它把 28 张在场的图报成缺失,只因不知道服务器的查询变体回退)。⚠ 它看不见运行时拼出来的 URL,那是资源级探针的活(§1.6 class 4)
- * **引用可达门**：产出字节里每条资产引用逐条**向真服务器请求**（GET + Range 0-0）。⭐ 问服务器，不重实现它——离线走盘的检查是 url→path 的第二份实现，第二份实现就是一个待报的假洞。`--allow` 消费与镜像门同一份 `external.txt`（源站自身 404 的引用是登记的偏差，不是要发明文件补的洞）
- * `node verify-refs-served.mjs --base http://127.0.0.1:<port> --allow mirror/external.txt`
  */
 import { existsSync, readFileSync } from "node:fs";
 import { readdir, readFile } from "node:fs/promises";
@@ -63,7 +59,7 @@ for (const f of files) {
   t = joinFlightPushes(t) ?? t;
   const dec = decodeUrlEscapes(decodeEntities(t));
   for (const src of [t, dec]) {
-    // ⚠ ")" allowed, trimmed only when unbalanced — a filename really can be
+    //  ")" allowed, trimmed only when unbalanced — a filename really can be
     // "… (1).jpg", and excluding ")" outright truncates the reference into one
     // the server rightly cannot answer. Same trap as lib/extract-refs.mjs.
     for (const m of src.matchAll(/\/_next\/image\?[^"'\\\s<>]+/g)) {
@@ -71,14 +67,14 @@ for (const f of files) {
       while (r.endsWith(")") && (r.match(/\(/g) || []).length < (r.match(/\)/g) || []).length) r = r.slice(0, -1);
       refs.add(r);
     }
-    // ⛔ DECODE THE CAPTURE, NOT JUST THE HAYSTACK. Scanning the raw text and
+    //  DECODE THE CAPTURE, NOT JUST THE HAYSTACK. Scanning the raw text and
     // the decoded text and unioning the two is right for a CLOSURE scan, where
     // a superset costs one redundant lookup. Here every member of the set
     // becomes a VERDICT, so the raw pass's spelling of a query separator —
     // `&amp;w=700`, which in HTML means `&w=700` and nothing else — is asked of
     // the server as if it were an address, 404s, and is reported as a missing
     // asset that is sitting right there. Measured on artisansdidees: 44 such
-    // rows, every file present. That is the phantom-reference failure this
+    // rows, every file present. That is the spurious-reference failure this
     // toolchain has now met three times, in a gate added to close it.
     for (const m of src.matchAll(/"(\/[\w./~@%+-]+\.(?:lottie|json|mp4|webm|ktx2|wasm|glb|hdr|bin|png|jpe?g|gif|svg|webp|avif|woff2?|css|js)(?:\?[^"]*)?)"/gi)) refs.add(decodeEntities(m[1]));
   }

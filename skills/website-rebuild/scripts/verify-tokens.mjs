@@ -1,16 +1,18 @@
 #!/usr/bin/env node
-// verify-tokens.mjs — token 流等价门：排版/再发射件 ≟ 源站原件，逐 token（类型+值）相等，
-// 忽略空白与位置。acorn@8.14.0 钉死（lib/tokens.mjs），不 import 任何生产者。
-//
-//   node verify-tokens.mjs <original.js> <emitted.js>
-//   node verify-tokens.mjs --pairs pairs.tsv        # 每行: ORIGINAL <tab> EMITTED [<tab> TAG]
-//
-// 为什么存在（14islands F4）：js-beautify 会改变嵌套模板字面量的内容，而以排版字节
-// 交付的路线上，像素门/CLEAN/probe 全部照绿——只有 token 流看得见。任一对不等即 FAIL，
-// 打印首个分歧 token 的序号与两侧值。⛔ 退出码不许经过管道 tail（F10）。
-//
-// 中文规格（自 scripts/README.md 迁入，v0.3.21）
-// **token 流等价门**：排版/再发射件 ≟ 源站原件逐 token（类型+值）相等，空白/位置无关（`lib/tokens.mjs`，acorn 钉死）。凡以 `_pretty` 字节交付（再发射、切片拼接）必跑——像素/CLEAN/probe 对模板字面量内容改变全部失明（14islands：748,409 vs 748,398）
+/**
+ * Compare JavaScript token types and values using Acorn 8.14.0.
+ * Whitespace and source positions are excluded. This detects changed literals,
+ * including regular expressions, but does not prove equivalent ASI or behavior.
+ * The 14islands formatter changed a nested template while sampled visual and
+ * loading checks passed. This check reports the first token difference.
+ * Offline use requires the pinned Acorn package in the npm cache.
+ *
+ *   node scripts/verify-tokens.mjs <original.js> <emitted.js>
+ *   node scripts/verify-tokens.mjs --pairs pairs.tsv
+ *
+ * TSV columns: ORIGINAL, EMITTED, optional TAG. Preserve this command's exit code.
+ */
+
 import { readFileSync } from "node:fs";
 import { tokenStream, firstDivergence, showToken, ACORN_VERSION } from "./lib/tokens.mjs";
 import { cli } from "./lib/cli.mjs";

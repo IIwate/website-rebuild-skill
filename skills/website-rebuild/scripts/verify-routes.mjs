@@ -18,10 +18,7 @@
 // sections of the original (assetPrefix assertion, locale-spelling quirks) were
 // dropped; append per-project quirk checks at the bottom as needed.
 //
-// 中文规格（自 scripts/README.md 迁入，v0.3.21；本表另一拼写：`verify-routes.mjs`）
-// 路由/重定向/状态码契约门
-// 路由/重定向/head 契约门：head+`<main>` 全属性逐字段对镜像比、重定向断言状态码本身。`CONFIG.server` 起的被测服务走 `lib/chrome.mjs` 的 `spawnReaped`（进程组 + 全退出路径收割）——`npm run dev` 之类是启动器，`server.kill()` 只杀启动器、真正的服务继续占着端口
-// 编辑文件顶部 CONFIG 后 `node verify-routes.mjs`
+
 
 import fs from "node:fs/promises";
 import path from "node:path";
@@ -36,7 +33,7 @@ import { spawnReaped } from "./lib/chrome.mjs";
 import { cli } from "./lib/cli.mjs";
 
 // No flags: everything this gate asserts lives in CONFIG below. cli() still
-// runs so --help works and a stray --flag fails loudly instead of being ignored.
+// runs so --help works and a stray --flag fails explicitly instead of being ignored.
 cli({ known: [], file: import.meta.url });
 
 // ---------------------------------------------------------------------------

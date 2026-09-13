@@ -1,17 +1,17 @@
 #!/usr/bin/env node
-// sourcify-chunk.mjs — 多 chunk 站的 M(n+1) 驱动（darkroom 实战入库，v0.3.13）。
-// name-modules / modules-to-src / verify-module-map 三件套按【单文件 map】工作；多 chunk 站
-// 用 merged map（tools/merge-module-maps.mjs 的 locations[]）。做法：模块以其 canonical location
-// 归属 chunk，按 chunk 切闭包，逐 chunk 用 <modules-dir>/<chunk>.json 跑三件套 + 接受步，
-// 产物落 <out-root>/<chunk>/。⛔ 子闭包的 id 与 map 同型（字符串）——数字 id 整批"not in map"。
-//   node tools/sourcify-chunk.mjs <chunk> [--closure docs/app-closure.json] [--merged docs/module-map.json]
-//        [--modules-dir docs/modules] [--out-root src-modules] [--work docs/sourcify] [--max-tier 1]
+/**
+ * Run module naming, acceptance, extraction and checking per chunk.
+ * Input is a merged module map with canonical locations. Split the closure by
+ * chunk, use each <modules-dir>/<chunk>.json map, and write <out-root>/<chunk>/.
+ * Keep module-ID types consistent with the maps. The merged-map producer is
+ * project-specific and is not bundled here. Based on the darkroom workflow.
+ */
 import { readFile, writeFile, mkdir } from "node:fs/promises";
 import { execFileSync } from "node:child_process";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { cli } from "../scripts/lib/cli.mjs";
-// ⚠ closure/max-tier feed the spawned name-modules / accept-names / modules-to-src; the rest are this driver's own.
+//  closure/max-tier feed the spawned name-modules / accept-names / modules-to-src; the rest are this driver's own.
 cli({ known: ["closure", "merged", "modules-dir", "out-root", "work", "max-tier"], file: import.meta.url, positional: "<chunk>" });
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const chunk = process.argv[2];

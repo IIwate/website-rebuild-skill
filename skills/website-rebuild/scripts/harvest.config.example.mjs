@@ -5,13 +5,13 @@
  * The mirror exposes no module registry, but the engine stashes a back
  * reference on every scroll-group element: `el._animInfo` holds
  * {isGroup, group, controller, controllers, tweenProps}. That is the seam.
- * ⭐ It was found by listing own properties of a group element — worth doing
+ *  It was found by listing own properties of a group element — worth doing
  * before concluding a subsystem has no seam, which is what I had concluded.
  */
 
 export const name = "keyframes via el._animInfo";
 
-// ⛔ Drive with real scroll, not by writing progress. The engine reads
+//  Drive with real scroll, not by writing progress. The engine reads
 // `pageMetrics.scrollY`, and only its own scroll handler writes that — setting
 // a progress value directly tests a path the page never takes.
 export function states(steps) {
@@ -23,17 +23,17 @@ export function states(steps) {
   return out;
 }
 
-// ⚠ RESOLVED numbers only. `start`/`end` here are what the expression parser
+//  RESOLVED numbers only. `start`/`end` here are what the expression parser
 // computed, not the expression text — so the port can be fed the same numbers
 // without re-deriving them, and a parser difference shows up as its own gate
 // (verify-crossside) rather than contaminating this one.
-// ⛔ Do not identify an easing curve by its name. On this bundle every
+//  Do not identify an easing curve by its name. On this bundle every
 // `easeFunction.name` is the empty string — they are anonymous function
 // expressions — and a gate that grouped by name would put 342 samples into one
 // bucket called "". Naming is also how the earlier hand-written suite failed:
 // it set a field it believed named the curve, and every case ran the same one.
 //
-// ⭐ Identify a curve by EVALUATING it. Sampled at fixed points, the values ARE
+//  Identify a curve by EVALUATING it. Sampled at fixed points, the values ARE
 // the curve's identity, they are condition-independent, and the port has to
 // reproduce them without either side agreeing on a name.
 const CURVE_TS = [0, 0.1, 0.25, 0.4, 0.5, 0.6, 0.75, 0.9, 1];
@@ -46,7 +46,7 @@ export function collect() {
       try { return CURVE_TS.map(t => { const v = fn(t); return typeof v === "number" && isFinite(v) ? +v.toFixed(9) : null; }); }
       catch (e) { return "ERR:" + String(e).slice(0, 40); }
     };
-    // ⛔ Do not enumerate by the declarative attribute. [data-anim-scroll-group]
+    //  Do not enumerate by the declarative attribute. [data-anim-scroll-group]
     // NAMES the concept, but it is not the index: the engine marks every
     // participating element with an _animInfo expando, groups and items alike.
     // Querying by the attribute reached 17 elements and 38 keyframes on ONE
@@ -96,7 +96,7 @@ export function summarize(s) {
 }
 
 // --- the B side --------------------------------------------------------------
-// ⭐ The source's easing functions are anonymous, so they can only be compared
+//  The source's easing functions are anonymous, so they can only be compared
 // by behaviour. Matching fingerprints also RECOVERS THE NAMES: the port's module
 // exports its curves under readable keys, so a match tells you which named curve
 // the page was actually running — something the page itself cannot tell you.

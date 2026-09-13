@@ -1,41 +1,23 @@
 #!/usr/bin/env node
 /**
- * cold-audit-decls.mjs — M(n) cold-head roll-call for FLAT (scope-hoisted) bundles.
+ * Audit top-level declarations in configured regions of a flat bundle.
  *
- * cold-audit-modules.mjs does the roll-call when the packer left module
- * boundaries in the file (webpack / Turbopack containers). A Vite / esbuild /
- * Rollup scope-hoisted bundle has none: the whole site is one scope, and the
- * unit of "did we port it" is the TOP-LEVEL DECLARATION — every `class X`,
- * `function X`, and every binding of a depth-0 `const|let|var` chain. This gate
- * lists those, restricts them to the application regions (vendor regions are
- * npm replacements, registered as such), and asks of each one: where did it
- * land in the port?
+ * Module containers use cold-audit-modules.mjs. This script scans declarations
+ * in a shared top-level scope and reports their source citations or overrides:
+ *   cited: a port comment names a source range containing the declaration;
+ *   override: an explicit collapsed, omitted or ported record covers it;
+ *   named: a comment contains the original identifier, without enough evidence
+ *          to count it as covered;
+ *   UNKNOWN: neither a citation nor an override covers it; exit 1.
  *
- * Verdict per declaration, in order of strength:
- *   cited     a port file cites a `_pretty` line range that CONTAINS the
- *             declaration's line (`pretty L63486-L63732`, `@L60584`,
- *             `L30456-64` short-suffix form) — the port's own coordinate system
- *   override  registered in --overrides: `collapsed` (npm / library replaces it),
- *             `omitted` (registered dead code / not ported, with the reason),
- *             `ported` (a human verdict for a declaration the citation scan
- *             cannot see, with the file it lives in)
- *   named     the compressed name survives as a marker in a port COMMENT
- *             (`// Xx0`) — weak, listed for a human, never a pass by itself
- *   UNKNOWN   none of the above → exit 1. This is the roll-call's whole point:
- *             a function test cannot see a missing block; only a list can
- *             (gate-case-design.md §3). It reports `n/N examined` because a
- *             check that does not say how much it looked at is silent, not green
- *             (§0.24.0).
+ * A citation establishes recorded coverage, not equivalent implementation.
+ * The samsyninja review found a missing editor raycast-box factory after reading
+ * 60 classes. Region counts make the scope of that review reproducible.
  *
- * Why a scan and not a person: the samsyninja M11.1 cold review checked 60
- * top-level classes of one region by hand and found a real gap (the editor
- * raycast-box factory). It never wrote down which OTHER regions it had read,
- * so nobody can rerun it. This is that review as a script, over every region.
- *
- *   node cold-audit-decls.mjs --pretty mirror/_pretty/main.pretty.js \
- *        --ranges 34-42,30432-30669,59956-70561 --port port \
- *        [--overrides docs/cold-audit-overrides.json] [--json docs/cold-audit.json]
- *        [--min-name 3] [--cite-tag pretty] [--slack 1]
+ * node cold-audit-decls.mjs --pretty mirror/_pretty/main.pretty.js \
+ *       --ranges 34-42,30432-30669,59956-70561 --port port \
+ *       [--overrides docs/cold-audit-overrides.json] [--json docs/cold-audit.json]
+ *       [--min-name 3] [--cite-tag pretty] [--slack 1]
  *
  * --slack N: a citation range may miss a declaration by N lines (a header that
  * cites `L60740-L60843` for a block whose singleton `t3 = new m80` sits on
@@ -47,9 +29,9 @@
  * an English "On" or "Be" in prose cannot vouch for a declaration.
  *
  * Overrides file shape:
- *   { "ranges": [ { "from": 46397, "to": 47023, "bucket": "collapsed", "reason": "…",
- *                   "match": "= \\{\\s*\\n\\s*(class|ref|key):" } ],
- *     "decls":  [ { "name": "Ka0", "line": 47265, "bucket": "omitted", "reason": "…" } ] }
+ *  { "ranges": [ { "from": 46397, "to": 47023, "bucket": "collapsed", "reason": "…",
+ *                  "match": "= \\{\\s*\\n\\s*(class|ref|key):" } ],
+ *    "decls":  [ { "name": "Ka0", "line": 47265, "bucket": "omitted", "reason": "…" } ] }
  * A range override with `match` applies only to declarations whose source line
  * (plus the next line) matches the regex — the way to register "the compiled
  * template's hoisted vnode-prop literals in this component region" without
@@ -58,13 +40,7 @@
  * override that names a declaration the scan cannot find is FATAL — a silently
  * inert override looks exactly like one that worked (readable-source.md §3.0.1.2).
  *
- * Zero-dependency: the tokenizer is a version-pinned `npx acorn` spawn
- * (lib/tokens.mjs's rule: parse on a token stream, never on text — F27).
- *
- * 中文规格（自 scripts/README.md 迁入，v0.3.21；本表另一拼写：`cold-audit-decls.mjs`）
- * **M(n) 冷头点名（扁平 scope-hoisted 产物）**：Vite/esbuild/Rollup 产物没有模块容器，点名单位是**深度 0 声明**（class / function / const-let-var 链的每个绑定，含解构）。在 token 流上列出、限定到应用区间，逐条问"落在 port 哪里"：**cited**（port 注释引用的 `pretty L…` 区间含它，`--slack 1` 容忍头注释差一行）> **override**（`collapsed` npm/addon/编译器产物顶替、`omitted` 登记死代码、`ported` 人工裁决；范围级可带 `match` 正则只收编译期常量）> **named**（压缩名出现在带引用的注释里，仅供人读）> **UNKNOWN**（退出 1）。⛔ 报出 `n/N examined`（§0.24.0）；⛔ override 点名扫描找不到的声明即 FATAL（静默无效的登记和生效了一模一样）。
- * **冷头点名（M(n) 关账，扁平产物）**：scope-hoisted bundle 没有模块边界，点名单位是深度 0 声明。逐条判 cited / override(collapsed·omitted·ported) / named / UNKNOWN，报 `n/N examined`；范围 override 可带 `match` 只收编译期常量；找不到的 override 即 FATAL。手写移植 + 冻结快照当 port/ 的形态里，它就是 mirror→port 那一段唯一的机器裁判
- * `node cold-audit-decls.mjs --pretty mirror/_pretty/main.pretty.js --ranges a-b,… --port src [--overrides docs/cold-audit-overrides.json] [--slack 1]`
+ * Tokenization invokes pinned Acorn through npx. Offline use requires a cache.
  */
 import { spawnSync } from "node:child_process";
 import { existsSync, readdirSync, readFileSync, writeFileSync } from "node:fs";

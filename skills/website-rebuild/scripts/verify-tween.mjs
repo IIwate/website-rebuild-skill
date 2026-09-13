@@ -1,33 +1,16 @@
 #!/usr/bin/env node
 /**
- * verify-tween.mjs — a NUMERIC gate for the tween slice.
+ * Compare tween outputs for identical keyframe specifications and positions.
+ * Cases cover linear/eased curves, clamping, multivalue attributes and disabling.
+ * Reports numeric differences with the inputs that produced them; the comparison
+ * covers these sampled cases rather than all page animation behavior.
  *
- * Pixel comparison judges a finished page. It cannot judge this slice: it needs
- * the whole page built, it answers late, and a wrong easing curve arrives as a
- * few differing grid cells rather than as a number you can read.
+ * Both sides receive the same explicit range overrides. This isolates tween
+ * interpolation from layout-dependent range resolution. Range calculation itself
+ * needs a separate check with the relevant page layout (REBUILD_PLAN section 6 D6).
  *
- * So the slice gets its own gate. Feed both sides the same keyframe spec, drive
- * the same positions, and compare the values the engines actually wrote. A wrong
- * curve, a wrong clamp or a wrong attribute route fails here with the input that
- * produced it, long before anything is rendered.
- *
- * ⛔ Runs several specs, not one. A single linear tween agrees under almost any
- * implementation — including a wrong one. The suite covers the curve (linear vs
- * eased), the clamp outside [start,end], a multi-value attribute, and the
- * declarative disable path, because those are where the implementations can
- * differ while a single sample still matches.
- *
- * ⚠ Both sides get identical `range` overrides. Expression-resolved start/end
- * need live layout the probe page does not have, and applying the SAME override
- * to both cannot mask a difference between them (REBUILD_PLAN §6 D6).
- *
- *   node scripts/verify-tween.mjs --a <urlA> --b <urlB> [--tol 1e-9] [--probe scripts/probe.mjs]
- *   node scripts/verify-tween.mjs --a <urlA> --record docs/tween-baseline.json
- *
- * 中文规格（自 scripts/README.md 迁入，v0.3.21；本表另一拼写：`verify-tween.mjs`）
- * **竖切的数值门**：同一关键帧规格喂两侧、逐点比补间值与缓动曲线。比像素门**早得多**判红，且失败会带上产生它的输入。⛔ 用例的字段名与值域必须从源码抄——第一版凭直觉写，六个用例全落在同一条曲线上、全绿、零区分力
- * **tween 切片的数值门**：像素裁判需要整页建完、来得太晚，而错的缓动曲线到达时长得像"风格差异"——对切出的 tween 子系统直接数值断言
- * `node verify-tween.mjs`
+ * node scripts/verify-tween.mjs --a <urlA> --b <urlB> [--tol 1e-9] [--probe scripts/probe.mjs]
+ *  node scripts/verify-tween.mjs --a <urlA> --record docs/tween-baseline.json
  */
 import { readFile, writeFile, mkdir } from "node:fs/promises";
 import path from "node:path";
@@ -45,7 +28,7 @@ if (!A) { console.error("usage: verify-tween.mjs --a <urlA> [--b <urlB>] [--reco
 
 // The cases. Each one is a place two implementations of the same engine can
 // disagree while a single linear sample still matches.
-// ⛔ Field names and values are COPIED from the source's own parseOptions
+//  Field names and values are COPIED from the source's own parseOptions
 // (_pretty/main.built.js L3149), not guessed. The first draft of this suite used
 // `ease: "easeInOutCubic"` and every case still reported `linear` — because
 // `ease` is a NUMERIC weight and the curve is named by `easeFunction`, whose
@@ -55,7 +38,7 @@ if (!A) { console.error("usage: verify-tween.mjs --a <urlA> [--b <urlB>] [--reco
 // times.
 const CASES = [
   { name: "linear opacity", spec: { start: 0, end: 100, opacity: [0, 1] }, range: [0, 100] },
-  // ⭐ The expression cases resolve start/end from LIVE LAYOUT rather than from
+  //  The expression cases resolve start/end from LIVE LAYOUT rather than from
   // an override — `a0t`/`a0b` are the anchor's top and bottom as scroll t-values.
   // They are the only cases that exercise the parser at all, and they are what
   // retires the numeric-override deviation (REBUILD_PLAN §6 D6).
@@ -67,10 +50,9 @@ const CASES = [
   { name: "translate x", range: [0, 100], spec: { start: 0, end: 100, x: [0, 240] } },
   { name: "video currentTime", range: [0, 100], spec: { start: 0, end: 100, currentTime: [0, 10] } },
   { name: "currentTime eased", range: [0, 100], spec: { start: 0, end: 100, currentTime: [0, 10], easeFunction: "easeOutQuad" } },
-  // ⛔ The pair below is the point. The same spec under two class masks MUST
-  // give different answers — enabled under the default, fully disabled under
-  // reduced-motion. A default-preference comparison can never see this, which is
-  // exactly why it needs its own case (porting-discipline.md §0.3).
+  // The paired cases exercise disabledWhen under default and reduced-motion
+  // classes. A comparison using only the default class set cannot check this
+  // branch (porting-discipline.md §0.3).
   { name: "disabledWhen, default classes", range: [0, 100], spec: { start: 0, end: 100, opacity: [0, 1], disabledWhen: ["reduced-motion"] }, classes: [] },
   { name: "disabledWhen, reduced-motion on", range: [0, 100], spec: { start: 0, end: 100, opacity: [0, 1], disabledWhen: ["reduced-motion"] }, classes: ["reduced-motion"] },
 ];
@@ -88,7 +70,7 @@ const evalOn = (url, expr) =>
     });
   });
 
-// ⭐ The end-to-end case: real window scroll driving a video's currentTime. The
+//  The end-to-end case: real window scroll driving a video's currentTime. The
 // cases above exercise the engine through its internals; this one exercises the
 // path the PAGE uses, so a port that got every curve right while wiring the
 // scroll system wrong still fails here.
@@ -119,12 +101,12 @@ if (RECORD) {
   await mkdir(path.dirname(path.resolve(RECORD)), { recursive: true });
   await writeFile(path.resolve(RECORD), JSON.stringify({ url: A, cases: a }, null, 2) + "\n");
   console.log(`\n  -> ${RECORD}  (baseline recorded; this is NOT a pass)`);
-  console.log(`  ⚠ A baseline is what the port does, not what the source does. It only`);
+  console.log(`   A baseline is what the port does, not what the source does. It only`);
   console.log(`    becomes a gate once --b names the other side.`);
   process.exit(a.some((r) => r.error) ? 1 : 0);
 }
 
-if (!B) { console.log(`\n  ⚠ no --b: nothing was COMPARED. One side alone cannot pass this gate.`); process.exit(2); }
+if (!B) { console.log(`\n   no --b: nothing was COMPARED. One side alone cannot pass this gate.`); process.exit(2); }
 
 const b = await runSide(B);
 console.log(`  B ${B}`);

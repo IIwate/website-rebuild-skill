@@ -2,7 +2,7 @@
 /**
  * pixel-walk.mjs — run the pixel gate at N scroll checkpoints, not one.
  *
- * ⛔ A single 0.00 is the most misleading number this toolchain produces. It is
+ *  A single 0.00 is the most misleading number this toolchain produces. It is
  * one frame, usually the top of the page in the first couple of seconds, on a
  * document that may be tens of thousands of pixels tall — and §4.8 of
  * verification-gates.md exists because a whole suite once photographed one
@@ -13,7 +13,7 @@
  * the determinism shim, the non-empty-frame precondition and the
  * distinct-sides guard all stay in one place.
  *
- * ⚠ Establish the SELF-BAND at these same checkpoints first (--self on one
+ *  Establish the SELF-BAND at these same checkpoints first (--self on one
  * side). A cross-side number is only meaningful against the band: measured on
  * one target, the unfrozen self-band was 4.6-5.0 while the unfrozen cross-side
  * was 2.6-3.4 — the "difference" was entirely the page's own session noise, and
@@ -24,17 +24,13 @@
  *                               [--out docs/pixelcompare] [--format jpeg] [--quality 92] [--rescroll-ms 1500]
  *                               [--settle ms] [--ready expr] [--hold expr] [--hold-grace ms] [--hold-after N]
  *
- * 中文规格（自 scripts/README.md 迁入，v0.3.21；本表另一拼写：`pixel-walk.mjs`）
- * **检查点巡航**：在 N 个滚动位置各跑一次像素门。⛔ **滚两次**（`load` 时 + 虚拟时间 +1.5s 再一次）——页面在自己的 init 里重置滚动会**吃掉** load 时那一次，于是所有检查点都拍页顶而两侧一致地全绿。⛔ **重复帧要逐格报出来**：全局 distinct 计数在「9 格里 3 格重复」时照样通过。⛔ **单个 0.00 是这套工具能产出的最误导的数字**——它是一帧，通常是页面顶部的头两秒。⚠ 先用 `--self` 在同样的检查点上测带宽：实测未冻结时自比 4.6–5.0、跨侧 2.6–3.4，**差异整个落在噪声里**；冻结后两者都归零。⭐ **状态分两种**（v0.3.15，determinism §7.1）：泵到的（挂载相位）用 `--ready/--after-ready`，**等到的**（GLB 在 worker 里解码）用 `--hold <expr> --hold-after N --hold-grace ms`——先泵 N 帧让页面开口要，真实时间等到达，再两侧同样绝对泵完；用错半边一个是 1/3 概率拍到未到达，一个是恒定的相位差
- * **N 档滚动像素门**：⛔ 单个 0.00 是本工具链最误导的数字——一帧、通常是页顶、拍在头几秒。驱动两侧到同一滚动分数再拍、重复 N 档；滚动器自动探测（文档不滚就找内层 overflow 容器）、落点实测回报（平滑滚动库会改写你设的值）、**重复帧点名**（"9 档里 2 档是同一帧"必须被解释）。`--pump` 走确定性 shim（⚠ A/B URL 须自带 `?__probe`），`--self` 采同侧带宽——**跨侧数字只有对着带宽才有意义**。v0.3.15：`--ready`/`--hold`/`--hold-after`/`--hold-grace` 透传给 pixelcompare，并**逐行转发**它的对齐诊断（"ready after N" / "--hold satisfied after N"）——此前被吞掉，READY 没触发的走查与对齐了的走查在输出上无法区分
- * `node pixel-walk.mjs --a "<port>/?__probe" --b "<mirror>/?__probe" --steps 9 --pump 16.7,1500`；先 `--self` 采带宽
  */
 import { spawn } from "node:child_process";
 import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { cli } from "./lib/cli.mjs";
 
-// ⚠ settle/ready/hold*/format/quality/out/pump are FORWARDED to pixelcompare
+//  settle/ready/hold*/format/quality/out/pump are FORWARDED to pixelcompare
 // verbatim — a name it does not know must never be accepted here.
 cli({
   known: ["a", "b", "steps", "pump", "out", "max-mean", "format", "quality", "rescroll-ms",
@@ -56,7 +52,7 @@ const FMT = flag("format", "jpeg"), Q = flag("quality", "92");
 // replaces setTimeout with a pumped queue, so this lands after the page's own
 // init has run rather than at some wall-clock moment.
 const RESCROLL_MS = Number(flag("rescroll-ms", "1500"));
-// ⚠ Passed straight through to pixelcompare. A site whose readiness has no cheap
+//  Passed straight through to pixelcompare. A site whose readiness has no cheap
 // observable needs a wall-clock settle, and that is a deviation from
 // "settle must be a page state" (§2.2) that has to be stated, not hidden in a
 // default: measured on one target, the states available before a renderable
@@ -71,20 +67,11 @@ const HOLD_AFTER = flag("hold-after", null);
 if (!A || !B) { console.error("usage: pixel-walk.mjs --a <rebuild-url> --b <mirror-url> [--steps N] [--pump dt,frames] [--max-mean N] [--self] [--ready expr] [--hold expr] [--hold-grace ms] [--hold-after N]"); process.exit(2); }
 if (STEPS < 2) { console.error("FATAL — --steps must be >= 2. One checkpoint is the problem this tool exists to fix."); process.exit(2); }
 
-// ⛔ The re-issued scroll runs on VIRTUAL PUMP TIME, not the wall clock. Once
-// RESCROLL_MS reaches the pump budget dt x frames, its setTimeout is never
-// pumped and the re-issue silently disappears.
-//
-// ⚠ Since --drive moved the driving INSIDE the pump loop, losing the re-issue no
-// longer degrades the walk to one scroll at load — the driver re-applies after
-// every pump chunk regardless. So this guard no longer protects against that
-// defect. It stays because the combination is still a CONFIGURATION THAT LIES:
-// the caller asked for a second scroll at T and gets none, with nothing in the
-// output saying so. Silently dropping what was explicitly requested costs more
-// than refusing it. Raising --rescroll-ms for a long-hydrating SPA therefore
-// REQUIRES raising --pump frames too.
-// ⚠ Revisit if the seed's re-issue is ever removed in favour of --drive alone,
-// at which point this flag and this guard both go.
+// --rescroll-ms schedules a second scroll on virtual pump time. If the delay is
+// at or beyond dt * frames, the timer is never reached. Reject that configuration
+// so an explicitly requested input is not omitted. --drive also updates scrolling
+// inside the pump loop, but does not execute this separately scheduled event.
+// Longer delays require a larger pump budget.
 const [PUMP_DT, PUMP_FRAMES] = PUMP.split(",").map((n) => Number(n.trim()));
 if (!(PUMP_DT > 0) || !(PUMP_FRAMES > 0)) {
   console.error(`FATAL — --pump "${PUMP}" does not parse as dt,frames (both must be > 0).`);
@@ -105,7 +92,7 @@ if (RESCROLL_MS >= PUMP_BUDGET) {
   process.exit(2);
 }
 
-// ⛔ Scroll TWICE: at load, and again after the page's own init has run.
+//  Scroll TWICE: at load, and again after the page's own init has run.
 //
 // One scroll at load looks sufficient and is not. A page whose init resets the
 // scroll position — restoring a saved offset, mounting a scroll controller,
@@ -115,11 +102,11 @@ if (RESCROLL_MS >= PUMP_BUDGET) {
 // gate reported them as passes: the two sides agreed because both were showing
 // the same wrong thing.
 //
-// ⚠ The re-issue rides the pump, not the wall clock, so it still lands after
+//  The re-issue rides the pump, not the wall clock, so it still lands after
 // init on a frozen page.
 const seedFor = (f) =>
   `window.addEventListener("load", () => {
-     // ⛔ FIND THE SCROLLER. The document is not always what scrolls. A site
+     //  FIND THE SCROLLER. The document is not always what scrolls. A site
      // using a smooth-scroll library often scrolls an inner
      // \`overflow-y: auto\` container, and there
      // \`documentElement.scrollHeight - innerHeight\` is ZERO — so a seed that
@@ -143,18 +130,18 @@ const seedFor = (f) =>
      var go = function () {
        var el = pick();
        var m = el.scrollHeight - el.clientHeight;
-       // ⛔ Nothing to scroll is a FACT the gate must see, not a silent 0.
+       //  Nothing to scroll is a FACT the gate must see, not a silent 0.
        var target = Math.round(m * ${f});
        if (m > 0) {
          if (el === document.scrollingElement || el === document.documentElement) window.scrollTo(0, target);
          else el.scrollTop = target;
        }
-       // ⛔ RECORD WHERE IT ACTUALLY LANDED. A smooth-scroll library owns the
+       //  RECORD WHERE IT ACTUALLY LANDED. A smooth-scroll library owns the
        // scroll value and re-asserts it, so setting scrollTop is a REQUEST, not
        // a result — and the two sides then settle at different positions while
        // the gate compares their pixels as if they matched. Measured: the same
        // checkpoint gave meanAbsDiff 115 because one side was elsewhere.
-       // ⭐ A driver that quietly reports the wrong position costs far more than
+       //  A driver that quietly reports the wrong position costs far more than
        // one that throws (verification-gates.md §2.1.1).
        var landed = (el === document.scrollingElement || el === document.documentElement)
          ? Math.round(window.scrollY) : Math.round(el.scrollTop);
@@ -165,7 +152,7 @@ const seedFor = (f) =>
    });`;
 
 // Re-applied after every pump chunk, so it takes effect as soon as the scroller
-// exists. ⚠ Idempotent by construction: it recomputes the target each time.
+// exists.  Idempotent by construction: it recomputes the target each time.
 const driveFor = (f) => `
   var doc = document.scrollingElement || document.documentElement;
   var el = null;
@@ -208,7 +195,7 @@ for (let i = 0; i < STEPS; i++) {
   const f = i / (STEPS - 1);
   const name = `walk-${String(Math.round(f * 100)).padStart(3, "0")}`;
   const a = ["--a", A, "--b", B, "--name", name, "--pump", PUMP, "--seed", seedFor(f), "--out", OUT, "--format", FMT, "--quality", Q];
-  // ⭐ Drive INSIDE the pump loop, not from a load-time seed: on a site whose
+  //  Drive INSIDE the pump loop, not from a load-time seed: on a site whose
   // scroll container appears only after its preloader, a seed fires too early
   // and every checkpoint lands at 0.
   a.push("--drive", driveFor(f));
@@ -219,7 +206,7 @@ for (let i = 0; i < STEPS; i++) {
   if (HOLD_AFTER) a.push("--hold-after", HOLD_AFTER);
   if (SELF) a.push("--self");
   const { code, out } = await run(a);
-  // ⭐ Forward the alignment diagnostics. pixelcompare says "ready after N pumped
+  //  Forward the alignment diagnostics. pixelcompare says "ready after N pumped
   // frame(s)" / "--hold satisfied after N" per side, and swallowing them left a
   // walk whose READY never fired indistinguishable from one that aligned
   // (raycastkbd: a constant 1.7 band with no line saying why).
@@ -241,7 +228,7 @@ for (let i = 0; i < STEPS; i++) {
   console.log(`  ${name.padEnd(12)} ${String(colours ?? "?").padStart(8)} ${String(j.meanAbsDiff).padStart(12)} ${String(j.worstCellDiff).padStart(10)}  ${j.similarityPct}%${bad ? "   <- over --max-mean" : ""}`);
 }
 
-// ⛔ Checkpoints that all photograph the same frame are one checkpoint repeated.
+//  Checkpoints that all photograph the same frame are one checkpoint repeated.
 // The colour census is the cheapest evidence that the page actually moved.
 const withFrames = rows.filter((r) => r.colours != null);
 const distinct = new Set(withFrames.map((r) => r.colours));
@@ -251,16 +238,12 @@ if (distinct.size === 0) {
   process.exit(5);
 }
 
-// ⛔ "Some checkpoints differ" is not "every checkpoint is its own state". A
-// GLOBAL distinct count passes while a SUBSET is stuck: nine checkpoints, three
-// of them the same frame, still reports "7 distinct" and a reassuring sentence.
-// The duplicates are the ones that matter — each cost a full capture and
-// measured a state that was already measured.
-//
-// ⚠ Equal colour counts are strong evidence of an identical frame, not proof.
-// So report them as duplicates to explain, and FAIL only when they dominate: a
-// page really can look the same at two positions (a tall flat footer), but half
-// the walk collapsing is the signature of scroll never landing.
+// Report repeated distinct-color counts across checkpoints. One observed walk
+// had nine checkpoints and three identical frames despite seven distinct
+// counts overall. Equal color counts alone do not establish identical pixels.
+// This heuristic fails when repeated counts dominate the samples; static
+// sections can also repeat counts, so investigate the captures and scroll
+// positions before assigning a cause.
 const byColour = new Map();
 for (const r of withFrames) byColour.set(r.colours, (byColour.get(r.colours) || []).concat(r.name));
 const dupeGroups = [...byColour.values()].filter((g) => g.length > 1);
@@ -268,11 +251,11 @@ const dupeCheckpoints = dupeGroups.reduce((t, g) => t + g.length - 1, 0);
 
 console.log(`  ${distinct.size} distinct frame(s) across ${withFrames.length} checkpoint(s)`);
 if (dupeGroups.length) {
-  console.log(`  ⚠    ${dupeCheckpoints} checkpoint(s) repeat a frame already captured:`);
+  console.log(`      ${dupeCheckpoints} checkpoint(s) repeat a frame already captured:`);
   for (const g of dupeGroups) console.log(`         ${g.join(" = ")}`);
   console.log(`       Either the page really is identical there, or the scroll did not land —`);
   console.log(`       a page that resets scroll in its own init swallows the one issued at load.`);
-  console.log(`       ⛔ Until each is explained, this walk covers ${distinct.size} states, not ${withFrames.length}.`);
+  console.log(`        Until each is explained, this walk covers ${distinct.size} states, not ${withFrames.length}.`);
 }
 if (withFrames.length > 1 && distinct.size <= Math.ceil(withFrames.length / 2)) {
   console.log(`\nFATAL — ${distinct.size} distinct frame(s) out of ${withFrames.length} checkpoint(s): at most half`);
@@ -286,7 +269,7 @@ if (means.length) {
   console.log(`  worst meanAbsDiff ${worst}${SELF ? "  (this is the BAND; cross-side results must be read against it)" : ""}`);
 }
 if (SELF) {
-  console.log(`\n⚠ SELF-BAND SAMPLE — not a pass. Collect several per side and interleave them;`);
+  console.log(`\n SELF-BAND SAMPLE — not a pass. Collect several per side and interleave them;`);
   console.log(`  a band from one side lets that side's luck set the tolerance.`);
   process.exit(0);
 }

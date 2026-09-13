@@ -6,7 +6,7 @@
 // replays it on a diff hunk. Two copies would drift, and a gate that drifts
 // from its builder reports differences that are its own.
 //
-// ⛔ NO SIDE EFFECTS IN THIS FILE OR IN A PROJECT'S shell-config.mjs. The gate
+//  NO SIDE EFFECTS IN THIS FILE OR IN A PROJECT'S shell-config.mjs. The gate
 // imports both, and a gate must never import a module that produces what it
 // audits (§2.1.2).
 import { rewriteFlight, hasFlight } from "./flight.mjs";
@@ -14,7 +14,7 @@ import { protectDataIslands } from "./data-island.mjs";
 
 const esc = (s) => String(s).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 
-// ⚠ URL LOCALISATION EXISTS TWICE IN THIS TOOLCHAIN, and that is a known debt
+//  URL LOCALISATION EXISTS TWICE IN THIS TOOLCHAIN, and that is a known debt
 // (verification-gates.md §2.1.1 — two places that must agree on one answer
 // should have one implementation): scripts/serve.mjs rewrites at RESPONSE time,
 // this table rewrites at BUILD time. They have already drifted once — serve
@@ -41,7 +41,7 @@ export function localizeShapes(text, host, to, onHit = () => {}) {
   const toEsc = to.replace(/\//g, "\\/");   // inside JS/JSON string literals
   const toU = to.replace(/\//g, U);         // inside \u002F-escaped payloads
   const hit = (shape, rep) => (m) => (onHit(shape), rep);
-  // ⚠ `to || "/"` when NO path follows. Replacing `https://host` with "" for an
+  //  `to || "/"` when NO path follows. Replacing `https://host` with "" for an
   // origin host leaves `href=""`, which is not "the home page" — it is "this
   // page", a silently broken link. Caught cross-side by the payload gate: the
   // mirror kept `href="http://www.chungiyoo.com"` (serve.mjs only rewrites the
@@ -49,7 +49,7 @@ export function localizeShapes(text, host, to, onHit = () => {}) {
   // localisation implementations disagreed AND one of them was wrong.
   const bare = to || "/";
 
-  // ⛔ A URL IN A TEXT POSITION IS CONTENT, NOT AN ADDRESS. Localisation is
+  //  A URL IN A TEXT POSITION IS CONTENT, NOT AN ADDRESS. Localisation is
   // about where the browser goes; it must not change what the page SAYS.
   //
   // Measured on eightdesign, on exactly one of 115 routes — an article about the
@@ -62,7 +62,7 @@ export function localizeShapes(text, host, to, onHit = () => {}) {
   // differed by 25 characters, which is how a whole-site sweep earns its cost —
   // a blanket transform that is right 114 times changes meaning on the 115th.
   //
-  // ⚠ Narrow on purpose. Only the two spellings where a text position is
+  //  Narrow on purpose. Only the two spellings where a text position is
   // UNAMBIGUOUS are protected: an HTML text node (`>URL<`) and a serialised
   // payload's children field (`"children":"URL"`). Anything less certain is
   // left to the transform, because a guard that guesses is worse than none.
@@ -96,14 +96,10 @@ export function localizeShapes(text, host, to, onHit = () => {}) {
  *  over an empty string can never reproduce it, so the gate matches these bytes
  *  exactly instead. */
 export const noindexBlock = (cfg) =>
-  // ⛔ `notice: true` is a NATURAL thing to write in a config, and string
-  // concatenation happily renders it as the literal text "true" INSIDE <head> —
-  // where a bare text node makes the HTML parser close the head early and move
-  // every following <meta>/<link> into <body>. Measured: the nav lost its
-  // auth-dependent buttons, a canvas never mounted, and the word "true" sat in
-  // the page's corner — while every static gate stayed green, because the
-  // transform table replays what the transform table produced. Only a string
-  // is a notice; anything else means "no extra notice, just the meta".
+  // In a captured case, notice: true inserted a literal text node into <head>.
+  // The HTML parser closed the head early, moved later metadata into <body>, and
+  // the page lost navigation buttons and a canvas despite passing static checks.
+  // Only string values are inserted as notice markup.
   (typeof cfg.notice === "string" ? cfg.notice : "") + '<meta name="robots" content="noindex,nofollow">\n';
 
 /**
@@ -150,19 +146,19 @@ export function transformPage(html, cfg, { head = true } = {}) {
     }
     return o;
   };
-  // ⛔ Where the document carries a LENGTH-PREFIXED payload, the localisation
+  //  Where the document carries a LENGTH-PREFIXED payload, the localisation
   // must go through lib/flight.mjs — it rewrites each row's content on its own
   // and re-declares the length. Applied blanket, the same six shapes shorten
   // rows whose `T<hex>` still claims the old count, and the page dies inside
   // React's parser with no 404 and no failed request to point at it. Measured
   // here: 17 of 115 built pages, invisible to every other gate.
-  // ⛔ AND A DEVALUE DATA ISLAND IS PROGRAM INPUT, NOT ADDRESSES (payload-gates.md §6). The
+  //  AND A DEVALUE DATA ISLAND IS PROGRAM INPUT, NOT ADDRESSES (payload-gates.md §6). The
   // carve-out lives in lib/data-island.mjs rather than here, for the same
   // reason the length-aware path lives in lib/flight.mjs: serve.mjs localises
   // the same bytes at RESPONSE time, and a guard on one of two localisers is
   // either undone by the other or reported by the payload gate as a content
   // difference (payload-gates.md §1.4 — the debt this file's own header names).
-  // ⚠ What the carve-out kept is RETURNED, not swallowed: holding the island
+  //  What the carve-out kept is RETURNED, not swallowed: holding the island
   // back re-opens the latent-outbound class shape 6 above exists to close, and
   // build-site.mjs is what decides whether that ships.
   const guarded = protectDataIslands(out, (t) =>
@@ -171,13 +167,13 @@ export function transformPage(html, cfg, { head = true } = {}) {
   out = guarded.text;
 
   // --- site-specific transforms ---------------------------------------------
-  // ⛔ THESE GO THROUGH THE LENGTH-AWARE PATH TOO. It is not only localisation
+  //  THESE GO THROUGH THE LENGTH-AWARE PATH TOO. It is not only localisation
   // that edits a length-prefixed payload: the thing that had to be deleted here
   // was a `<link rel="preload" href="https://www.googletagmanager.com/…">`
   // sitting INSIDE a flight row, and deleting it blanket-style shortens the row
   // exactly the way a URL rewrite does. Any edit is an edit.
   //
-  // ⚠ Each transform therefore sees the document one REGION at a time (the gaps
+  //  Each transform therefore sees the document one REGION at a time (the gaps
   // between pushes, and each row's content). A transform that needs to count
   // across the whole document must do its own accounting; registering the count
   // floor per transform id already works that way.
@@ -196,7 +192,7 @@ export function transformPage(html, cfg, { head = true } = {}) {
   // --- T-NOINDEX -------------------------------------------------------------
   if (head && cfg.notice) {
     const before = out;
-    // ⚠ `<head\b[^>]*>`, not the literal `<head>`. Generators emit the tag with
+    //  `<head\b[^>]*>`, not the literal `<head>`. Generators emit the tag with
     // whitespace or attributes — Nuxt 2 / vue-meta writes `<head >`, others
     // write `<head prefix="og: …">` — and an anchor on the bare literal fires
     // ZERO times on those documents. The whole tag is preserved and the block

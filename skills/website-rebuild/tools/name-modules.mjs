@@ -8,7 +8,7 @@
  * here it is "what is this thing called". Hash and ordinal ids carry nothing;
  * path-keyed containers retain their readable path ids.
  *
- * ⛔ This tool PROPOSES. It does not decide. Every proposal carries the tier and
+ *  This tool PROPOSES. It does not decide. Every proposal carries the tier and
  * the literal evidence string it came from, so a name can be checked against the
  * thing that justified it — and readable-source.md's rule holds: no evidence
  * means the module keeps its id, it does NOT get a plausible-sounding name.
@@ -43,7 +43,7 @@ const flag = (n, d) => { const i = argv.indexOf("--" + n); return i >= 0 && argv
 const MAP = JSON.parse(fs.readFileSync(flag("map", "docs/module-map.json"), "utf8"));
 const CLO = JSON.parse(fs.readFileSync(flag("closure", "docs/slice-closure.json"), "utf8"));
 const OUT = flag("out", "docs/module-names.json");
-// ⭐ Tier 0: a name someone arrived at BY READING THE MODULE. The tool proposes;
+//  Tier 0: a name someone arrived at BY READING THE MODULE. The tool proposes;
 // this is where a decision survives the next run. Nothing the tool infers may
 // overwrite it, and every entry carries the reading that produced it — a bare
 // override is just a different way to invent a name.
@@ -58,7 +58,7 @@ for (const [id, o] of Object.entries(OVERRIDES)) {
 const SRC = fs.readFileSync(MAP.source, "utf8");
 const byId = new Map(MAP.modules.map((m) => [m.id, m]));
 
-// ⛔ Do NOT re-slice text out of the pretty file to parse it. The first version
+//  Do NOT re-slice text out of the pretty file to parse it. The first version
 // did, and got 0/46 because every slice ends on the container's separating
 // comma — `function(){...},` does not parse. Cutting text by line number and
 // re-parsing it invents a boundary problem the packer already solved: parse the
@@ -70,7 +70,7 @@ const PATH_ID_SHAPE = /^\.{1,2}\//;
 traverse(FILE, {
   ObjectProperty(p) {
     const k = p.node.key;
-    // ⛔ Four key forms occur: a minifier quotes a key only when
+    //  Four key forms occur: a minifier quotes a key only when
     // it must. `"02b5c2be…":` is quoted because it starts with a digit,
     // `a738138e…:` is a bare identifier, and `14:` is a NUMBER — and 14 happens
     // to be the entry module. Accepting only the long-hex form silently drops
@@ -88,7 +88,7 @@ traverse(FILE, {
     const v = p.node.value;
     if (v.type === "FunctionExpression" || v.type === "ArrowFunctionExpression") NODES.set(id, p.get("value"));
   },
-  // ⭐ The OTHER container. Turbopack pushes a flat array —
+  //  The OTHER container. Turbopack pushes a flat array —
   // `TURBOPACK.push([currentScript, id, factory, id, factory, …])` — so the
   // factory nodes live as ARRAY ELEMENTS after their numeric ids, and an
   // ObjectProperty walk finds none of them. Without this, a Turbopack chunk
@@ -98,7 +98,7 @@ traverse(FILE, {
   CallExpression(p) {
     const c = p.node.callee;
     if (c.type !== "MemberExpression" || c.property?.name !== "push") return;
-    // ⛔ ANCHOR ON `TURBOPACK`, not on `.push([…])`. Any array push with an
+    //  ANCHOR ON `TURBOPACK`, not on `.push([…])`. Any array push with an
     // (id, function) pair in it matched the first version — a route table, a
     // plugin registry, a `handlers.push([2, cb])` — and this tool would then
     // name a callback as if it were a module factory. module-map.mjs identifies
@@ -122,7 +122,7 @@ traverse(FILE, {
     }
   },
 });
-// ⭐ A packer that DECLARES export names has already answered the question this
+//  A packer that DECLARES export names has already answered the question this
 // tool exists to answer. Turbopack writes `ctx.s([["HeroSection", () => x]], id)`
 // and module-map records it, so those names are evidence of the strongest kind:
 // not inferred from a global, a registry or a consumer's field name, but stated
@@ -165,7 +165,7 @@ const RE_TYPE = /\b[A-Z][a-z0-9]+(?:[A-Z][a-z0-9]+)+\b/g;
 const REGISTRARS = /^(share|register|registerComponent|define|component|provide|factory|service|bind)$/;
 
 // --- cross-module naming ---------------------------------------------------
-// ⭐ The strongest evidence in a minified bundle is often not inside the module
+//  The strongest evidence in a minified bundle is often not inside the module
 // at all: it is what its CONSUMERS call it. Local variables are mangled to one
 // letter, but PROPERTY NAMES SURVIVE MINIFICATION — so `this._chapterPlayer =
 // new M(...)` names module M even though M itself contains no readable name.
@@ -174,7 +174,7 @@ const REGISTRARS = /^(share|register|registerComponent|define|component|provide|
 // WHOLE container, not just the slice: a consumer outside the vertical slice
 // still names the module inside it.
 //
-// ⚠ It is evidence about the ROLE the consumer uses it in, which is usually but
+//  It is evidence about the ROLE the consumer uses it in, which is usually but
 // not always the module's own identity — a field called `this._defaultEasing`
 // names a use, not a type. Recorded with the consumer id so it can be checked.
 const CONSUMER_NAMES = new Map(); // module id -> [{field, from}]
@@ -193,7 +193,7 @@ for (const [cid, fnPath] of NODES) {
     AssignmentExpression(p) {
       const { left, right } = p.node;
       if (left.type !== "MemberExpression" || left.computed || left.property.type !== "Identifier") return;
-      // ⛔ `this.field = new M(...)` and `this.field = M(...)` only. NOT
+      //  `this.field = new M(...)` and `this.field = M(...)` only. NOT
       // `this.field = M.method(...)` — that names the method's RESULT, and it
       // put `breakpoint` on an 85-line constants table because one line reads
       // `pageMetrics.breakpoint = M.someMethod()`. The field holds a number the
@@ -201,7 +201,7 @@ for (const [cid, fnPath] of NODES) {
       if (right.type !== "NewExpression" && right.type !== "CallExpression") return;
       const callee = right.callee;
       if (callee.type !== "Identifier" || !local.has(callee.name)) return;
-      // ⛔ …and the field must belong to someone ELSE. `M.pageMetrics.breakpoint`
+      //  …and the field must belong to someone ELSE. `M.pageMetrics.breakpoint`
       // is the module writing into its own export; a module does not name
       // itself by naming its fields.
       let lbase = left.object;
@@ -210,7 +210,7 @@ for (const [cid, fnPath] of NODES) {
       const target = local.get(callee.name);
       const field = left.property.name.replace(/^_+/, "");
       if (field.length < 4 || /^[a-z]$/.test(field)) return;
-      // ⛔ Module-system plumbing is not a name. `X.exports = require(id)` and
+      //  Module-system plumbing is not a name. `X.exports = require(id)` and
       // `X.default = …` are how CommonJS/ESM interop is spelled, and four
       // different modules laid claim to "exports" on that basis alone.
       if (/^(exports|default|module|prototype|constructor|options|config|props|state|data|value|instance|current)$/.test(field)) return;
@@ -285,20 +285,20 @@ for (const id of CLO.modules) {
     StringLiteral(p) {
       const v = p.node.value;
       if (/^data-[a-z-]{4,}$/.test(v)) { ev.strings.push(v); return; }
-      // ⛔ A sentence is not a name. The first version took the first four words
+      //  A sentence is not a name. The first version took the first four words
       // of the longest string and produced `you-cannot-create-multiple`,
       // `tweens-do-not-have`, `attempted-to-parse-a` — filenames that read as
-      // informative and say nothing. ⭐ The real name was inside the same
+      // informative and say nothing.  The real name was inside the same
       // string every time: an error message NAMES THE TYPE THAT THREW IT.
       // "You cannot create multiple AnimSystems", "TimeGroup not instantiated
       // correctly", "KeyframeController.updateAnimation(...)". So tier 4 accepts
       // a PascalCase token found in the message, and nothing else — a message
       // with no type name in it is not evidence of what the module is called.
-      // ⛔ …and NOT by counting which type name occurs most. An error message
+      //  …and NOT by counting which type name occurs most. An error message
       // routinely names TWO types: the one that threw, and the API you should
       // have called instead — "TimeGroup not instantiated correctly. Please use
       // `AnimSystem.createTimeGroup(el)`". Frequency picked AnimSystem and named
-      // the TimeGroup module after its own error's advice. ⭐ The subject is the
+      // the TimeGroup module after its own error's advice.  The subject is the
       // one at the FRONT; the advice lives inside backticks or after "use".
       // Third time counting has produced a confident wrong answer here
       // (reverse-engineering.md §0.4) — position and role are the axis, not
@@ -328,7 +328,7 @@ for (const id of CLO.modules) {
   }
 
   // --- collect ALL candidates, strongest first; resolve collisions later ----
-  // ⛔ Do not pick here. The first version picked one name per module and then
+  //  Do not pick here. The first version picked one name per module and then
   // dropped BOTH sides of any collision — which threw away a tier-1 name
   // (`share("AnimSystem")`, the module registering itself) because an unrelated
   // module's tier-4 guess happened to land on the same word. A dedup rule that
@@ -344,11 +344,11 @@ for (const id of CLO.modules) {
   for (const g of ev.globals) add(g, 1, `window.${g} = …`);
   for (const r of ev.registered) add(r.name, 1, `registers itself as ${r.how}`);
   for (const c of ev.classes.filter(usable)) add(c, 2, `class ${c}`);
-  // Consumer field names, most-agreed-upon first. ⭐ Here frequency IS the right
+  // Consumer field names, most-agreed-upon first.  Here frequency IS the right
   // axis — unlike inside an error message, several consumers independently
   // choosing the same field name is corroboration, not repetition.
   //
-  // ⛔ But ONE consumer's field name is a USE, not a type. Sampling five of
+  //  But ONE consumer's field name is a USE, not a type. Sampling five of
   // these caught exactly that: a 33-line class with `epsilon`, `target`,
   // `current`, `snapAtCreation` is a damped scalar, and the single consumer
   // that stored it in `.rotation` was using it for rotation that day. So a lone
@@ -379,21 +379,21 @@ for (const id of CLO.modules) {
 }
 
 // --- resolution ------------------------------------------------------------
-// ⛔ Two modules cannot share a filename, but "drop both" is the wrong repair
+//  Two modules cannot share a filename, but "drop both" is the wrong repair
 // when their claims are not equally strong. Walk tier by tier: at each tier,
 // a name claimed by exactly one module is awarded; a name claimed by several
 // AT THE SAME TIER is genuinely ambiguous and no one gets it. A module that
 // loses a name to a stronger claim falls through to its own next candidate.
 //
-// ⚠ Still honest at the end: a module that runs out of candidates keeps its
+//  Still honest at the end: a module that runs out of candidates keeps its
 // id. An unnamed module makes the reader go and look, which is correct — an
 // arbitrarily-suffixed `foo-2.js` makes them think they already know.
 const taken = new Map();
 const contested = [];
-// ⛔ An override for an id that is not in the slice is silently inert, and a
+//  An override for an id that is not in the slice is silently inert, and a
 // silently inert override reads in the diff as a decision that took effect.
 // This exact mistake — an id typed from memory, one character-run wrong — has
-// now cost time twice on this target. Be loud, and say which id was meant.
+// occurred twice on this target. Report the unknown ID and nearby candidates.
 {
   const present = new Set(results.map((r) => r.id));
   const unknown = Object.keys(OVERRIDES).filter((id) => !present.has(id));
@@ -429,7 +429,7 @@ for (const tier of [1, 2, 3, 4, 5]) {
       r.name = n; r.tier = c.tier; r.why = c.why; taken.set(n, r.id);
     } else {
       contested.push({ name: n, tier, ids: list.map((x) => x.r.id) });
-      // ⚠ Burn it for everyone so a later tier cannot quietly re-award it.
+      //  Burn it for everyone so a later tier cannot quietly re-award it.
       taken.set(n, null);
       for (const { r, c } of list) r.candidates = r.candidates.filter((x) => x.name !== c.name);
     }
@@ -441,7 +441,7 @@ for (const r of results) {
     : "no evidence — keeps its id (readable-source.md: never invent a name)";
 }
 
-// ⛔ The output directory may not exist yet. A tool whose FIRST run cannot
+//  The output directory may not exist yet. A tool whose FIRST run cannot
 // succeed is a tool nobody can start using — and the crash names the output
 // path, which reads like a missing input.
 fs.mkdirSync(path.dirname(path.resolve(OUT)), { recursive: true });
@@ -455,10 +455,10 @@ for (const t of [0, 1, 2, 3, 4, 5, null]) {
   const n = byTier.get(t) || 0;
   if (n) console.log(`  tier ${t ?? "-"}  ${String(n).padStart(3)}  ${t === 0 ? "read by a human, recorded in " + OVERRIDES_PATH : t ? "" : "no evidence — keeps its id"}`);
 }
-for (const c of contested) console.log(`\n  ⚠ "${c.name}" claimed at tier ${c.tier} by ${c.ids.length} modules — ambiguous, awarded to none:\n      ${c.ids.join("\n      ")}`);
+for (const c of contested) console.log(`\n   "${c.name}" claimed at tier ${c.tier} by ${c.ids.length} modules — ambiguous, awarded to none:\n      ${c.ids.join("\n      ")}`);
 const named = results.filter((r) => r.name).length;
 console.log(`\n  named ${named}/${results.length} (${Math.round((named / results.length) * 100)}%)`);
-console.log(`  ⚠ every tier-3/4/5 name is a GUESS BACKED BY A STRING. Read the module before trusting it.`);
+console.log(`   every tier-3/4/5 name is a GUESS BACKED BY A STRING. Read the module before trusting it.`);
 const review = results.filter((r) => r.name && r.tier >= 3);
 if (review.length) {
   console.log(`\n  review these ${review.length} before they become filenames:`);

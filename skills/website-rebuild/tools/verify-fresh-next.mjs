@@ -1,11 +1,12 @@
 #!/usr/bin/env node
-// verify-fresh-next.mjs — verify-fresh 的 Next 形态（darkroom 实战入库，v0.3.13；readable-source §9.5.1）。
-// C1 重构工程没有"bundler 一步"，链是 src-modules/ + app/ → next build → assemble-static(static-site/)。
-// 判据同 verify-fresh：重新生成并比字节，不看时间戳。⛔ 前提：next.config 钉死 `generateBuildId`——
-// 随机 buildId 让同一份源码两次 build 出不同 HTML，链条永远"过期"。
-// 做法：把静态树现存 HTML 记 sha256，备份 .next，重跑 build，逐路由与 .next/server/app/*.html 比对，
-// 再还原 .next。任一不同 = 伺服的不是源码现在构建出来的。
-//   node tools/verify-fresh-next.mjs [--app rebuild] [--site rebuild/static-site]
+/**
+ * Compare served static HTML with a fresh Next build, then restore .next.
+ * Requires deterministic build inputs, including a stable generateBuildId.
+ * Hashes existing route HTML, saves .next, builds, compares prerendered HTML,
+ * and restores the saved output. Optimized images are outside this comparison.
+ * Equal timestamps are not used as evidence of matching source and output.
+ * Based on the darkroom build verification workflow.
+ */
 import { readdir, mkdtemp, rm, cp } from "node:fs/promises";
 import { execFileSync } from "node:child_process";
 import { join } from "node:path";
@@ -24,7 +25,7 @@ async function* walk(d, base = d) {
   }
 }
 const before = new Map();
-// 只比路由 HTML：_next/ 下的 image@@… 是 harvest 落盘的优化图，不是页面
+// Compare route HTML only; optimized image variants under _next/ are outside this check.
 for await (const f of walk(SITE)) if (f.endsWith(".html") && !f.startsWith("_next/")) before.set(f, await sha256File(join(SITE, f)));
 const chunksBefore = new Set((await readdir(join(APP, ".next/static/chunks"))).filter((f) => f.endsWith(".js")));
 console.log(`static-site HTML files: ${before.size}; chunks: ${chunksBefore.size}`);
@@ -42,7 +43,7 @@ if (!buildErr) {
 }
 const chunksAfter = buildErr ? chunksBefore : new Set((await readdir(join(APP, ".next/static/chunks"))).filter((f) => f.endsWith(".js")));
 const chunkDelta = [...chunksAfter].filter((c) => !chunksBefore.has(c)).length + [...chunksBefore].filter((c) => !chunksAfter.has(c)).length;
-// 还原构建前的 .next（本门只判断，不改变伺服的产物）
+// Restore the saved .next output so the checked build does not replace served artifacts.
 await rm(join(APP, ".next"), { recursive: true, force: true });
 await cp(join(tmp, "next-before"), join(APP, ".next"), { recursive: true });
 await rm(tmp, { recursive: true, force: true });

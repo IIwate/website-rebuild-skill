@@ -1,27 +1,12 @@
 #!/usr/bin/env node
 /**
- * flight-to-mdx.mjs — 从 flight 元素树反推 MDX 源。 [v0.3;在 rauchg.com 上实证:
- * 17 页全过,flight 语义门 18/18]
- *
- * ⚠ 站点侧适配(拷到复刻项目后改这些,像 harvest.config 一样属于站点):
- *   - LINK_CLASS:目标站链接组件的类名字节(从 flight 逐字取)
- *   - SHAPE:结构组件的 className 指纹(callout/figure/caption/…)
- *   - FIRST_PARTY:一方客户端组件 flight 引用 → (组件名, 文件) 映射
- *   - ROOT_TITLE / ROOT_DESC:根布局元数据(判"页面无 metadata"用)
- * 其余(markdown 构词、[#id] 标题、化石发射、MDX 陷阱规避)是通用机制。
- *
- * 输入:docs/flight/<slug>.json(flight-decode 产物,已解引用)
- * 输出:rebuild/app/(post)/<year>/<slug>/page.mdx 等
- *
- * 策略(保真优先):
- *  - 已识别的 markdown 构词(p/h2[#id]/h3/ul/ol/li/blockquote/pre>code/内联
- *    code/strong/em/链接)→ markdown 语法;
- *  - 站点组件形状(Callout/Figure/Caption/Tweet/Snippet/FootNotes/HR)→ JSX 组件调用;
- *  - 其余一切 → 带精确 className 的字面 JSX(兜底,不丢字节);
- *  - 不可序列化的 prop → 响亮失败,宁可停也不静默丢。
- *
- * 文本中的 "\n" 是源 markdown 的软换行化石,原样保留;
- * 标题文本尾部空格 + id → 还原为 `text [#id]`。
+ * Recover MDX from decoded Flight trees using project-specific shape mappings.
+ * Configure LINK_CLASS, SHAPE, FIRST_PARTY and root metadata for the target site.
+ * Recognized Markdown nodes become Markdown; known component shapes become JSX;
+ * other nodes use literal JSX. Unsupported props fail instead of being omitted.
+ * Preserves significant text whitespace and heading IDs. Verify the generated
+ * output against the captured tree; this is not an original-source recovery.
+ * The rauchg case recorded 17 generated pages and 18/18 normalized route checks.
  *
  *   node tools/flight-to-mdx.mjs [--flight docs/flight] [--out rebuild/app] [--mirror mirror] [--only <slug-prefix>]
  */
@@ -49,9 +34,9 @@ const tagOf = (v) => (typeof v[1] === "string" ? v[1] : v[1] && (v[1].$component
 const propsOf = (v) => v[3] || {};
 const kidsOf = (v) => propsOf(v).children;
 
-/** 页面种子:只沿并行路由结构([node, {children: seed}] 链)下潜,不进元素内部
- *  —— react-tweet 媒体网格里也有带 key 的 fragment,按"最深 fragment"选会採进
- *  推文肚子里(实测 next-for-vercel)。 */
+/**
+ * Find page seeds through parallel-route children, not arbitrary nested fragments. The next-for-vercel case had deeper keyed fragments inside a react-tweet media grid.
+ */
 function pageSeedOf(tree) {
   let cur = tree.f[0][1];
   let lastNode = null;
@@ -71,7 +56,9 @@ function pageSeedOf(tree) {
   return lastNode;
 }
 
-/** 收集树内全部文本。 */
+/**
+ * Collect text within the tree.
+ */
 function textOf(v) {
   if (typeof v === "string") return v;
   if (typeof v === "number") return String(v);
@@ -84,7 +71,7 @@ function textOf(v) {
 function jsonOf(v) { return JSON.stringify(v); }
 
 // ---------------------------------------------------------------------------
-// JSX 序列化(兜底 + 组件调用共用)
+// Shared JSX serialization for literal nodes and component calls.
 const IDENT = /^[A-Za-z_$][A-Za-z0-9_$]*$/;
 function jsxProps(props, ctx) {
   const parts = [];
@@ -95,15 +82,15 @@ function jsxProps(props, ctx) {
     if (!IDENT.test(k) && !/^[a-zA-Z-]+$/.test(k)) throw new Error(`prop 名不可序列化: ${k}`);
     if (v === true) { parts.push(k); continue; }
     if (typeof v === "string") {
-      // 含换行的值必须走 JSON 字符串字面量:MDX 的块解析会按缩进剥
-      // 多行模板字面量的前导空格(实测 golf 页 pre 类名 6 空格被剥成 4)。
+      // Use JSON string literals for multiline values. MDX indentation processing
+      // changed six leading spaces to four in the golf pre className fixture.
       if (v.includes("\n") || v.includes('"')) parts.push(`${k}={${jsonOf(v)}}`);
       else parts.push(`${k}="${v}"`);
       continue;
     }
     if (typeof v === "number" || v === false || v === null) { parts.push(`${k}={${jsonOf(v)}}`); continue; }
     if (typeof v === "object") {
-      // 静态导入的图片对象:换成本页 import(资产从镜像拷贝)
+      // Emit page imports for static image objects, copying assets from the mirror.
       if (v.src && String(v.src).startsWith("/_next/static/media/")) {
         const imp = ctx.addStaticImage(v.src);
         parts.push(`${k}={${imp}}`);
@@ -121,7 +108,7 @@ function templ(s) {
 }
 
 // ---------------------------------------------------------------------------
-// 内联(markdown 行内)反推
+// Recover inline Markdown.
 function escapeMd(s) {
   return s
     .replace(/\\/g, "\\\\")
@@ -154,7 +141,7 @@ function inline(v, ctx) {
     case "s": return "<s>" + inline(kids, ctx) + "</s>";
     case "br": return "<br/>";
     case "code": {
-      // 无类名的 code = 作者手写的字面 JSX(markdown 反引号会走 Code 组件加类名)
+      // A code node without the mapped class uses literal JSX in this project.
       if (p.className === undefined || (p.className && p.className.$undefined)) {
         return `<code>{${jsonOf(textOf(kids))}}</code>`;
       }
@@ -186,7 +173,7 @@ function inline(v, ctx) {
 }
 
 // ---------------------------------------------------------------------------
-// 组件形状识别(className 指纹)
+// Recognize configured component shapes by className.
 const SHAPE = {
   callout: "bg-gray-200 dark:bg-[#333] dark:text-gray-300 flex items-start p-3 my-6 text-base",
   figure: "my-5 flex flex-col items-center",
@@ -200,7 +187,7 @@ const SHAPE = {
 
 function block(v, ctx) {
   if (typeof v === "string") {
-    if (v.trim() === "") return null; // 块间 "\n" 化石:块之间统一空行
+    if (v.trim() === "") return null; // Preserve block separators from the captured text structure.
     return escapeMd(v);
   }
   if (Array.isArray(v) && !isEl(v)) {
@@ -223,8 +210,8 @@ function block(v, ctx) {
         typeof k === "string" ? k.trim() === "" : isEl(k) && !INLINE_TAGS.has(tagOf(k))
       );
     if (allBlockJsx) {
-      // 纯块级 JSX 内容的段落:MDX 会丢 p 外壳,用 <P> 保住(不含行内元素,
-      // 否则 MDX 在 JSX 块内再生一层 p)
+      // Use <P> for a paragraph containing only block JSX so MDX retains its wrapper.
+      // Mixed inline content follows a different path to avoid an extra paragraph.
       ctx.use("P");
       return `<P>${arr.filter(isEl).map((k) => dispatchInsideJsx(k, ctx)).join("")}</P>`;
     }
@@ -253,8 +240,8 @@ function block(v, ctx) {
     if (els.length === 1 && tagOf(els[0]) === "pre") return block(els[0], ctx);
   }
   if (t === "pre") {
-    // 围栏判据:pre>code>code 嵌套(markdown 围栏经 Pre+Code 双包装的指纹);
-    // 其余(单层 code、内含元素)= 作者手写字面 JSX,逐字发射
+    // The configured pre>code>code shape identifies a fenced code block.
+    // Other code shapes retain literal JSX; confirm these mappings per project.
     const outerCode = isEl(kids) ? kids : (Array.isArray(kids) ? kids.find(isEl) : null);
     const innerKids = outerCode ? kidsOf(outerCode) : null;
     const nested = innerKids && (isEl(innerKids) ? tagOf(innerKids) === "code" : Array.isArray(innerKids) && innerKids.length === 1 && isEl(innerKids[0]) && tagOf(innerKids[0]) === "code");
@@ -279,13 +266,13 @@ function block(v, ctx) {
   if (t === "span" && cls === SHAPE.caption) return captionOf(v, ctx);
   if (t === "div" && SHAPE.footnotes.test(cls)) {
     ctx.use("FootNotes");
-    // 分隔符跟随镜像数据:同站两篇脚注一有 "\n" 文本节点一没有(作者手笔
-    // 不一致,照抄)——字符串子节点显式发 {"json"},元素照译。
+    // Preserve captured footnote separators; two source posts differed in whether
+    // they included a newline text node. Emit strings as explicit JSON expressions.
     const rawArr = isEl(kids) ? [kids] : Array.isArray(kids) ? kids : [kids];
     const pieces = rawArr.map((n) => {
       if (typeof n === "string") return n === "" ? null : `{${jsonOf(n)}}`;
       if (!isEl(n)) return null;
-      // 脚注 p:["1", ".", " ", <a href=#sN id=fN>^</a>, " ", 内容...]
+      // Footnote paragraph shape: ["1", ".", " ", <a href="#sN" id="fN">^</a>, " ", content].
       if (tagOf(n) === "p") {
         const arr = kidsOf(n);
         if (Array.isArray(arr) && typeof arr[0] === "string" && arr[1] === "." &&
@@ -303,8 +290,8 @@ function block(v, ctx) {
   if (t === "div" && SHAPE.hr.test(cls)) { ctx.use("HR"); return "<HR />"; }
   if (t === "div" && SHAPE.snippet.test(cls)) {
     ctx.use("Snippet");
-    const inner = kidsOf(isEl(kids) ? kids : kids.find(isEl)); // max-w-2xl 内层
-    // 内层保持字面 JSX:原组件内部不过 mdx 映射(镜像里这些 p 无 P 类名)
+    const inner = kidsOf(isEl(kids) ? kids : kids.find(isEl)); // Inner max-w-2xl content.
+    // Retain literal JSX where the source component bypasses MDX component mappings.
     return `<Snippet>\n  ${jsxChildren(inner, ctx, "  ")}\n</Snippet>`;
   }
   if (t === "div" && cls === SHAPE.tweetWrap) {
@@ -323,17 +310,17 @@ function block(v, ctx) {
     }
     return `<Tweet id="${m[1]}" />`;
   }
-  // 兜底:字面 JSX
+  // Fallback to literal JSX.
   return ctx.jsx(v);
 }
 
 function liContent(li, ctx) {
   const kids = kidsOf(li);
-  // li 里可能是内联(紧凑项),也可能是块级内容(松散项:li > p 们)
+  // List items can contain inline text or loose block content (li > p).
   const arr = isEl(kids) ? [kids] : Array.isArray(kids) ? kids : [kids];
   const hasBlock = arr.some((k) => isEl(k) && ["ul", "ol", "p", "blockquote", "pre", "div"].includes(tagOf(k)));
   if (!hasBlock) return inline(kids, ctx);
-  // 松散项:逐块反推,块间空行(markdown 续行缩进由 ul 发射器补)
+  // Recover loose items block by block; the list emitter supplies continuation indentation.
   const blocks = [];
   for (const k of arr) {
     if (typeof k === "string") { if (k.trim() !== "") blocks.push(escapeMd(k)); continue; }
@@ -344,7 +331,7 @@ function liContent(li, ctx) {
 }
 
 function headingText(kids, ctx) {
-  // withHeadingId 的逆:span.relative[锚a, id a, 文本] → "文本[#id]";素串直出
+  // Invert the configured heading wrapper into text [#id]; plain strings remain plain.
   const arr = isEl(kids) ? [kids] : Array.isArray(kids) ? kids : [kids];
   return arr
     .map((k) => {
@@ -371,14 +358,16 @@ function captionOf(v, ctx) {
   return `<Caption>${(Array.isArray(inner) ? inner : [inner]).map((x) => inlineJsxText(x, ctx)).join("")}</Caption>`;
 }
 
-/** JSX 上下文里的内联内容(不做 markdown 转义,链接保持 markdown 或 JSX)。 */
+/**
+ * Render inline content in JSX context without Markdown text escaping.
+ */
 function inlineJsxText(v, ctx) {
   if (typeof v === "string") return v.replace(/([<>{}])/g, (c) => ({ "<": "&lt;", ">": "&gt;", "{": "&#123;", "}": "&#125;" }[c]));
   if (typeof v === "number") return `{${v}}`;
   if (Array.isArray(v) && !isEl(v)) return v.map((x) => inlineJsxText(x, ctx)).join("");
   if (!isEl(v)) { if (v && v.$undefined) return ""; throw new Error("JSX 内联未知节点"); }
-  // 映射上下文(caption 等表达式内):MDX 会把小写标签映射到组件——
-  // LINK_CLASS 的 a 发最小形,target/rel/className 由 A 组件补(实测双写)
+  // MDX can map lowercase tags to components in expression contexts such as captions.
+  // Emit minimal LINK_CLASS anchors; the mapped A component supplies their attributes.
   if (tagOf(v) === "a" && propsOf(v).className === LINK_CLASS) {
     const inner = kidsOf(v);
     const innerStr = (isEl(inner) ? [inner] : Array.isArray(inner) ? inner : [inner])
@@ -393,13 +382,13 @@ function jsxChildren(kids, ctx, pad) {
   return arr
     .map((k) => {
       if (typeof k === "string") {
-        // 全部文本子节点发 {"json"} 表达式:裸文本会被 MDX 流处理包 p
-        // (the-ai-cloud 表格);空白串在 pre 里是显著字节(2019 终端块),
-        // 表达式形态下保留无副作用
+        // Emit text children as JSON expressions to avoid MDX adding paragraph wrappers.
+        // This matters for the-ai-cloud tables and whitespace in the 2019 terminal block.
+        // Explicit expressions preserve the recorded text bytes.
         return `{${jsonOf(k)}}`;
       }
       if (typeof k === "number") return `{${k}}`;
-      if (typeof k === "boolean") return `{${k}}`; // {cond && ...} 的布尔化石
+      if (typeof k === "boolean") return `{${k}}`; // Preserve boolean results of conditional children.
       if (k && typeof k === "object" && !Array.isArray(k) && k.$undefined) return "{undefined}";
       if (k && typeof k === "object" && !Array.isArray(k) && k.$component === "DEMO_CODE#24956") { ctx.use("fp:DEMO_CODE#24956"); return "{DEMO_CODE}"; }
       return isEl(k) ? dispatchInsideJsx(k, ctx) : null;
@@ -408,7 +397,9 @@ function jsxChildren(kids, ctx, pad) {
     .join("\n" + pad);
 }
 
-/** JSX 兜底里再遇到可识别形状(Caption 等)时仍走组件。 */
+/**
+ * Recognized components such as Caption still use component emission inside literal JSX.
+ */
 function dispatchInsideJsx(v, ctx) {
   const cls = typeof propsOf(v).className === "string" ? propsOf(v).className : "";
   const t = tagOf(v);
@@ -421,7 +412,7 @@ function dispatchInsideJsx(v, ctx) {
 // ---------------------------------------------------------------------------
 function indent(s, pad) { return s.split("\n").map((l) => (l ? pad + l : l)).join("\n"); }
 
-// 一方客户端组件 → 组件名 + import 来源(相对 components/ 目录)
+// Map first-party client references to component names and import paths.
 const FIRST_PARTY = {
   "Demo#33006": ["Demo", "pure-ui-demo"],
   "Demos#33006": ["Demos", "pure-ui-demo"],
@@ -440,7 +431,7 @@ function makeCtx(slug) {
     staticImages,
     addStaticImage(src) {
       if (!staticImages.has(src)) {
-        const base = path.basename(src).replace(/\.[0-9a-f]{8}(?=\.[a-z0-9]+$)/i, ""); // 去内容哈希
+        const base = path.basename(src).replace(/\.[0-9a-f]{8}(?=\.[a-z0-9]+$)/i, ""); // Remove the recognized content-hash segment.
         const name = "img" + (staticImages.size + 1) + "_" + base.replace(/[^a-zA-Z0-9]/g, "_").replace(/_[a-z0-9]+$/, "");
         staticImages.set(src, { name, file: base });
       }
@@ -513,7 +504,7 @@ async function invert(slugFile) {
     if (b != null && b !== "") blocks.push(b);
   }
 
-  // metadata 反推(head f[0][2])
+  // Recover metadata from the head entry f[0][2].
   const head = j.tree.f[0][2];
   const metas = {};
   (function walk(v) {
@@ -530,14 +521,14 @@ async function invert(slugFile) {
     else if (v && typeof v === "object" && v.children !== undefined) walk(v.children);
   })(head);
 
-  // 输出路径
+  // Output path.
   let rel;
   if (route === "/about/") rel = "about/page.mdx";
   else rel = path.join("(post)", route.replace(/^\/|\/$/g, ""), "page.mdx");
   const outFile = path.join(OUT, rel);
   await mkdir(path.dirname(outFile), { recursive: true });
 
-  // 头部:imports + metadata
+  // Imports and metadata declarations.
   const depth = rel.split("/").length - 1;
   const up = "../".repeat(depth);
   const compImports = [...ctx.usedComponents].filter((c) => !c.startsWith("__") && !c.startsWith("fp:") && c !== "Tweet" && c !== "Image");
@@ -569,7 +560,7 @@ async function invert(slugFile) {
   const og = metas.ogImage ? new URL(metas.ogImage).pathname : null;
   const inheritsAll = md.title === ROOT_TITLE && (md.description === ROOT_DESC || !md.description) && (!og || og === "/opengraph-image");
   if (inheritsAll) {
-    // Q10:该页作者未写任何 metadata(golf 篇实测,头部全继承根)——照抄不补
+    // The golf page inherited root metadata; do not invent page-specific metadata.
   } else {
   lines.push("export const metadata = {");
   lines.push(`  title: ${jsonOf(md.title)},`);

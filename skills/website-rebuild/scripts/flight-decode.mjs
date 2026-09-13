@@ -25,10 +25,6 @@
  *
  * Usage: node scripts/flight-decode.mjs --mirror mirror --out docs/flight
  *
- * 中文规格（自 scripts/README.md 迁入，v0.3.21；本表另一拼写：`flight-decode.mjs`）
- * **C1 的坐标系**：把每页 `self.__next_f.push` 流解成模块引用表（I 行导出名=白送的 tier-1 命名证据）、HL 预载、已解引用的元素树 + JSX 式 outline。T 行按声明字节数走；`:HL` 空 id 行不许断链
- * C1 的坐标系：把每页 `self.__next_f.push` 流解成模块引用表（I 行导出名 = tier-1 命名证据）、HL 预载、已解引用元素树 + JSX 式 outline。T 行按声明字节数走；`:HL` 空 id 行不断链
- * `node flight-decode.mjs --mirror mirror --out docs/flight`
  */
 import { readFile, writeFile, mkdir, readdir } from "node:fs/promises";
 import path from "node:path";
@@ -122,8 +118,8 @@ function resolve(v, table, seen = new Set()) {
     if (m) {
       const id = m[2];
       if (seen.has(id)) {
-        // 带路径的自引用指向行内数据叶(flight 去重),在原始 json 上走路径
-        // 再解析叶子(整行重解会无限递归);无路径的自引用才是真环。
+        // A path-qualified self-reference can select a leaf from its own raw JSON row.
+        // Resolve that leaf only; resolving the full row again would recurse indefinitely.
         if (!m[3]) return { $cycle: id };
         const row0 = table.get(id);
         if (!row0 || row0.kind !== "json") return { $cycle: id };
@@ -146,15 +142,15 @@ function resolve(v, table, seen = new Set()) {
         return { $component: `${row.json[2] || "(default)"}#${row.json[0]}`, chunks: row.json[1] };
       const s2 = new Set(seen);
       s2.add(id);
-      // $<id>:<seg>:<seg>… 深引用(flight 数据去重:同一份数据第二处只发路径,
-      // 实测 basement:links=$34:props:children:2:…)。段按 数字=数组下标、
-      // 其余=对象键 索引进已解析的目标。
+      // Resolve $<id>:<path> references used for Flight data deduplication.
+      // The basement case included links=$34:props:children:2. Numeric path segments
+      // index arrays; other segments select object properties.
       let val = resolve(row.json, table, s2);
       if (m[3]) {
         for (const seg of m[3].split(":").filter(Boolean)) {
           if (val == null) return { $badPath: v };
-          // flight element 是数组 ["$",type,key,props],但路径引用按 React
-          // element 对象寻址:props→[3]、key→[2]、type→[1]
+          // Flight stores an element as ["$", type, key, props], while reference paths use
+          // React property names: props maps to [3], key to [2], and type to [1].
           const isElem = Array.isArray(val) && val[0] === "$" && val.length >= 4;
           if (isElem && seg === "props") { val = val[3]; continue; }
           if (isElem && seg === "key") { val = val[2]; continue; }

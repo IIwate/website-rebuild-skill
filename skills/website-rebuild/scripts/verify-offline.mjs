@@ -1,35 +1,22 @@
 #!/usr/bin/env node
 /**
- * verify-offline.mjs — the STATIC half of the zero-outbound gate
- * (verification-gates.md §1.6). scripts/probe.mjs covers the resource level:
- * it watches requests and fails on any that leave the served origin. That is
- * one of four required assertions, and the other three are invisible to it:
+ * Scan served HTML for selected forms of external network activity.
+ * Reports external connection hints, literal absolute URLs in supported inline
+ * call shapes, and an external-host census. Some fallback call sites are visible
+ * statically even when the browser does not execute their branches.
  *
- *   class 1  connection warm-up  — <link rel=preconnect|dns-prefetch|preload>
- *                                  do DNS + TLS with no resource request
- *   class 2  inline self-contained telemetry — sendBeacon/fetch to an absolute
- *                                  external URL from code that does not depend
- *                                  on any stubbed script
- *   class 3  fallback-path outbound — only fires when something else fails
+ * The scan removes ordinary anchor tags and recognized namespace URLs. It does
+ * not evaluate JavaScript, follow every external script or resolve computed URLs.
+ * preconnect/dns-prefetch can establish connections without a resource request;
+ * preload can request a resource. Browser checks with probe --no-external provide
+ * runtime evidence for the states actually exercised.
  *
- * This script asserts all three against the SERVED bytes (not the mirror on
- * disk: the response layer is where localisation happens, so the disk copy
- * would report holes that are not there and miss ones that are). Its output is
- * the artefact §1.6 asks for at close-out: an enumerated list of every external
- * absolute URL still present, each with a verdict — not the sentence "probe was
- * green".
+ * Checks served responses because URL localization occurs in the response layer.
+ * Remaining census entries need review; the census itself is not an exhaustive
+ * proof of offline behavior.
  *
- * Outbound <a href> anchors are NOT outbound calls: they are source content
- * (constitution rule 3) and only navigate on click.
- *
- * Usage:
  *   node scripts/verify-offline.mjs --base http://127.0.0.1:29001 --routes /,/x,/y
  *   node scripts/verify-offline.mjs --url http://127.0.0.1:29001/en
- *
- * 中文规格（自 scripts/README.md 迁入，v0.3.21；本表另一拼写：`verify-offline.mjs`）
- * **零外联门的静态一半**：枚举产出字节里每个外部绝对 URL 并逐条裁决（§1.6 的四类断言面里，资源级探针看不见的那三类）
- * **零外联门的静态半边**（资源级半边是 `probe.mjs --no-external`）：产出字节里的外部绝对 URL 普查——class 1 连接热身（preconnect/dns-prefetch）、class 2/3 调用点（sendBeacon/fetch/Image 携带外部字面量），census 里每个 host 必须在 `mirror/external.txt` 有登记行
- * `node verify-offline.mjs --base http://127.0.0.1:<port> --routes /,/about`
  */
 import { cli } from "./lib/cli.mjs";
 
@@ -54,7 +41,7 @@ const NAMESPACE_HOSTS = new Set(["www.w3.org", "schema.org", "json-schema.org", 
 let problems = 0;
 const census = new Map(); // host -> { count, kinds:Set, sample }
 
-// ⛔ A gate must fail legibly. Pointed at a base with nothing listening, this
+//  A gate must fail legibly. Pointed at a base with nothing listening, this
 // one used to die on an unhandled `TypeError: fetch failed` and a stack trace —
 // which reads as "the gate is broken", not "you did not start the server". The
 // difference matters most in a registered command someone runs months later.
@@ -64,7 +51,7 @@ try {
   console.error(`FATAL — nothing answered at ${BASE} (${e.cause?.code || e.name || e.message}).`);
   console.error(`        This gate reads the SERVED rebuild, so a server has to be up:`);
   console.error(`          node scripts/serve.mjs --root <rebuild-root> --port ${new URL(BASE).port || 80}`);
-  console.error(`        ⚠ If the rebuild has no routes yet, this gate is not applicable at this stage —`);
+  console.error(`         If the rebuild has no routes yet, this gate is not applicable at this stage —`);
   console.error(`          say so in the plan rather than leaving a registered command that always dies.`);
   process.exit(5);
 }

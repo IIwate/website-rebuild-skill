@@ -1,104 +1,93 @@
-# REBUILD_PLAN 模板
+# 重建计划模板
 
-> **何时使用本模板**：项目开工时复制为 `<项目根>/REBUILD_PLAN.md`。这是全项目唯一的过程账本：前向队列 + 登记表 + 里程碑日志。它随每个里程碑滚动生长，**代码与文档同一次提交**【lando §0.6】。`<!-- -->` 注释是填写说明，落盘后删除；`{...}` 是占位符。
+按项目规模选用本模板, 记录已约定的目标、依据、差异与验证结果. 已有项目记录能承载这些信息时直接复用. `{...}` 为占位符, HTML 注释为填写说明.
 
 ---
 
-# {项目名}-rebuild 重建计划
+# {项目名} 重建计划
 
-> 源站：{URL}　开工：{日期}　目标：逐行为对齐的 1:1 工程化复刻——源站有的都要有，源站没有的不做，所有代码逻辑可溯源到 bundle 行号。
-> 工具链：website-rebuild skill v{版本}（`SKILL.md` sha256 `{前 12 位}`，runtime：{Claude Code / Codex / …}）
-<!-- 溯源行：结论依赖工具,工具在长版本;复核一份旧产出时,第一个要知道的就是"它是哪一版工具跑出来的"。sha 取安装目录里实际加载的那份 SKILL.md【hashgraphvc】。 -->
+- 源站: {URL 与目标版本}
+- 目标: {页面、功能、交付层级及验收范围}
+- 采集与使用条件: {已确认条件和未解决项}
+- 工具依据: {实际使用的脚本或 skill 版本; 需要区分同版本修改时附摘要}
 
+## §0 实现约束
 
-## §0 执行纪律（宪法级，开工即定稿，此后只读）
+<!-- Use constraints that affect this project. Milestone completion does not authorize a commit, publication or deployment. -->
 
-<!-- 六条照抄自 lando §0，全系六项目同构。不要删减；可按站型补充，但不得与前六条冲突。 -->
+- 实现依据来自源码、数据资产或运行记录; 推断单独标明.
+- 保留目标范围内的行为. 有意改变行为时记录原因和影响.
+- 原始采集内容与派生产物分离, 变换可追溯.
+- 验证对应具体风险, 并报告覆盖范围与未完成项.
 
-1. **源站代码是唯一裁决**：每个改动先归属到 `mirror/_pretty/*.pretty.js` 行号（或镜像 HTML/CSS 位置）再落地。
-2. **源站有的都要有，没有的不做**；bug 与死代码照抄不修，登记为怪癖（§Q）。
-3. **有意偏差必须登记**在 §6；未登记的差异一律视为 bug。
-4. 不自创补偿性 CSS/JS——宁可先不像，也不要发明规则。
-5. 每个里程碑过浏览器实测取证，**全新加载**验证（不手动切效果）。
-6. 代码与文档同一次提交。
+## §1 镜像与外部依赖
 
-## §1 镜像清单与外部依赖
+<!-- Keep detailed URL records in the mirror manifest. This section summarizes scope, coverage and unresolved dependencies. -->
 
-<!-- M0 完成时填写。镜像账本本体在 mirror/（manifest），这里只记摘要与决策。 -->
+- 采集时间: {时间}
+- 清单: {路径}; 文件数与体积: {数值}
+- 发现方式: {静态引用、浏览器请求、运行时路径分析}
+- 已验证范围: {路由、视口、状态、离线条件与结果}
+- 缺失或排除项: {数量、原因与影响}
 
-- 镜像时间：{时间}；文件数 / 体积：{N 文件 / N MB}；权威清单：`mirror/{manifest 文件名}`
-- 抓取手段：{正则 BFS / CDP 抓包补录 / 模板字面量静态求解 / 逐 URL 实测状态码，逐项列出}
-- 镜像验收（M0.5 阻塞门）：断网伺服零 404 / 零控制台错误 / 零外联，{通过情况}
-
-**外部依赖决策表**（抓不进镜像的依赖逐项决策）【oryzo】：
-
-| 外部依赖 | 用途 | 决策（保留原引用 / 换端点 / 接受降级） | 理由 |
+| 外部依赖 | 用途 | 处置 | 依据与影响 |
 |---|---|---|---|
-| {Adobe Fonts / CDN / SaaS…} | | | |
+| {CDN / 字体 / 平台接口} | {用途} | {本地资源 / 已授权服务 / 未恢复} | {说明} |
 
-## §2 技术栈取证表
+## §2 技术栈证据
 
-<!-- 每个版本必须有 bundle 内证据，钉死不带 ^（--save-exact）。取证方式示例：版本字符串、pnpm 路径泄漏、wasm URL、API 指纹；REVISION 类常量搜值不搜名【noomo】。 -->
+<!-- Pin versions when output or API compatibility depends on them. Version strings, package paths and API signatures can support identification. -->
 
-| 层 | 选型与精确版本 | 取证证据（bundle 位置 / 特征） |
-|---|---|---|
-| 框架 | {名称@版本} | {如 `versions:{...}` 字面量 + 行号} |
-| 3D / 动画 / 其他 | | |
-| 传递依赖钉死 | {如 overrides: unhead 2.0.17} | {为什么必须钉——同框架版本不等于同输出【noomo】} |
-
-## §3 镜像盲区销账清单
-
-<!-- 静态爬取必漏三类：worker 运行时 fetch 的文件、懒加载资源、移动端变体【oryzo】。发现一条记一条，补录后销账【samsy】。 -->
-
-| # | 盲区资源 | 发现方式（实跑 404 / 抓包 diff / 目视） | 补录状态 |
+| 组件 | 版本或范围 | 来源证据 | 相关约束 |
 |---|---|---|---|
-| 1 | {路径} | | ☐ 待补 / ☑ 已补 |
+| {框架或库} | {版本} | {位置或记录} | {影响} |
 
-## §4 阶段计划（前向队列）
+## §3 资源发现覆盖
 
-<!-- 按依赖序排里程碑：M0 镜像 → M0.5 镜像断网跑通 → M1 逆向（engine-notes + 技术栈钉死）→ M2+ 移植（元系统 → 场景/组件 → 页面专属）→ M(n) 验证收口（冷头评审 + 版权决断）。每条里程碑写清验收标准（机器可断言的门），完成后在 §7 记日志。 -->
+<!-- Runtime workers, lazy assets and responsive variants can be absent from a static crawl. Record how each relevant class was examined. -->
 
-| 里程碑 | 范围 | 验收标准（门） | 状态 |
+| 资源或类别 | 发现依据 | 状态 | 缺失影响 |
 |---|---|---|---|
-| M0 | 镜像取证 | manifest 齐 + 外部依赖表 | ☐ |
-| M0.5 | 镜像断网跑通 | 零 404 / 零控制台错误 / 零外联 | ☐ |
-| M1 | 逆向笔记 + 技术栈钉死 | engine-notes 三段齐 + §2 填完 | ☐ |
-| M{n} | {范围} | {量化验收} | ☐ |
+| {路径或类别} | {引用 / 请求 / 路径推导} | {已获取 / 待处理 / 已排除} | {说明} |
 
-## §5 难点与风险评级
+## §4 阶段计划
 
-<!-- 开工前分项打星并与前作横向对标，用于预估工期与攻坚顺序【lando】。素材版权通常是 ★★★★★——最大风险是法务不是技术【oryzo】【kimi】。 -->
+<!-- Order work by dependencies and define observable completion conditions. Reuse previous captures and checks when their inputs remain valid. -->
 
-| 分项 | 评级 | 说明 |
-|---|---|---|
-| 素材版权 | ★★★★★ | {逐资产评估见 DEPLOY.md} |
-| {3D / 滚动编排 / 私有格式 / 平台层…} | {☆-★★★★★} | |
+| 阶段 | 范围 | 完成条件 | 状态 |
+|---|---|---|---|
+| M0 | {采集与基线} | {范围内资源及缺口可核对} | {状态} |
+| M1 | {分析与来源映射} | {关键行为有可追溯依据} | {状态} |
+| M{n} | {实现范围} | {具体行为或检查条件} | {状态} |
 
-## §6 有意偏差登记表
+## §5 风险与待确认事项
 
-<!-- 登记原则【kimi】："凡是明知与源站不同的实现，必须留一条，写清『源站怎么做的 / 我们怎么做 / 为什么 / 什么条件下重新考虑』。没登记的差异一律视为 bug。"典型条目：npm 替代 vendored 库、符号链接资产、验证仪器注入、遥测剥离。代码内对应处加 "REGISTERED DEVIATION" 注释【samsy】。 -->
+| 问题 | 已有证据 | 影响 | 下一步 |
+|---|---|---|---|
+| {技术或使用条件} | {事实} | {受影响范围} | {可验证操作或必要决定} |
 
-| # | 源站怎么做 | 我们怎么做 | 为什么 | 什么条件下重新考虑 |
+## §6 有意偏差
+
+<!-- Examples include platform API substitutes, telemetry removal and comparison instrumentation. Record observable effects, not only the changed code. -->
+
+| 编号 | 源站行为 | 本地行为 | 原因与影响 | 重新评估条件 |
 |---|---|---|---|---|
-| 6.1 | {源站行为 + 行号证据} | {复刻实现} | {理由} | {重新考虑条件} |
+| 6.1 | {依据} | {实现} | {说明} | {条件} |
 
-## §Q 源站怪癖登记表（照抄不修）
+## §Q 源站特殊行为
 
-<!-- 与 §6 相反：这里登记的是"源站自己的 bug/死代码/怪写法"，处置一律照抄。每条带 pretty 行号证据【lando】。警示案例：lando Q13——"修好" no-op 的 scene.remove(Q.name) 后真删除反而破坏遍历导致转场崩溃，最终回抄。 -->
+<!-- lando Q13 changed scene.remove(Q.name), a no-op in that source, into real removal and broke traversal during transitions. Check dependencies before changing unusual source behavior. -->
 
-| # | 怪癖现象 | 行号证据 | 处置 |
+| 编号 | 现象 | 依据 | 处置与验证 |
 |---|---|---|---|
-| Q1 | {如：调用即崩的死方法 / 拼错的事件名 / 恒为 true 的旗标} | pretty L{NNNN} | 照抄不修 |
+| Q1 | {源站行为} | {文件位置或观测} | {保持行为 / 已说明的偏差} |
 
-## §7 里程碑日志（倒序追加）
+## §7 阶段记录
 
-<!-- 每完成一个里程碑追加一条，与代码同 commit（"Port xxx" + "Update rebuild plan: xxx" 成对【oryzo】）。四要素缺一不可【kimi】【samsy】；"下一步断点待办"必须带精确行号，让跨会话续作有明确入口。注意：断点笔记里的"下一步很简单"也是待验证断言【kimi】。 -->
+<!-- Record material outcomes and enough evidence to resume. Include a commit reference only when a commit exists. -->
 
-### M{n} {标题}（{日期}，commit {hash}）
+### M{n} {阶段名称}, {日期}
 
-- **产出**：{做了什么，带行号溯源，如 "Port of Eu0 controls, pretty L63486-L63732"}
-- **验收**：{门的结果，机器可断言，如 "SSR 门 9/9 逐字节一致；探针 CLEAN"}
-- **教训**：{根因分析 / 环境陷阱 / 方法学发现；没有可写"无"}
-- **下一步断点待办**：{下个里程碑入口，带 pretty L{NNNN} 行号}
-
-### M{n-1} …
+- 产出: {文件或功能范围}
+- 验证: {输入、覆盖、结果与限制}
+- 未完成项: {阻塞或下一步入口}

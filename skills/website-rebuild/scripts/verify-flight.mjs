@@ -1,32 +1,18 @@
 #!/usr/bin/env node
 /**
- * verify-flight.mjs — C1 的语义门:构建产物的 flight 树 ≟ 镜像的 flight 树。 [v0.3]
+ * Compare normalized Flight trees from a mirror and a Next build.
+ * Normalizes build paths, CSS/media hashes, selected framework metadata,
+ * preload nodes and some children/prop representations, then compares trees and
+ * checks a global module-ID mapping. These normalizations can hide differences
+ * in loading, reconciliation or runtime behavior; use separate asset and browser
+ * checks. A passing comparison does not recover or prove original server code.
+ * --normalize-props drops named fields recursively; --normalize-class drops
+ * matching rendered subtrees. Record their scope before using either option.
+ * The parser is local to this checker; importing flight-decode would execute a
+ * producer rather than inspect the existing output.
  *
- * 字节门到不了 C1 的收口:Turbopack 的 chunk 名/模块 id/css-module 类名/媒体哈希
- * 都是构建哈希命名空间,每次构建都不同,而它们**不携带行为**。本门把两侧 flight
- * 流各自解开、把哈希命名空间规范化掉、把模块 id 做**全局双射**(同一导出名处处
- * 对应同一对 id,一对多即红),然后逐节点深比较。其余一切差异 —— 文本、props、
- * 结构、数据 —— 原样判红。
- *
- * ⛔ 本门自带解析器,不 import flight-decode.mjs(那是喂给逆变换器的生产链;
- *    检查者不能是生产者,verification-gates.md §2.1.2)。
- *
- * 登记的规范化族(每条都有 REBUILD_PLAN 偏差表编号):
- *   N1 chunk 路径 /_next/static/chunks/<hash>.<ext> → CHUNK.<ext>(D2)
- *   N2 css-module 类 <stem>_<hash8>-module__<h>__<local> → <stem>-MOD__<local>(D2)
- *   N3 媒体 /_next/static/media/<name>.<hash>.<ext> → 归并为 MEDIA(D2;
- *      next/font 的字体文件名两侧都是内容哈希,名字不可比,字节由资产门另比)
- *   N4 I 行 turbopack 模块 id → 双射表(D2)
- *   N5 预载 <script async src=CHUNK> 元素与 HL 提示的数量差 → 按集合语义比(D2)
- *   N6 首页 c 字段 ["","index"] vs ["",""](D6,Vercel 边缘重写工件)
- *
- * 用法: node scripts/verify-flight.mjs --built rebuild/.next/server/app --mirror mirror
- *       [--normalize-props views,viewsFormatted] [--normalize-class react-tweet-theme]
- *
- * 中文规格（自 scripts/README.md 迁入，v0.3.21；本表另一拼写：`verify-flight.mjs`）
- * **C1 语义门**：构建产物 flight 树 ≟ 镜像 flight 树。自带解析器（⛔ 不 import flight-decode——检查者不能是生产者）；规范化只收「证明不携带行为」的构建哈希命名空间（chunk 名/css-module 类/媒体哈希/可提升资源挂载点/编码自由度），**模块 id 做全局双射**（一对多即红）；站点登记项走 `--normalize-props`（ISR 纪元字段）与 `--normalize-class`（库渲染子树）；其余一切差异照红
- * C1 语义门：构建产物 flight 树 ≟ 镜像 flight 树，逐节点深比较；规范化只收构建哈希命名空间；模块 id 全局双射。站点登记项走 `--normalize-props` / `--normalize-class`（挂偏差表编号）。⛔ 自带解析器，不 import flight-decode
- * `node verify-flight.mjs --built rebuild/.next/server/app --mirror mirror`
+ *   node scripts/verify-flight.mjs --built rebuild/.next/server/app --mirror mirror
+ *   node scripts/verify-flight.mjs --built rebuild/.next/server/app --mirror mirror --normalize-props views,viewsFormatted --normalize-class react-tweet-theme
  */
 import { readFile, readdir, writeFile, mkdir } from "node:fs/promises";
 import path from "node:path";
@@ -41,11 +27,11 @@ const flag = (n, d) => {
 };
 const BUILT = flag("built", "rebuild/.next/server/app");
 const MIRROR = flag("mirror", "mirror");
-// 站点侧登记项(REBUILD_PLAN 偏差表编号写进旗标值旁的注释里):
-// --normalize-props views,viewsFormatted   数值/格式化字段按纪元漂移归一(rauchg D9 型:
-//     镜像各页是 ISR 不同再生时刻,源站自己就在发不一致的数据)
-// --normalize-class react-tweet-theme      按 className 子串把整棵库渲染子树归一
-//     (rauchg D10 型:库行为 × 第三方数据,数据纪元不可回放)
+// Project-specific normalization options; record their scope with the invocation.
+// --normalize-props views,viewsFormatted drops named fields across data epochs.
+// The rauchg ISR captures came from different regeneration times.
+// --normalize-class react-tweet-theme drops a matching rendered subtree.
+// This excludes its content from comparison; it does not verify that content.
 const NORM_PROPS = new Set((flag("normalize-props", "") || "").split(",").map((s) => s.trim()).filter(Boolean));
 const NORM_CLASS = (flag("normalize-class", "") || "").split(",").map((s) => s.trim()).filter(Boolean);
 
@@ -93,18 +79,18 @@ function rowsOf(stream) {
   return out;
 }
 
-// ---- 规范化 -----------------------------------------------------------------
+// Normalization rules.
 const normStr = (s) =>
   s
     .replace(/\/_next\/static\/(?:[a-z]+\/)?chunks\/(turbopack-)?[a-z0-9_-]{8,}\.(js|css)/g, "/_next/static/chunks/CHUNK.$2")
     .replace(/\/_next\/static\/(?:[a-z]+\/)?media\/[A-Za-z0-9_.-]+\.(woff2|ttf)/g, "/_next/static/media/MEDIA.$1")
     .replace(/\/_next\/static\/(?:[a-z]+\/)?media\/([A-Za-z0-9_-]+?)[.-][a-z0-9_-]{8,}\.(png|jpe?g|svg|gif|webp|avif|tsx)/g, "/_next/static/media/$1.HASH.$2")
-    // N2 位宽:Turbopack css-module 哈希不恒为 8 位 hex——darkroom 重建侧 next/font 类名
-    // `mono_39c065e-module___Kbuzq__variable`(7 位 + 下划线开头的 local 段)对源站
-    // `mono_5da033d2-module__n1AzdG__variable`,{8} 把 7 位漏成"有行为"的差异。{6,8} 仍是
-    // "证明不携带行为"的构建哈希命名空间。
+    // N2 accepts observed six-to-eight-character CSS module hashes. In darkroom,
+    // mono_39c065e-module___Kbuzq__variable used a seven-character hash, while
+    // mono_5da033d2-module__n1AzdG__variable used eight characters.
+    // Class hash normalization still requires separate stylesheet verification.
     .replace(/\b([a-z0-9_]+?)(?:sans|mono)?_[0-9a-f]{6,8}-module__[A-Za-z0-9_-]{4,10}__/g, "$1-MOD__")
-    // react-tweet 一类库的 css-module:<stem>-module__<hash>__<local>
+    // Library CSS modules can use <stem>-module__<hash>__<local>.
     .replace(/\b([a-z0-9-]+)-module__[A-Za-z0-9_-]{4,10}__/g, "$1-MOD__");
 
 function resolve(v, table, side, ids, seen = new Set()) {
@@ -114,15 +100,15 @@ function resolve(v, table, side, ids, seen = new Set()) {
     if (v === "$undefined") return "«undef»";
     if (v.startsWith("$S")) return "«sym:" + v.slice(2) + "»";
     if (v.startsWith("$D")) return "«date:" + v.slice(2) + "»";
-    // $<id> 或 $<id>:<path> 深引用(flight 数据去重)。两侧构建的去重点可以
-    // 不同——一侧展开、一侧路径引用指同一数据,不解开就是假红。路径段按
-    // 数字=数组下标、props/key/type=元素槽位、其余=对象键。
+    // Resolve deep references before comparing independently deduplicated streams.
+    // One side may inline a value that the other reaches through a path.
+    // Numeric segments index arrays; props/key/type address element slots.
     const m = /^\$([L@])?([0-9a-f]+)((?::[^\s"]+)*)$/i.exec(v);
     if (m) {
       const id = m[2];
       if (seen.has(id)) {
-        // 带路径的自引用指向行内数据叶(去重)——在**原始 json** 上走路径再
-        // 解析叶子,不整行重解(否则无限递归)。无路径的自引用才是真环。
+        // Resolve a path-qualified self-reference from the raw row, then resolve its leaf.
+        // A reference to the entire current row remains a cycle.
         if (!m[3]) return "«cycle»";
         const row0 = table.get(id);
         if (!row0 || row0.kind !== "json") return "«cycle»";
@@ -142,7 +128,7 @@ function resolve(v, table, side, ids, seen = new Set()) {
       if (row.kind === "T") return normStr(row.text);
       if (row.kind === "raw") return "«stream:" + row.raw + "»"; // X/C sentinel, both sides symmetric
       if (row.kind === "I") {
-        // 打包器对 default 导出的 I 行编码不同:一侧空串、一侧字面 "default"
+        // Normalize the observed empty-string/default export-name encodings.
         const en = row.json[2];
         const name = !en || en === "default" ? "(default)" : `${en}`;
         ids.push([row.json[0], name]);
@@ -168,7 +154,7 @@ function resolve(v, table, side, ids, seen = new Set()) {
   if (v && typeof v === "object") {
     const o = {};
     for (const [k, val] of Object.entries(v)) {
-      // 站点登记的纪元漂移字段(--normalize-props)
+      // Drop explicitly configured fields that vary by data epoch.
       if (NORM_PROPS.has(k) && (typeof val === "number" || typeof val === "string")) { o[k] = "«prop:" + k + "»"; continue; }
       o[k] = resolve(val, table, side, ids, seen);
     }
@@ -177,42 +163,41 @@ function resolve(v, table, side, ids, seen = new Set()) {
   return v;
 }
 
-/** N5:丢弃预载 script 元素与 precedence 样式链接(可提升资源,不是内容——
- *  react-tweet 的 css 两侧内容哈希相同,只是挂载点不同:我们在内容树尾,
- *  镜像在 HL+头部);N7:children 数组尾部的空白字符串化石(MDX 源文件尾
- *  换行的投影,渲染不可见)。chunk 计数差异属于打包器切分,不属于行为。 */
+/**
+ * N5 removes preload scripts and precedence stylesheet links from the tree comparison. Verify the resources separately. N7 removes trailing blank strings from children arrays; this is normalization, not a general whitespace-equivalence proof.
+ */
 function stripPreloads(v) {
   if (Array.isArray(v)) {
     if (v[0] === "$" && v[1] === "script" && v[3] && typeof v[3].src === "string" && /\/_next\/static\/(?:[a-z]+\/)?chunks\//.test(v[3].src) && v[3].async)
       return null;
     if (v[0] === "$" && v[1] === "link" && v[3] && v[3].rel === "stylesheet" && v[3].precedence)
       return null;
-    // 框架元数据边界(Outlet/Viewport/MetadataBoundary):注入位置随渲染模式
-    // (动态流后置到流尾 vs 静态在位),N11 家族,两侧对称 strip
+    // N11 removes selected framework boundary nodes whose placement can vary
+    // between streamed and static outputs. Their runtime behavior is not compared.
     if (v[0] === "$" && v[1] && typeof v[1] === "object" && typeof v[1].$c === "string" && /Boundary$/.test(v[1].$c))
       return null;
-    // 站点登记的库渲染子树(--normalize-class):库行为 × 第三方数据,
-    // 数据纪元不可回放;源码保真面是组件调用本身
+    // Drop configured library-rendered subtrees that cannot be replayed from the
+    // same data epoch. This reduces the compared scope.
     if (v[0] === "$" && v[3] && typeof v[3].className === "string" && NORM_CLASS.some((c) => v[3].className.includes(c)))
       return "«lib-subtree:" + NORM_CLASS.find((c) => v[3].className.includes(c)) + "»";
     const mapped = v.map(stripPreloads);
     if (v.length >= 4 && v[0] === "$") {
-      // N14:数字形 key("0"/"1"/".0"…)是数组渲染的索引自动 key,由数组
-      // 形状决定——而形状已被 N13 按渲染等价打平。归一为 null;语义 key
-      // (Sanity _key 等)照比。
+      // N14 treats numeric-looking keys as positional and normalizes them to null.
+      // Such keys can also be explicit application keys, so this rule can hide
+      // reconciliation differences; nonnumeric keys remain in the comparison.
       if (typeof mapped[2] === "string" && /^\.?\d+$/.test(mapped[2])) mapped[2] = null;
       return mapped;
     }
-    // 流通道 sentinel(«stream:X/C»)是 PPR 动态流的管件,静态构建无——两侧
-    // 渲染等价,滤掉(N11 家族)
+    // Filter configured PPR stream sentinels from the structural comparison.
+    // This does not establish equivalence of streaming or loading behavior.
     let arr = mapped.filter((x) => x !== null && !(typeof x === "string" && x.startsWith("\u00ab" + "stream:")));
-    // 样式槽归一:原本有项、全是可提升资源被 strip 光的数组 → null(页面级
-    // css 怎么分 chunk 是构建器切分,mirror [cssLink] vs built null——N5 家族)。
-    // 原本就空的 [](map 空列表化石)保留。
+    // Normalize a resource-only array to null after its links have been removed.
+    // This masks stylesheet chunk placement, which requires separate checks.
+    // An originally empty array remains distinguishable at this stage.
     if (v.length > 0 && arr.length === 0 && v.every((x) => x && Array.isArray(x))) return null;
     if (arr.some((x) => Array.isArray(x) && x[0] === "$")) {
-      // N7 尾部空白化石;N9 相邻字符串合并(DOM 渲染中文本节点自然连接,
-      // 切分位置是 MDX 解析细节,不携带行为)。纯字符串数组(c 字段)不动。
+      // N7/N9 normalize trailing blank children and adjacent text fragments.
+      // Pure string arrays such as the route c field are left intact.
       while (arr.length && typeof arr[arr.length - 1] === "string" && arr[arr.length - 1].trim() === "") arr.pop();
       const merged = [];
       for (const x of arr) {
@@ -226,28 +211,28 @@ function stripPreloads(v) {
   if (v && typeof v === "object") {
     const o = {};
     for (const [k, val] of Object.entries(v)) {
-      // N16:显式 undefined prop(源码 target={cond ? x : undefined} 的化石,
-      // flight 保留键)≡ 缺键——React 渲染等价,删键比较。
+      // N16 removes explicit undefined props for this normalized comparison.
+      // Prop presence may still be observable by application code.
       if (val === "\u00abundef\u00bb") continue;
       let sv = stripPreloads(val);
-      // N5 的对称补丁(darkroom):LayoutRouter 的 notFound/loading 槽是 [tree, styles, scripts]
-      // 元组。镜像的 styles=[precedence link] 被 N5 strip 成 null 后从元组消失,重建侧
-      // styles=[](本就空)按"空列表化石保留"留下——[tree] vs [tree, []] 假红。空数组与
-      // 被 strip 的槽渲染等价(都是"没有样式链接"),在这两个 prop 上剥尾部空数组/null。
+      // LayoutRouter notFound/loading slots contain [tree, styles, scripts].
+      // The darkroom mirror had a precedence link removed by N5, while the build
+      // contained an empty styles array. Normalize trailing null/empty slots here
+      // rather than treating their different intermediate forms as content changes.
       if ((k === "notFound" || k === "loading") && Array.isArray(sv)) {
         while (sv.length > 1 && (sv[sv.length - 1] === null || (Array.isArray(sv[sv.length - 1]) && sv[sv.length - 1].length === 0))) sv.pop();
       }
-      // N13(N8 的推广):children 的数组嵌套形状随源码表达式写法(平铺 JSX vs
-      // {[…]} 分组 vs map 结果),React 渲染时递归打平——不携带 DOM 行为。
-      // 深度打平 + 去空数组,直接元素包装为单元素列表,两侧同规则。
+      // N13 flattens nested children arrays and drops empty lists for comparison.
+      // This compares the resulting child sequence, not React key identity or
+      // all reconciliation behavior. Apply the same transformation to both sides.
       if (k === "children") {
         const flat = [];
         (function fl(x) {
           if (Array.isArray(x) && !(x[0] === "$" && x.length >= 4)) { x.forEach(fl); return; }
           if (x === null || x === undefined || x === "\u00abundef\u00bb") return;
-          // N15:无 key 的 fragment 渲染透明,React flight 在一侧保留节点、
-          // 另一侧折叠展开(取决于序列化路径)——展开比较。带 key 的保留
-          // (key 参与 reconciliation,是语义)。
+          // N15 expands unkeyed fragments in the normalized tree.
+          // Keyed fragments are retained because keys participate in reconciliation.
+          // Unkeyed-fragment normalization still requires behavioral checks.
           if (Array.isArray(x) && x[0] === "$" && x[2] == null &&
               (x[1] === "\u00absym:react.fragment\u00bb" || (x[1] && x[1].$symbol === "react.fragment"))) {
             fl(x[3] && x[3].children);
@@ -255,8 +240,8 @@ function stripPreloads(v) {
           }
           flat.push(x);
         })(sv);
-        // N9(在打平后执行):相邻字符串合并 + 空串滤除——文本切分位置是
-        // 源码表达式细节(模板拼接 vs 字面),DOM 渲染连接后等价。
+        // N9 coalesces adjacent text and removes empty strings after flattening.
+        // Text-node boundaries are excluded from this comparison.
         const merged = [];
         for (const x of flat) {
           if (typeof x === "string") {
@@ -304,7 +289,7 @@ function firstDiff(a, b, p = "$") {
   return `${p}: ${JSON.stringify(a)?.slice(0, 60)} vs ${JSON.stringify(b)?.slice(0, 60)}`;
 }
 
-// ---- 路由清单 ---------------------------------------------------------------
+// Route discovery.
 async function routes() {
   const out = [];
   async function walk(d, rel) {
@@ -336,12 +321,12 @@ for (const r of await routes()) {
   let mTree = resolve(m0.json, mt, "mirror", mids);
   let bTree = resolve(b0.json, bt, "built", bids);
   mTree = stripPreloads(mTree); bTree = stripPreloads(bTree);
-  // N12:seed 与 routerState 的尾槽归一。CacheNodeSeedData 是
-  // [node, parallelRoutes, loading, isPartial…],FlightRouterState 是
-  // [segment, parallel, url, refresh, isRootLayout/缓存参数…] —— 前两元携带
-  // 行为(元素树/段名/并行路由),尾槽是渲染与缓存模式参数(PPR 动态流部署
-  // 的 loading/null/true vs 本地静态构建缺省)。实测 basement:103/144 路由
-  // 仅差 seed 尾槽(5 元 vs 3 元)。
+  // N12 normalizes trailing seed/router-state slots. CacheNodeSeedData contains
+  // [node, parallelRoutes, loading, isPartial, ...]; FlightRouterState contains
+  // [segment, parallel, url, refresh, isRootLayout, ...]. The compared prefix
+  // retains tree and route structure; loading and cache behavior are excluded.
+  // In basement, 103 of 144 routes differed only in seed tuple length
+  // (five entries versus three). That observation motivates this normalization.
   const isElN = (x) => Array.isArray(x) && x[0] === "$" && x.length >= 4;
   function normSeed(sd) {
     if (!Array.isArray(sd) || isElN(sd)) return sd;
@@ -353,7 +338,7 @@ for (const r of await routes()) {
   function normRS(rs) {
     if (!Array.isArray(rs)) return rs;
     const seg = rs[0], par = rs[1];
-    // 叶层([__PAGE__, {}])的 par 无 children 键,同样归一尾槽
+    // Normalize trailing slots on __PAGE__ leaves without parallel children.
     if (par && typeof par === "object" && !Array.isArray(par))
       return [seg, "children" in par ? { ...par, children: normRS(par.children) } : par, "«tail»"];
     return rs;
@@ -361,27 +346,27 @@ for (const r of await routes()) {
   if (Array.isArray(mTree.f)) mTree.f = mTree.f.map((e) => (Array.isArray(e) ? [normRS(e[0]), normSeed(e[1]), e[2], "«tail»"] : e));
   if (Array.isArray(bTree.f)) bTree.f = bTree.f.map((e) => (Array.isArray(e) ? [normRS(e[0]), normSeed(e[1]), e[2], "«tail»"] : e));
 
-  // N6:首页 c 字段(Vercel 边缘重写工件,D6)
+  // N6 normalizes the observed home-route c field used by the edge rewrite.
   if (r === "/" && Array.isArray(mTree.c) && mTree.c.join(",") === ",index" && bTree.c.join(",") === ",") {
     mTree.c = bTree.c = ["«c:registered-D6»"];
   }
-  // N11:row0 的平台/渲染模式字段。b=本地 buildId;u/a=部署运行时值;
-  // h/r/s=流式渲染通道(X sentinel);l/p/d 预留。Vercel 动态流部署 vs 本地
-  // 静态构建在这些字段上必然不同,且它们不携带页面行为(页面行为在
-  // c/q/i/f/m/G/S)。实测 basement:镜像 {…,d,u} vs 构建 {…,d,b} 全站 144 路由。
+  // N11 normalizes selected root fields: b is buildId, u/a are deployment values,
+  // and h/r/s identify streaming channels. Other reserved fields are listed below.
+  // These fields are excluded, not proven irrelevant to all runtime behavior.
+  // Basement recorded mirror {...,d,u} versus build {...,d,b} across 144 routes.
   {
     const PLATFORM_KEYS = ["b", "u", "r", "s", "a", "h", "l", "p", "d"];
     const present = PLATFORM_KEYS.filter((k) => k in mTree || k in bTree);
-    // 先删后按固定序重加:两侧原有键序不同(一侧 b 原生一侧 u 原生),
-    // 直接赋值会保留各自插入序,键序比较照红。
+    // Delete then reinsert normalized keys in a fixed order because assigning an
+    // existing key preserves its original insertion position.
     for (const k of present) { delete mTree[k]; delete bTree[k]; }
     for (const k of present) { mTree[k] = "«platform:" + k + "»"; bTree[k] = "«platform:" + k + "»"; }
   }
   const d = firstDiff(bTree, mTree);
-  // N4:模块 id 双射。曾按 resolve 期出现顺序配对——平台包装节点(*Boundary 等)
-  // 在剥离**之前**就被 resolve,两侧多出的 "(default)" 引用会把顺序推歪,要么审计
-  // 空转要么假交叉。改为:两树比对相等后,在**规范化后的等树**上并行行走,按树
-  // 位置一一配对($c 节点自带 $mid;firstDiff 无视 $mid)。
+  // Pair module IDs by position in the normalized trees after structure matches.
+  // Resolution order cannot be used: discarded boundary nodes can introduce extra
+  // default references on one side. $c nodes retain $mid for the pairing pass;
+  // firstDiff deliberately excludes $mid from structural comparison.
   let paired = 0;
   if (!d) {
     (function walkPair(a, b) {
@@ -398,7 +383,7 @@ for (const r of await routes()) {
   else { report.push(`ok   ${r}  (I 行 ${paired} 对)`); pass++; }
 }
 
-// 双射审计
+// Validate the module-ID mapping in both directions.
 let bij = 0, poly = [];
 for (const [mid, set] of pairs) {
   if (set.size === 1) bij++;
@@ -413,7 +398,7 @@ for (const [b, set] of builtSeen) if (set.size > 1) poly.push(`built ${b} <- {${
 
 console.log("=== verify-flight ===");
 for (const l of report) console.log("  " + l);
-console.log(`  模块 id 双射:${bij} 对一一映射${poly.length ? `;⚠ 违背双射 ${poly.length} 条:` : ""}`);
+console.log(`  模块 id 双射:${bij} 对一一映射${poly.length ? `; 违背双射 ${poly.length} 条:` : ""}`);
 for (const l of poly.slice(0, 10)) console.log("    " + l);
 await mkdir("docs", { recursive: true });
 await writeFile("docs/flight-gate-report.txt", report.join("\n") + "\n双射 " + bij + " 违背 " + poly.length + "\n");

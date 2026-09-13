@@ -1,42 +1,22 @@
 #!/usr/bin/env node
 /**
- * harvest-cases.mjs — take the gate's cases FROM THE SOURCE, not from your head.
+ * Capture configured input states and resolved values from a source page.
  *
- * A numeric gate needs (inputs, expected output) pairs. Writing them by hand is
- * how a suite ends up proving nothing: six hand-written cases on one target all
- * landed on the same easing curve and all went green, because the field that
- * names the curve was not the field that had been set. Hand-written cases
- * encode what you BELIEVE the engine's parameters are.
+ * The collector needs access to the engine through a registry, DOM reference or
+ * global. In one recorded case, six manually specified inputs all selected the
+ * same easing curve because they set the wrong parameter field. Capturing the
+ * resolved values exposed the missing variation.
  *
- * ⭐ When the source page keeps its engine reachable — a registry, a back
- * reference stashed on a DOM node, a global — the cases can be harvested from
- * the running original instead: drive it to N states and record what its own
- * objects hold. Every case is then a fact about the source, and the port has to
- * reproduce it.
- *
- * ⛔ Harvesting does not make the gate two-sided by itself. It produces the A
- * side. Something still has to feed the same inputs to the port and compare —
- * see verify-crossside.mjs. A baseline recorded from one side and diffed
- * against itself later is a change detector, not a correctness gate.
- *
- * ⚠ Record the RESOLVED values (numbers the engine computed), not the source
- * text it started from. The text is a claim about intent; the numbers are what
- * ran. Both sides can then be compared without re-implementing the parser.
+ * The output records only the source side. Evaluate the same inputs against the
+ * rebuild with verify-crossside.mjs; replaying this baseline against itself is
+ * useful for detecting changes but does not compare two implementations.
+ * Record resolved engine values so the comparison need not duplicate its parser.
  *
  *   node scripts/harvest-cases.mjs --url <source-url> --config scripts/harvest.config.mjs \
  *        --out docs/case-baseline.json [--steps 9] [--probe scripts/probe.mjs]
  *
- * The config supplies the target-specific part:
- *
- *   export const name = "keyframes";
- *   export function states(steps) { … }        // → [{label, js}] driving statements
- *   export function collect() { … }            // → JS expression string returning the record
- *
- * 中文规格（自 scripts/README.md 迁入，v0.3.21；本表另一拼写：`harvest-cases.mjs`）
- * **从源站活引擎采用例**：驱动源站到 N 个状态，逐状态记录它自己对象里的数值（站点侧写在 `harvest.config.mjs`，样例见 `harvest.config.example.mjs`）。
- * ⛔ 只产出 A 侧，必须配 `verify-harvest.mjs`。⚠ 采**解析完的数值**而非源文本
- * 从源站活引擎采用例：驱动到 N 个状态、逐状态记录它自己对象里的数值。⛔ 只产出 A 侧。⛔ 自带的“全同”防呆必须盯住**被测量本身**——盯“状态是否不同”曾放行一份关键帧全是死的基线
- * `node scripts/harvest-cases.mjs --url <src> --config scripts/harvest.config.mjs`
+ * The config exports name, states(steps) returning labeled driving statements,
+ * and collect() returning the JavaScript expression used to read each record.
  */
 import { writeFile, mkdir } from "node:fs/promises";
 import { spawn } from "node:child_process";
@@ -82,10 +62,10 @@ console.log(`=== harvest-cases — ${cfg.name || "unnamed"} ===`);
 console.log(`  ${URL_}`);
 console.log(`  ${states.length} state(s)\n`);
 
-// ⛔ One page load, all states. Reloading per state would let a state depend on
+//  One page load, all states. Reloading per state would let a state depend on
 // load order without anyone noticing, and it is what makes this slow enough to
 // be run rarely — which is how a baseline goes stale.
-// ⛔ The JSON.stringify goes INSIDE the async function. Outside it, what gets
+//  The JSON.stringify goes INSIDE the async function. Outside it, what gets
 // serialised is the pending Promise — `{}` — and the caller receives a
 // well-formed empty answer rather than an error.
 const SCRIPT = `(async()=>{
@@ -115,8 +95,9 @@ const rows = (r.states || []).filter((s) => !s.error);
 for (const s of rows) console.log(`  ok   ${String(s.label).padEnd(18)} ${cfg.summarize ? cfg.summarize(s) : ""}`);
 for (const s of errs) console.log(`  FAIL ${String(s.label).padEnd(18)} ${s.error}`);
 
-// ⛔ A baseline where every state is identical proves the driving never worked.
-// This is the harvest-time form of "a suite of cases that all land on one path".
+// Multiple requested states must produce distinguishable records for this
+// baseline. Identical records cannot distinguish an ineffective driver from
+// state selection or collected fields that remain constant.
 const fingerprints = new Set(rows.map((s) => JSON.stringify({ ...s, label: undefined })));
 if (rows.length > 1 && fingerprints.size === 1) {
   console.error(`\nFATAL — all ${rows.length} states recorded identical values. The driving statements did`);
@@ -129,5 +110,5 @@ await mkdir(path.dirname(OUT), { recursive: true });
 await writeFile(OUT, JSON.stringify({ source: URL_, harvestedFrom: cfg.name || null, states: r.states }, null, 2) + "\n");
 console.log(`\n  ${fingerprints.size} distinct state(s) out of ${rows.length} — the driving moved something.`);
 console.log(`  -> ${path.relative(process.cwd(), OUT)}`);
-console.log(`  ⚠ This is the A side only. Feed the same inputs to the port and compare (verify-crossside.mjs).`);
+console.log(`   This is the A side only. Feed the same inputs to the port and compare (verify-crossside.mjs).`);
 process.exit(errs.length ? 1 : 0);

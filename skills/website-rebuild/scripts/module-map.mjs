@@ -1,38 +1,17 @@
 #!/usr/bin/env node
+// Identify module containers, factory boundaries, exports and dependencies.
+// Supports the webpack and Turbopack container shapes handled below. Scope-hoisted
+// or flat bundles may require declaration analysis instead; a bundle's framework
+// name alone does not determine its shape.
 //
-// module-map.mjs — enumerate a packed bundle's modules as the porting units.
+// Tokenization invokes pinned Acorn through npx. The script imports only built-ins
+// and local helpers, but offline use requires the Acorn package in the npm cache.
+// In the F27 case, a quoted regular-expression literal made a text scanner drift
+// by 16,177 lines. Token boundaries avoid that specific ambiguity; recognized
+// container and call shapes still limit the resulting map.
 //
-// reverse-engineering.md's layer map scans TOP-LEVEL DECLARATIONS, because the
-// four projects before this one were flat concatenations: hundreds of
-// declarations sharing one scope, and the whole problem was deciding where one
-// ended. A packed bundle has ZERO top-level declarations — it is
-// `!function(modules){runtime}([…])` — and the boundaries the previous tool had
-// to reconstruct are simply present.
-//
-// ⭐ ZERO-DEPENDENCY, and that is not incidental. Everything before the source
-// stage runs with nothing installed; a rebuild project acquires devDependencies
-// only at M(n+1). The first version of this file imported @babel/* and sat in
-// scripts/ for eight releases — three lines below the paragraph forbidding it.
-//
-// It gets a real tokenizer anyway, via the same pinned-npx pattern
-// beautify-bundle.mjs uses: spawn `acorn --tokenize`, read the token stream,
-// never import anything. ⛔ Do NOT hand-roll the lexer instead. That was tried
-// elsewhere in this skill and a regex literal containing a quote desynced it by
-// 16,177 lines (F27). Brace matching over a real token stream is exact; brace
-// matching over text is a guess about strings, regexes and comments.
-//
-//   node scripts/module-map.mjs [--in mirror/_pretty/main.built.js] [--out docs/module-map.json]
-//
-// 中文规格（自 scripts/README.md 迁入，v0.3.21；本表另一拼写：`module-map.mjs`）
-// Webpack JSONP objects and sparse arrays retain their original module ids;
-// Turbopack supports async loaders and scope-hoisted aliases. Positive push
-// signatures take precedence over property-count heuristics, even for one module.
-// Duplicate primary ids use the last factory. Factories may share lines but
-// cannot overlap in character spans. Coverage requires at least half the file's
-// lines and, when there are more than eight require-shaped calls, at least half
-// those calls inside identified modules. Local dependencies (including aliases)
-// are requires; unresolved id-shaped targets are externalRequires and reported.
-// `node scripts/module-map.mjs --in mirror/_pretty/main.built.js`
+// node scripts/module-map.mjs [--in mirror/_pretty/main.built.js] [--out docs/module-map.json]
+
 import { writeFile, mkdir, readFile } from "node:fs/promises";
 import { spawnSync } from "node:child_process";
 import path from "node:path";
@@ -65,7 +44,7 @@ try { T = JSON.parse(r.stdout); } catch (e) {
 }
 const lab = (i) => T[i]?.type?.label;
 const val = (i) => T[i]?.value;
-// ⛔ A property name can be a reserved word — `.default` is the common one in
+//  A property name can be a reserved word — `.default` is the common one in
 // transpiled ESM interop — and acorn emits it as a KEYWORD token, not a `name`.
 // Requiring `name` here dropped `default` from one module's export list, which
 // is exactly the export that matters for interop.
@@ -130,11 +109,11 @@ for (let i = 0; i + 6 < T.length; i++) {
 }
 
 // A module property is `<key>: function(…)` where key is a string, a bare
-// identifier, or a number. ⛔ All three occur: a minifier quotes a key only
+// identifier, or a number.  All three occur: a minifier quotes a key only
 // when it must, so `"02b5c2be…":` and `a738138e…:` and `14:` are the same
 // thing. Accepting only the quoted form found 376 of 597 modules and the miss
 // was invisible — every id it dropped simply never appeared downstream.
-// ⚠ The factory is not always the `function` keyword. Webpack emits ARROW
+//  The factory is not always the `function` keyword. Webpack emits ARROW
 // factories under newer targets: `"./src/x.js":(t,e,s)=>{…}` — and a
 // single-param arrow can drop the parens entirely (`e=>{…}`). Accepting only
 // `function` found 4 of 12 modules here, and the plausibility gate below
@@ -161,7 +140,7 @@ for (let i = 0; i + 2 < T.length; i++) {
 // Group by enclosing brace depth so a stray `{ x: function(){} }` elsewhere in
 // the file cannot be mistaken for the container. The container is the depth
 // with by far the most module-shaped properties.
-// ⛔ `${` opens a brace context that closes with a plain `}`. Counting only `{`
+//  `${` opens a brace context that closes with a plain `}`. Counting only `{`
 // as an opener makes depth drift negative once per template interpolation — 466
 // of them here, and `}` outnumbered `{` by exactly 466, which is how the bug
 // announced itself. A depth counter that can go negative is not a depth counter.
@@ -198,7 +177,7 @@ const [, members] = [...byOwner].sort((a, b) => b[1].length - a[1].length)[0] ||
 const webpackPush = wpJsonpEntries.length > 0;
 
 // --- Turbopack container ----------------------------------------------------
-// ⭐ A second packer, a different container syntax, the same porting unit.
+//  A second packer, a different container syntax, the same porting unit.
 // Next.js with Turbopack emits
 //   (globalThis.TURBOPACK ||= []).push([currentScript, <id>, <factory>, <id>, …])
 // i.e. a FLAT alternating list inside one push(), not an object of properties.
@@ -206,11 +185,11 @@ const webpackPush = wpJsonpEntries.length > 0;
 //   ctx.i(<id>) / ctx.r(<id>)  require another module
 //   ctx.s([[name, () => binding], …], <ownId>)  DECLARES this module's exports
 //
-// ⛔ The webpack reader does not merely miss this — it finds a couple of
+//  The webpack reader does not merely miss this — it finds a couple of
 // unrelated `key: function` properties elsewhere in the file and reports
 // success. See the plausibility check at the end: a container that explains
 // almost none of the require calls in the file is not the container.
-// ⛔ The container has a PROLOGUE. After currentScript come bare numeric ids
+//  The container has a PROLOGUE. After currentScript come bare numeric ids
 // with no factory — the chunk's declared dependencies, ids it needs another
 // chunk to have provided. They are not modules, and dropping them from a
 // re-emitted chunk breaks LOAD ORDER: the runtime evaluates a module whose
@@ -235,7 +214,7 @@ for (let i = 0; i + 2 < T.length; i++) {
     else if (CLOSE.has(l)) { d--; if (d === 0) break; }
     // At depth 1, a number immediately followed by a comma and an arrow
     // function or `function` is `<id>, <factory>`.
-    // ⚠ A candidate element must START an element: preceded by `,` or the
+    //  A candidate element must START an element: preceded by `,` or the
     // opening `[`. Without this the `0` in `void 0` (the currentScript
     // expression) is read as an id, and every chunk's first module comes out
     // "also answering to 0".
@@ -243,7 +222,7 @@ for (let i = 0; i + 2 < T.length; i++) {
     if (d === 1 && startsElement && lab(k) === "num" && lab(k + 1) === ",") {
       const after = lab(k + 2);
       if (after === "(" || after === "name" || after === "function") {
-        // ⛔ ONE OR MORE ids share ONE factory. The container is not a strict
+        //  ONE OR MORE ids share ONE factory. The container is not a strict
         // id/factory alternation: `}, 73692, 24109, 34281, …, 77117, e => {`
         // gives seven ids the SAME module body — the packer deduplicating
         // identical modules behind several ids. Taking only the id adjacent to
@@ -272,18 +251,18 @@ for (let i = 0; i + 2 < T.length; i++) {
 let entries = [];
 let containerKind = "ObjectExpression";
 
-// ⭐ A POSITIVE SIGNATURE BEATS A COUNT, and this chain is that rule written as
+//  A POSITIVE SIGNATURE BEATS A COUNT, and this chain is that rule written as
 // an order. Both webpack readers are heuristic scans for `[function…` /
 // `key: function` shapes; the JSONP and TURBOPACK readers each match a
 // structural literal that only their packer emits. So a positive match decides,
 // and the generic property scan is only consulted when neither fired.
-// ⛔ The tiebreak this replaced was "more modules wins", and a Turbopack chunk
+//  The tiebreak this replaced was "more modules wins", and a Turbopack chunk
 // can carry MORE webpack-shaped properties inside its module bodies than it has
 // modules — a three.js MathUtils table, a carousel's slot array. Measured
 // upstream: 3 spurious webpack entries outranked the chunk's 1 real factory, 7
 // outranked 2, 26 outranked 14, and the plausibility check below then correctly
 // FATAL'd on the wrong container. A file cannot be both.
-// ⛔ ONE module is a container too (`turbo.length > 0`, not `>= 2`): a
+//  ONE module is a container too (`turbo.length > 0`, not `>= 2`): a
 // single-factory Turbopack chunk — a lazily-loaded scene, a dynamic() boundary —
 // is a container with one entry, and demanding two FATAL'd on it as "no
 // container" while its push sat on line 1.
@@ -322,16 +301,16 @@ if (wpJsonpEntries.length > 0) {
 // inside it is to check them against the real id set.
 const KNOWN = new Set(entries.map((e) => String(e.id)));
 
-// A packer's module id: a content hash, or a small ordinal. Same judgement
+// A packer's module id: a content hash, or a small ordinal. Same classification
 // cold-audit-modules.mjs makes about literals inside a require call.
-// ⭐ A STRING-KEYED CONTAINER HAS A THIRD SPELLING. webpack keys modules by
+//  A STRING-KEYED CONTAINER HAS A THIRD SPELLING. webpack keys modules by
 // PATH there — `s("./node_modules/gsap/index.js")` is a require of gsap, and
 // gsap routinely lives in a vendor chunk, so under a hash/ordinal-only shape
 // test that edge fails BOTH judgements: not in KNOWN, not id-shaped, silently
 // dropped. The closure gate then calls a chunk closed that throws at
 // evaluation time without three other chunks loaded (measured on milknetwork:
 // 10 such ids, all of gsap/three/swiper).
-// ⚠ Gated on the LITERAL'S TOKEN TYPE **and** on how THIS container spells its
+//  Gated on the LITERAL'S TOKEN TYPE **and** on how THIS container spells its
 // ids. A `./…` literal is an id only where ids are paths; inside a numeric
 // container it is an ordinary path string — an asset URL, an import hint — and
 // admitting it there re-opens the false-dependency half of the same bug.
@@ -346,7 +325,7 @@ const PATH_KEYED = [...KNOWN].some((id) => PATH_ID_SHAPE.test(id));
 /**
  * File one literal from inside a require call.
  *
- * ⛔ `KNOWN` WAS DOING TWO JOBS, and dropping it to fix the second broke the
+ *  `KNOWN` WAS DOING TWO JOBS, and dropping it to fix the second broke the
  * first. Filtering on it kept the SOUNDNESS the conditional-require scan needs —
  * `reqName(...)` collects every literal at any depth, so `n(new Error("http
  * status code: " + s))` would otherwise file a sentence as a dependency. But it
@@ -355,14 +334,14 @@ const PATH_KEYED = [...KNOWN].some((id) => PATH_ID_SHAPE.test(id));
  * OTHER chunks"), so a real cross-chunk edge vanished with no trace — an
  * assertion over an input the tool itself had shortened.
  *
- * ⭐ So: shape decides whether it is an id at all, membership decides which
+ *  So: shape decides whether it is an id at all, membership decides which
  * ledger it lands in. `requires` stays closed over the map, which is what
  * closure.mjs asserts on; `externalRequires` records the rest so the miss is
  * REPORTED rather than either dropped or fatal. When a site-wide map exists
  * (cold-audit-modules.mjs reads `MAP.chunks`), those ids are simply in KNOWN and
  * this set empties on its own.
  *
- * ⚠ MEMBERSHIP IS ASKED FIRST, always. A `./…` id defined in THIS container is
+ *  MEMBERSHIP IS ASKED FIRST, always. A `./…` id defined in THIS container is
  * a local edge and belongs in `requires` — reading the shape first would file
  * every same-chunk path-keyed require as external and empty the closure gate's
  * input on exactly the containers that spell ids as paths.
@@ -378,7 +357,7 @@ const addRequire = (v, keyKind, requires, externalRequires) => {
 
 const mods = [];
 for (const { id, fi, aliases = [] } of entries) {
-  // ⛔ Three factory shapes, not one. webpack emits `function (m, e, r) {…}`;
+  //  Three factory shapes, not one. webpack emits `function (m, e, r) {…}`;
   // Turbopack emits `(e, t, r) => {…}` and, for a single parameter, the bare
   // `e => {…}` with no parentheses at all. Assuming the parenthesised form
   // walks past the arrow into the NEXT module's tokens and silently produces
@@ -410,7 +389,7 @@ for (const { id, fi, aliases = [] } of entries) {
     else if (l === "}") { bd--; if (bd === 0) { end = k; break; } }
   }
   const startLine = T[fi].loc.start.line, endLine = T[end].loc.end.line;
-  // ⛔ Character offsets, not just lines. A Turbopack factory begins MID-LINE —
+  //  Character offsets, not just lines. A Turbopack factory begins MID-LINE —
   // line 1 holds the container header and the first factory — so a line-range
   // slice would carry the container prefix into the module. Recorded for every
   // packer: harmless where lines already suffice, essential where they do not.
@@ -435,7 +414,7 @@ for (const { id, fi, aliases = [] } of entries) {
     // --- Turbopack: ctx.i(id) / ctx.r(id) require; ctx.s([[name, …]], own) ---
     if (ctxName && lab(k) === "name" && val(k) === ctxName && lab(k + 1) === "." && lab(k + 2) === "name") {
       const method = val(k + 2);
-      // ⭐ ctx.A(<id>) is Turbopack's ASYNC loader — `import()` compiles to it.
+      //  ctx.A(<id>) is Turbopack's ASYNC loader — `import()` compiles to it.
       // It is still a dependency edge: dropping it leaves the closure blind to
       // everything behind a dynamic import (basement.studio loads its entire
       // 3D scene as `e.A(724681).then(e => e.Scene)` — the whole office scene
@@ -444,7 +423,7 @@ for (const { id, fi, aliases = [] } of entries) {
         addRequire(String(val(k + 4)), "num", requires, externalRequires);
         continue;
       }
-      // ⭐ ctx.v(cb) defines an ASYNC MODULE: a loader stub whose body loads
+      //  ctx.v(cb) defines an ASYNC MODULE: a loader stub whose body loads
       // sibling chunks (ctx.l("path")) and then resolves `cb(<moduleId>)`. The
       // id handed to the resolve callback is the stub's real payload — collect
       // every numeric literal in the call (the only numbers a stub body holds
@@ -460,15 +439,15 @@ for (const { id, fi, aliases = [] } of entries) {
         continue;
       }
       if (method === "s" && lab(k + 3) === "(") {
-        // ⭐ Export names, given by the packer. Every string literal at any depth
+        //  Export names, given by the packer. Every string literal at any depth
         // inside the call, up to its matching ")", is an exported name.
-        // ⛔ And the call's LAST numeric argument (depth 1) is the id the exports
+        //  And the call's LAST numeric argument (depth 1) is the id the exports
         // register under. Scope hoisting merges several source modules into ONE
         // factory, each declaring its exports via `ctx.s([…], <subId>)` — those
         // sub-ids are require-able from other chunks (`ctx.i(subId)`), so a map
         // that only knows factory ids leaves the closure unclosed: 87 required
         // ids "missing" on basement.studio, every one an in-factory merge.
-        // ⛔ DO NOT SKIP THE CALL BODY. With the React Compiler, Turbopack puts the
+        //  DO NOT SKIP THE CALL BODY. With the React Compiler, Turbopack puts the
         // export's whole implementation INSIDE the declaration —
         //   e.s(["useTheatre", 0, function(o, a, s, l) { …the entire component… }], 59278)
         // — so "collect names, then jump past the matching `)`" jumped past the
@@ -495,7 +474,7 @@ for (const { id, fi, aliases = [] } of entries) {
 
     // reqName(<anything>) — collect every literal inside the call, at any depth.
     //
-    // ⛔ Matching only `reqName("id")` misses a CONDITIONAL require, and this
+    //  Matching only `reqName("id")` misses a CONDITIONAL require, and this
     // bundle has one: `i(t ? "c0e8c815…" : "2f021872…")` picks a video-player
     // implementation by browser and options. Both targets then had no inbound
     // edge, the closure classified them as dead code, and the port shipped
@@ -547,7 +526,7 @@ for (const { id, fi, aliases = [] } of entries) {
       exportsAssigned++;
     }
   }
-  // ⛔ Carry `aliases` from THIS entry, not from a lookup by id. A container can
+  //  Carry `aliases` from THIS entry, not from a lookup by id. A container can
   // define the same id more than once (see the shadowing report below), so
   // `entries.find(e => e.id === id)` returns the FIRST definition's aliases and
   // can hang them on a shadowed body — which makes slice-modules emit an alias
@@ -556,24 +535,24 @@ for (const { id, fi, aliases = [] } of entries) {
   mods.push({ id, aliases: [...new Set([...aliases, ...subIds])], startLine, endLine, startChar, endChar, lines: endLine - startLine + 1, requires: [...requires], externalRequires: [...externalRequires], exportsAssigned, exportNames: [...exportNames].slice(0, 12) });
 }
 
-// ⛔ A container can define the same id more than once, and this one does: 597
+//  A container can define the same id more than once, and this one does: 597
 // properties, 569 distinct ids. JS object-literal semantics decide which one is
 // real — THE LAST DEFINITION WINS — so the map keeps the last and reports what
 // it shadowed.
 //
-// ⚠ Four of the shadowed copies here are NOT byte-identical to their winner:
+//  Four of the shadowed copies here are NOT byte-identical to their winner:
 // `503cddff7fa7d3d89971` is defined four times, once as a plain rAF scheduler
 // and again as a phase-aware one. A bundle can carry several versions of the
 // same library and let the packer's last write decide. So this is not corrupt
 // input to reject — it is input to read correctly.
 //
-// ⛔ Before this existed the tool reported "597 modules" and every document
+//  Before this existed the tool reported "597 modules" and every document
 // repeated the number; the real count of distinct modules is 569. Worse, tools
 // that build an id→module map got whichever copy the iteration order landed on.
 // The port did take the winning copy of the one duplicate inside its slice —
 // by luck, not by decision.
 //
-// ⚠ "Last" means last IN THE FILE. Computing it after the display sort keeps
+//  "Last" means last IN THE FILE. Computing it after the display sort keeps
 // the SMALLEST copy of each id and then reports divergence that is an artefact
 // of the sort — a bug that reads exactly like a finding.
 const inSourceOrder = [...mods].sort((a, b) => a.startLine - b.startLine);
@@ -585,10 +564,10 @@ if (shadowed.length) {
   const lines = code.split("\n");
   const body = (m) => lines.slice(m.startLine - 1, m.endLine).join("\n");
   divergent = shadowed.filter((m) => body(m) !== body(lastOf.get(m.id)));
-  console.log(`\n  ⚠    ${mods.length} properties define ${lastOf.size} distinct modules — ${shadowed.length} shadowed`);
+  console.log(`\n      ${mods.length} properties define ${lastOf.size} distinct modules — ${shadowed.length} shadowed`);
   console.log(`       definition(s) dropped; a repeated key means the LAST one wins at runtime.`);
   if (divergent.length) {
-    console.log(`  ⚠⚠   ${divergent.length} shadowed definition(s) DIFFER from their winner — the bundle carries`);
+    console.log(`     ${divergent.length} shadowed definition(s) DIFFER from their winner — the bundle carries`);
     console.log(`       more than one version of the same module. Port the WINNER; the others never ran:`);
     for (const m of divergent.slice(0, 8)) {
       console.log(`         ${m.id}  shadowed L${m.startLine}-${m.endLine}   winner L${lastOf.get(m.id).startLine}-${lastOf.get(m.id).endLine}`);
@@ -614,18 +593,16 @@ const total = mods.reduce((t, m) => t + m.lines, 0);
 console.log(`=== module-map  ${path.relative(process.cwd(), IN)} ===`);
 const fileLines = code.split("\n").length;
 console.log(`  container: ${containerKind === "TurbopackChunk" ? "turbopack chunk" : containerKind === "ArrayExpression" ? "webpack array" : "webpack object"}   ${mods.length} module(s)   ${total} lines inside modules / ${fileLines} total`);
-// ⚠ In a flat id/factory list the closing brace of one module and the opening
+//  In a flat id/factory list the closing brace of one module and the opening
 // of the next share a line, so the per-module line counts overlap by one each.
 // Say so rather than letting "more lines inside modules than in the file" read
 // as a bug in the reader.
-if (total > fileLines) console.log(`  ⚠    module spans overlap by ${total - fileLines} line(s): modules share lines (flat list, or a minified original)`);
-// ⛔ The overlap invariant is in CHARACTERS, not lines. Lines lied both ways:
-// on a beautified chunk "1,864 module lines in a 1,213-line file" was a real
-// wrong-boundary case that passed (14islands 7753 via the heuristic reader),
-// and on a MINIFIED original — the coordinates when js-beautify cannot parse
-// the file — 652 correct modules all "span" line 1, so a line rule is a
-// permanent false red (14islands F11). Factories never share characters in
-// any container shape, so the character sum is the invariant.
+if (total > fileLines) console.log(`      module spans overlap by ${total - fileLines} line(s): modules share lines (flat list, or a minified original)`);
+// Compare character coverage rather than line totals. The 14islands module
+// 7753 heuristic produced 1,864 module lines from a 1,213-line formatted file;
+// conversely, 652 valid modules in the minified F11 file shared line 1.
+// The character total detects aggregate over-coverage, but does not establish
+// pairwise disjointness of every reported module interval.
 {
   const totalChars = mods.reduce((t, m) => t + (m.endChar - m.startChar + 1), 0);
   if (totalChars > code.length) {
@@ -645,9 +622,9 @@ console.log(`  tokenized by acorn@${ACORN_VERSION} (pinned, spawned — not impo
 }
 if (containerKind === "TurbopackChunk" && turboDeps.length) {
   console.log(`  chunk declares ${turboDeps.length} cross-chunk dependency id(s): ${turboDeps.join(", ")}`);
-  console.log(`  ⚠ these are the container's PROLOGUE — a re-emitted chunk must carry them or load order breaks`);
+  console.log(`   these are the container's PROLOGUE — a re-emitted chunk must carry them or load order breaks`);
 }
-// ⭐ The edges that LEAVE this chunk. Printed unconditionally when non-empty:
+//  The edges that LEAVE this chunk. Printed unconditionally when non-empty:
 // they are absent from `requires` by construction (closure.mjs asserts that set
 // is closed), so without this line the only trace of them is a field in the
 // JSON — and a dependency nobody prints is a dependency nobody ports.
@@ -658,7 +635,7 @@ if (containerKind === "TurbopackChunk" && turboDeps.length) {
     const shown = [...outbound].slice(0, 12).join(", ");
     console.log(`  ${outbound.size} require target(s) are NOT defined in this file — they live in other chunks:`);
     console.log(`    ${shown}${outbound.size > 12 ? ` … +${outbound.size - 12} more` : ""}`);
-    console.log(`  ⚠ recorded per module as \`externalRequires\`, kept OUT of \`requires\` so the closure`);
+    console.log(`   recorded per module as \`externalRequires\`, kept OUT of \`requires\` so the closure`);
     console.log(`    stays closed. THE CHUNK DOES NOT RUN ALONE: a port must keep the chunks that`);
     console.log(`    provide these (or their runtime) — see porting-discipline.md §2.6 on chunk-form`);
     console.log(`    delivery, which is the shape to reach for instead of a standalone runtime.`);
@@ -672,12 +649,12 @@ for (const m of mods.slice(0, 12)) {
 const leaf = mods.filter((m) => m.requires.length === 0).length;
 console.log(`\n  ${leaf} module(s) require nothing (leaves);  ${mods.length - leaf} have dependencies`);
 
-// ⛔ Every id must be a string. The @babel version read a numeric key straight
+//  Every id must be a string. The @babel version read a numeric key straight
 // through, so one module's id was the NUMBER 14 while closure.mjs and
 // slice-modules.mjs compare strings — it could never be selected, and nothing
 // would have said so. Same family as the truncated id that was silently
 // filtered out of a slice.
-// ⛔⛔ PLAUSIBILITY: does the container this reader found explain the file?
+//  PLAUSIBILITY: does the container this reader found explain the file?
 //
 // The failure this exists for is not "found nothing" — that already FATALs. It
 // is "found a couple of unrelated `key: function` properties elsewhere in the
@@ -694,14 +671,14 @@ console.log(`\n  ${leaf} module(s) require nothing (leaves);  ${mods.length - le
     if (lab(i) === "name" && lab(i + 1) === "(" && (lab(i + 2) === "string" || lab(i + 2) === "num") && lab(i + 3) === ")") reqCallIdx.push(i);
     else if (lab(i) === "name" && lab(i + 1) === "." && lab(i + 2) === "name" && /^[ir]$/.test(String(val(i + 2))) && lab(i + 3) === "(" && lab(i + 4) === "num") reqCallIdx.push(i);
   }
-  // ⛔ Compare LIKE WITH LIKE. The first version counted "require-shaped calls"
+  //  Compare LIKE WITH LIKE. The first version counted "require-shaped calls"
   // with a loose pattern (`name(literal)`) and compared that against recorded
   // edges — but `h("words")` matches that shape and is not a require. On one
   // real chunk it counted 79 against 18 real requires and FATAL'd a perfectly
-  // correct read at 23%, just under the threshold. ⚠ A guard that blocks a
+  // correct read at 23%, just under the threshold.  A guard that blocks a
   // correct read is the dangerous kind: it teaches you to bypass the guard.
   //
-  // ⭐ The sound question is not "how many require-ish calls exist" but "how
+  //  The sound question is not "how many require-ish calls exist" but "how
   // many of them fall OUTSIDE the container we found". Same shape on both
   // sides, so the ratio means something.
   const insideModule = (tokenIdx) => mods.some((m) => {
@@ -710,7 +687,7 @@ console.log(`\n  ${leaf} module(s) require nothing (leaves);  ${mods.length - le
   });
   let outside = 0;
   for (const idx of reqCallIdx) if (!insideModule(idx)) outside++;
-  // ⚠ Coverage over the CONTAINER SPAN, not the whole file. A chunk can carry a
+  //  Coverage over the CONTAINER SPAN, not the whole file. A chunk can carry a
   // preamble that is not module code — measured here: a Sentry debugId IIFE
   // ahead of a single-module Turbopack push, where the one real module covered
   // 33% of the FILE and 100% of the container, and the guard FATAL'd a correct
@@ -736,7 +713,7 @@ console.log(`\n  ${leaf} module(s) require nothing (leaves);  ${mods.length - le
 
 const bad = mods.filter((m) => typeof m.id !== "string" || !m.id);
 if (bad.length) { console.error(`\nFATAL — ${bad.length} module(s) have a non-string id.`); process.exit(5); }
-console.log(`  ⭐ module boundaries are GIVEN here — no SCC/eval-order partition is needed,`);
+console.log(`   module boundaries are GIVEN here — no SCC/eval-order partition is needed,`);
 console.log(`     which is the whole problem readable-source.md §3.1 exists to solve.`);
 
 await mkdir(path.dirname(OUT), { recursive: true });

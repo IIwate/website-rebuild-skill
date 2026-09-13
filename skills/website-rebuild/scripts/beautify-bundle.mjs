@@ -3,7 +3,7 @@
 // mirror/_pretty/, so beautified line numbers form a stable coordinate
 // system for provenance notes ("ported from bundle.js:14032"). A beautifier
 // version bump shifts line numbers and INVALIDATES every recorded reference —
-// samsyninja lesson: "版本漂移作废坐标系" — hence the hard pin and the
+// Changing the formatter version changes source coordinates, so retain the pin and
 // auto-generated _pretty/README.md recording the version and the exact
 // regeneration command per file.
 //
@@ -17,10 +17,7 @@
 // New thin wrapper written for the website-rebuild skill: the six projects
 // carried this as a documented command + README convention, not a script.
 //
-// 中文规格（自 scripts/README.md 迁入，v0.3.21；本表另一拼写：`beautify-bundle.mjs`）
-// js-beautify@1.15.1 钉死展开 bundle 到 `_pretty/` 并生成再生成说明。⛔ **排版后自查 token 流**（`lib/tokens.mjs`）：js-beautify 会改变嵌套模板字面量内容而所有渲染门照绿（14islands F4）——不等的文件在账本标 `DIFFER@n`、退出码 1，只能当坐标不能当交付字节；`[slug]` 类含 glob 字符的文件名喂无括号副本（F5：CLI 对 -f 做 glob，静默零产出）；输出 === 压缩输入直接 FAIL。⛔ **撞名响亮告警 + 单射断言**——两个不同目录下的 `main.built.js` 曾静默互相覆盖，而 `_pretty/` 是全项目唯一溯源坐标系，覆盖之后每个行号都指向错误的文件
-// 薄封装：钉死 `js-beautify@1.15.1` 展开 bundle 到 `mirror/_pretty/` 并自动生成含再生成命令的 `_pretty/README.md`（版本漂移作废行号坐标系）
-// `node beautify-bundle.mjs mirror/assets/cdn.x.com/bundle.js`
+
 
 import { spawnSync } from "node:child_process";
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
@@ -31,8 +28,8 @@ import { sha256 } from "./lib/hash.mjs";
 
 cli({ known: ["out"], bools: [], file: import.meta.url, positional: "<bundle.js> [...more files]" });
 
-// The pinned beautifier version. NEVER bump mid-project: regenerate everything
-// and re-verify every recorded line reference if you must change it.
+// Changing the pinned formatter version changes source coordinates. Regenerate
+// formatted files and recheck recorded line references when updating it.
 const JS_BEAUTIFY_VERSION = "1.15.1";
 
 const args = process.argv.slice(2);
@@ -58,7 +55,7 @@ const entries = [];
 let tokenTrouble = 0; // files whose beautified tokens differ from the source (coordinates only)
 for (const file of FILES) {
   const src = path.resolve(file);
-  // ⛔ Flattening to the basename is not injective, and the coordinate system
+  //  Flattening to the basename is not injective, and the coordinate system
   // this file exists to create is built on the assumption that it is. Two
   // bundles named `main.built.js` under different directories
   // (`overview/` and `hearing-health/`) landed on ONE output: the second
@@ -73,14 +70,14 @@ for (const file of FILES) {
   if (takenNames.has(path.basename(src))) {
     const parent = path.basename(path.dirname(src));
     dest = path.join(OUT, `${parent}--${path.basename(src)}`);
-    console.log(`[beautify] ⚠ basename collision: ${path.basename(src)} already written from`);
+    console.log(`[beautify]  basename collision: ${path.basename(src)} already written from`);
     console.log(`           ${takenNames.get(path.basename(src))}`);
     console.log(`           -> this one becomes ${path.basename(dest)}`);
   }
   takenNames.set(path.basename(src), path.relative(process.cwd(), src));
   const type = typeFor(src);
   console.log(`[beautify] ${path.basename(src)} (${type}) -> ${path.relative(process.cwd(), dest)}`);
-  // ⛔ js-beautify's CLI globs its -f argument. A Next dynamic-route chunk is
+  //  js-beautify's CLI globs its -f argument. A Next dynamic-route chunk is
   // named `[slug]-<hash>.js`, and `[slug]` is a character class that matches
   // nothing — the tool "succeeded" and left the file untouched, with no
   // message (14islands: four page chunks sat at 8 raw lines until module-map
@@ -101,7 +98,7 @@ for (const file of FILES) {
     console.error(`[beautify FAIL] ${src} (exit ${r.status})`);
     process.exit(1);
   }
-  // ⛔ "Output === input" is the silent-failure signature above; on a minified
+  //  "Output === input" is the silent-failure signature above; on a minified
   // input it can never be legitimate. Do not ship a coordinate system that is
   // the bundle itself while the ledger says it was beautified.
   {
@@ -115,7 +112,7 @@ for (const file of FILES) {
       process.exit(1);
     }
   }
-  // ⛔ VERIFY THE OUTPUT STILL PARSES. js-beautify can corrupt a file: a
+  //  VERIFY THE OUTPUT STILL PARSES. js-beautify can corrupt a file: a
   // backtick INSIDE a double-quoted string ("`forbidden()`…") reads to it as a
   // template-literal opener, and it then line-wraps mid-string — an
   // unterminated string constant in what is supposed to be the project's
@@ -126,14 +123,14 @@ for (const file of FILES) {
   if (type === "js") {
     const chk = spawnSync("npx", ["-y", "acorn@8.14.0", "--ecma2022", "--silent", dest], { encoding: "utf8" });
     if (chk.status !== 0) {
-      console.error(`  ⚠ beautified output DOES NOT PARSE (js-beautify corruption) — shipping the`);
+      console.error(`   beautified output DOES NOT PARSE (js-beautify corruption) — shipping the`);
       console.error(`    original bytes verbatim as this file's coordinates instead:`);
       console.error(`    ${(chk.stderr || "").split("\n")[0]}`);
       writeFileSync(dest, readFileSync(src));
       verbatim = true;
     }
   }
-  // ⛔⛔ PARSES is not ENOUGH. js-beautify can change the CONTENT of a nested
+  //  PARSES is not ENOUGH. js-beautify can change the CONTENT of a nested
   // template literal — `${iW(e)}:${t};` came out as `$ {\n iW(e)\n }: $ {\n t\n };`
   // — and the result parses, renders, and passes every pixel/CLEAN gate
   // (14islands _app module 99150; 748,409 vs 748,398 tokens). The token stream
@@ -148,12 +145,12 @@ for (const file of FILES) {
       else {
         tokens = `DIFFER@${k}`;
         tokenTrouble++;
-        console.error(`  ⛔ token stream differs from the source at #${k} — this _pretty file is coordinates only,`);
+        console.error(`   token stream differs from the source at #${k} — this _pretty file is coordinates only,`);
         console.error(`     NOT delivery bytes (slice from the minified original for that span; verify-tokens gate)`);
       }
     } catch (e) {
       tokens = `unchecked (${e.message.split("\n")[0].slice(0, 60)})`;
-      console.error(`  ⚠ token check skipped: ${tokens}`);
+      console.error(`   token check skipped: ${tokens}`);
     }
   }
   const sha = sha256(readFileSync(src));
@@ -202,14 +199,9 @@ if (new Set(dests).size !== dests.length) {
 }
 console.log(`[beautify] ${entries.length} file(s) done; ${new Set(dests).size} distinct output(s); ledger -> ${path.relative(process.cwd(), path.join(OUT, "README.md"))}`);
 
-// ⛔ A CORRUPTION FALLBACK THAT EXITS 0 IS A SILENT ONE. Shipping the original
-// bytes keeps the tree usable, and that is the right call — but the whole
-// PURPOSE of _pretty/ is to be the coordinate system every `file:line` citation
-// resolves against, and for these files there are no line numbers to cite: the
-// bundle is one line. The warning was printed mid-run, hundreds of npx lines
-// above the prompt, by a command that then reported success. Same treatment as
-// the injectivity assertion right above: the artefacts are written, and the run
-// is red until someone has seen this.
+// Verbatim fallbacks preserve executable input but do not provide the formatted
+// line coordinates expected under _pretty/. Report them as a failed formatting
+// run even though the original bytes and manifest entries have been written.
 const verbatimEntries = entries.filter((e) => e.verbatim);
 if (verbatimEntries.length) {
   console.error(`\nFATAL: ${verbatimEntries.length} file(s) could not be beautified and shipped as ORIGINAL bytes:`);
@@ -222,6 +214,6 @@ if (verbatimEntries.length) {
   process.exit(5);
 }
 if (tokenTrouble) {
-  console.error(`[beautify] ⛔ ${tokenTrouble} file(s) have a token stream that differs from the source — see the ledger's tokens column. Exit 1 so this is not skimmed.`);
+  console.error(`[beautify]  ${tokenTrouble} file(s) have a token stream that differs from the source — see the ledger's tokens column. Exit 1 so this is not skimmed.`);
   process.exitCode = 1;
 }

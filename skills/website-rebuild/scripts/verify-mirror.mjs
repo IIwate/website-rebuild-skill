@@ -1,103 +1,48 @@
 #!/usr/bin/env node
 /**
- * verify-mirror.mjs — THE MIRROR'S OWN GATE.
+ * Verify recorded URL mappings, files and references in a local mirror.
  *
- * WHY THIS SCRIPT EXISTS
- * ---------------------------------------------------------------------------
- * Every other gate in this toolchain asks a rendering question. probe.mjs asks
- * "any 404s, any console errors, any outbound request?". verify-offline.mjs
- * asks "does anything still name an external host?". pixelcompare.mjs asks
- * "do the two sides look the same?". verify-routes/verify-ssr ask "does the
- * rebuild restate the mirror?".
+ * Selected checks cover:
+ * 1. Collisions and drift between recorded and currently computed local paths.
+ * 2. Manifest hashes/sizes, inventory records and files present on disk.
+ * 3. Known interstitial markers, content-type/file-signature mismatches and
+ *    advisory size outliers. These heuristics cannot authenticate every response.
+ * 4. Missing files among statically discovered references. The crawler shares
+ *    the extractor, so a discovery bug can affect both. Explicit exclusions
+ *    reduce the checked scope; exact URLs and wildcard prefixes are distinct.
+ * 5. Optional live resampling, disabled by default. This compares selected
+ *    responses with recorded hashes and requires network access.
  *
- * NONE of them asks whether the mirror is the right bytes. So a mirror can be
- * wrong and every one of them goes green:
- *
- *   - a pathname-only url -> path mapping collapses `x.jpg?width=320|600|1200`
- *     into ONE file. The server answers every width with it, the srcset picks
- *     it, the page renders, zero 404s. (objectandarchive M0: 57 paths, 3-5
- *     variants each. See lib/urlpath.mjs.)
- *   - a quote-keyed srcset regex sees 1 of ~5 candidates per set. The ledger
- *     looks complete because the first candidate of every set is present.
- *   - a gap-filling run rewrites the manifest from scratch and drops the record
- *     of the 1,200 files already on disk; sha256 columns then describe files
- *     nobody can name.
- *
- * Downstream the symptom of all three is: nothing. That is what this gate is
- * for. It asks five questions of the mirror itself, and it fails loudly.
- *
- *   1  MAPPING INJECTIVITY — do two different URLs share one file?
- *      Checked twice: on the paths the ledger RECORDED (the collapse that
- *      actually happened on disk) and on the paths lib/urlpath.mjs computes
- *      TODAY (a mapping or a query policy that would collapse them now).
- *      A disagreement between the two is MAPPING DRIFT: the mirror was written
- *      under one policy and is being served/audited under another.
- *   2  LEDGER CONSISTENCY — does every manifest row's sha256/bytes match the
- *      bytes on disk, does inventory.tsv agree with the manifest, and does the
- *      set of ledger paths equal the set of files on disk (no orphans, no
- *      phantoms)?
- *   3  AUTHENTICITY — is what is on disk THE THING YOU ASKED FOR? Orthogonal
- *      to every other gate here: 1, 2 and 4 all check that the LEDGER AND THE
- *      DISK AGREE WITH EACH OTHER, and they can do that perfectly while every
- *      byte is a bot-challenge page. Two hard assertions plus one lead:
- *      interstitial bodies, declared-type vs magic bytes, small-response
- *      outliers among peers. See the block above the gate for the measurement.
- *   4  CLOSURE — reference set − disk set = ∅, using the SAME extractor the
- *      crawler used (lib/extract-refs.mjs), so the gate cannot inherit the
- *      crawler's blind spot. This is mirroring.md's "pass 4" as an executable
- *      gate. Deliberate non-files (base-URL literals) and accepted-degradation
- *      hosts get an allow-list: --allow-missing external.txt.
- *      TWO WAYS THIS GATE HAS GONE FALSELY GREEN, both about its INPUT rather
- *      than its assertion — the difference "= ∅" cannot tell you about:
- *        - the reference set was short a whole CLASS of references (escaped
- *          URL spellings; see lib/extract-refs.mjs). Fixed there, which is why
- *          the extractor is shared and not copied.
- *        - the excuse list was matched by PREFIX, so one "this base literal is
- *          not a file" line excused an entire subtree of real missing files.
- *          Excuses are now exact unless a trailing "*" declares otherwise.
- *        - the SET OF FILES IT OPENS was an extension whitelist, so whole text
- *          formats (.atom/.xml/.rss/.txt) were never scanned by either side.
- *          Also fixed in lib/extract-refs.mjs (isTextRefSource), for the same
- *          reason: the crawler and the gate must delimit "text" identically.
- *   5  RESAMPLE (optional, OFF by default) — re-request a few URLs from the
- *      live origin and compare sha256 against the ledger. Off by default so a
- *      routine gate run never touches the source site; when on it is
- *      deliberately slow (--resample-delay, default 1500 ms).
+ * Objectandarchive cases included query variants collapsed onto one file,
+ * srcset variants absent from the discovered set and incomplete ledger updates.
+ * Successful page loads alone did not detect those defects.
  *
  * Usage:
- *   node verify-mirror.mjs --mirror mirror
- *   node verify-mirror.mjs --mirror mirror --allow-missing mirror/external.txt
- *   node verify-mirror.mjs --mirror mirror --resample 8 --resample-delay 2000
+ *  node verify-mirror.mjs --mirror mirror
+ *  node verify-mirror.mjs --mirror mirror --allow-missing mirror/external.txt
+ *  node verify-mirror.mjs --mirror mirror --resample 8 --resample-delay 2000
  *
- *   [--origin https://example.com]  default: the manifest's own `origin`
- *   [--hosts a,b]                   extra hosts for the closure pass (default:
- *                                   every host that appears in the ledger)
- *   [--allow-missing FILE]          newline list of registered excuses ("#"
- *                                   comments ok). A host-only line excuses that
- *                                   whole host; a full URL excuses EXACTLY
- *                                   itself; a trailing "*" declares a prefix
- *                                   and is printed on every run
- *   [--gap-out closure-gap.txt]     where the COMPLETE closure gap is written
- *                                   (the console listing is truncated). Outside
- *                                   the mirror by default — the mirror is the
- *                                   subject, not a scratch directory
- *   [--skip mapping,ledger,authenticity,closure,resample]
- *   [--interstitial-extra FILE]     newline list of EXTRA challenge/block-body
- *                                   regexes (one JS regex source per line, "#"
- *                                   comments ok) — the built-in table is a
- *                                   starting set, not a closed one
- *   [--resample N] [--resample-delay MS] [--resample-seed N] [--resample-html]
- *   [--max-report 25]
+ *  [--origin https://example.com]  default: the manifest's own `origin`
+ *  [--hosts a,b]                   extra hosts for the closure pass (default:
+ *                                  every host that appears in the ledger)
+ *  [--allow-missing FILE]          newline list of registered excuses ("#"
+ *                                  comments ok). A host-only line excuses that
+ *                                  whole host; a full URL excuses EXACTLY
+ *                                  itself; a trailing "*" declares a prefix
+ *                                  and is printed on every run
+ *  [--gap-out closure-gap.txt]     where the COMPLETE closure gap is written
+ *                                  (the console listing is truncated). Outside
+ *                                  the mirror by default — the mirror is the
+ *                                  subject, not a scratch directory
+ *  [--skip mapping,ledger,authenticity,closure,resample]
+ *  [--interstitial-extra FILE]     newline list of EXTRA challenge/block-body
+ *                                  regexes (one JS regex source per line, "#"
+ *                                  comments ok) — the built-in table is a
+ *                                  starting set, not a closed one
+ *  [--resample N] [--resample-delay MS] [--resample-seed N] [--resample-html]
+ *  [--max-report 25]
  *
  * Exit code 0 = all selected gates pass, 1 = at least one failed, 2 = usage.
- *
- * New in this toolchain (objectandarchive-rebuild M0 wrote the lessons; the
- * TODO list has carried a site-coupled careers-kimi ancestor since the start).
- *
- * 中文规格（自 scripts/README.md 迁入，v0.3.21；本表另一拼写：`verify-mirror.mjs`）
- * **镜像自己的门**，跑在断网门之前。五项断言：映射单射性 / 账本与磁盘 sha256 / **真实性（挑战页正文 + 声明类型对魔数——一个 200 不是"你拿到了那个资源"的证据）** / 闭包 / 可选抽样回源。下游所有门问的都是"渲染得出来吗"，**错的镜像能让它们全绿**
- * **镜像自己的门**（其余所有门问的都是"渲染得出来吗"，没人问"字节对不对"，所以错镜像能全绿）。**五项**断言，失败退 1：① **映射单射性**——不同 URL 落到同一文件即失败，分别对"账本记录的路径"（已经发生的坍缩）和"`lib/urlpath.mjs` 今天算出的路径"（现行策略会造成的坍缩）各查一遍，两者不一致即 MAPPING DRIFT（镜像是用另一套映射/查询策略写的）；② **账本一致性**——manifest 逐行 sha256/字节对磁盘实测、`inventory.tsv` 与 manifest 互校、账本条目集 = 磁盘文件集（孤儿/幽灵都点名）；③ ⭐⭐⭐ **真实性（AUTHENTICITY）**——**与其余四项正交**：那四项校验"账本与磁盘是否自洽"，这一项校验"磁盘上的东西是不是你以为的那个东西"。`interstitial` 认已知挑战/拦截正文（Cloudflare / Incapsula / Akamai / Sucuri / PerimeterX / "Just a moment" / "Checking your browser"…，**硬红**；厂商专有标记任意体量都判红，而真页面也会命中的弱标记（reCAPTCHA 控件、WAF 脚本名）只在**整份文档 <32 KB** 时才算数——挑战页**就是**整份文档；`--interstitial-extra` 加自己遇到的那一种）；`type-confusion` 拿**源站声明的 content-type**（不是 URL 扩展名——扩展名是源站的命名选择，实测某站在 `.woff` 上返回 `font/woff2` 字节，按扩展名判会报假红）与正文魔数对照，声明二进制而正文是 HTML 文档的一律红（**硬红**）；`size-outlier` **只报线索不判红**——同类分组带上变换参数（`?width=` 之类），否则缩略图整批报成拒绝页（fixture 实测：只按扩展名 9 条线索、8 条假；带参数 1 条、正是那条真的）。④ **闭包**——引用集 − 磁盘集 = ∅，用与爬虫**同一个** `lib/extract-refs.mjs`（连"什么算文本、该打开哪些文件"也共用同一份判定），门不会继承被审对象的盲区（`--allow-missing external.txt` 放行已登记的非文件/降级项）。**这道门三次假绿都出在它的输入而不是它的判据上**，而"= ∅"这个差值恰恰说不出这件事：一次是引用集少了一整类转义拼写（修在 `lib/extract-refs.mjs`）；一次是**豁免按前缀匹配**——一条 `NOTFILE …/8914/files`（合成器拼接用的基址字面量，本身确实不是文件）顺手豁免了**整个子树**，而那正是店方自建资产目录（字体 + 122 张画框 PNG），"这不是文件"就地变成了"这目录下缺什么都不用报"。现在**豁免只豁免它写的那个东西**：整 host 一行 = 整 host 豁免（接受降级/整站 stub 的本意），**完整 URL = 精确匹配**（基址豁免不再吞子树），要子树语义必须写成 `<base>/*` **显式声明**，且每次运行都会把每条前缀豁免单独打印出来（"这块子树没人在审"）；一次是**它打开了哪些文件**——扩展名白名单把 `.atom`/`.xml`/`.rss` 整类挡在门外，而爬虫用的是同一张表，所以两侧共享盲区；⑤ **抽样回源**——`--resample N` 重新请求 N 条比 sha256，**默认关闭**，开启时低频（`--resample-delay`，默认 1500ms）、默认排除 HTML。它抓的是"镜像与源站已经分道"，**不再是"拿到的是不是拒绝页"的唯一手段**（那件事现在由 ③ 离线完成）
- * `node verify-mirror.mjs --mirror mirror --allow-missing mirror/external.txt`；发布前 `--resample 8`
  */
 import { open, readdir, readFile, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
@@ -134,13 +79,9 @@ const RESAMPLE_DELAY = Number(flag("resample-delay", 1500));
 const RESAMPLE_SEED = Number(flag("resample-seed", 1));
 const RESAMPLE_HTML = args.includes("--resample-html");
 const ALLOW_FILE = flag("allow-missing", path.join(ROOT, "external.txt"));
-// ⛔ THE GATE'S OWN OUTPUT DOES NOT BELONG IN THE SUBJECT. The complete gap list
-// (below) landed in the mirror root, and the coverage check then had to be
-// taught to ignore it — an exclusion is not a fix when the artefact should not
-// have been there. `mirror/` is the one thing this toolchain treats as
-// inviolable (mirroring.md §0: it is both the reverse-engineering evidence and
-// the comparison baseline), and a verification pass that MUTATES what it
-// verifies has spent that guarantee to save a path argument.
+// Write the reference-gap report outside the mirror by default. Generated
+// reports are bookkeeping, not captured input, and should not become subjects
+// of later resource scans (mirroring.md §0). --gap-out selects another location.
 const GAP_OUT = path.resolve(flag("gap-out", "closure-gap.txt"));
 const INTERSTITIAL_FILE = flag("interstitial-extra", null);
 
@@ -237,12 +178,9 @@ console.log(`  ${describePolicy(POLICY)}`);
 if (!SKIP.has("mapping")) {
   console.log(`\n--- gate MAPPING INJECTIVITY ---`);
 
-  // (a) the collapse as it actually happened: two URLs, one recorded path.
-  // URLs are canonicalised first (fragment stripped). RFC 3986: the fragment
-  // never reaches the server, so two spellings that differ only there are ONE
-  // resource and one set of bytes — reporting them as a collapse is a false
-  // red, and a loud false red on the mirror gate is expensive: it teaches you
-  // to skim this gate's output. Everything else is compared verbatim.
+  // Group recorded paths by canonical URL. Fragments are not sent in HTTP
+  // requests, so URLs differing only by fragment do not represent a path
+  // collision. Other differences remain visible to the collision check.
   const byRecorded = new Map();
   for (const [url, f] of saved) {
     const key = norm(f.path);
@@ -425,72 +363,23 @@ if (!SKIP.has("ledger")) {
   }
 }
 
-// --- gate 3: authenticity ---------------------------------------------------
+// Check known interstitial patterns and response format mismatches.
 //
-// AN HTTP 200 IS NOT EVIDENCE THAT YOU GOT THE RESOURCE【objectarchive N11】
-// ---------------------------------------------------------------------------
-// Every other assertion in this file compares THE LEDGER WITH THE DISK. This
-// one is orthogonal to all of them: it asks whether the bytes on disk are the
-// thing you asked for. Nothing else here can ask that, and the difference is
-// not academic —
+// An objectandarchive recrawl stored 43 challenge pages with HTTP 200 and
+// text/html. Their hashes agreed with the ledger, but the bodies were about
+// 9.5 KB where the expected documents exceeded 300 KB. A build transform count
+// exposed the change before the response checks existed.
 //
-//   Measured (objectandarchive M0b): a whole-site re-crawl at 3 workers tripped
-//   the origin's bot challenge. THE CRAWLER WROTE 43 CHALLENGE PAGES UNDER THE
-//   URLS OF THE REAL DOCUMENTS, including the one PDP the entire project's
-//   reverse engineering was based on. Every one of them was HTTP 200 +
-//   text/html, so nothing objected: this gate stayed PASS 0 AND WAS RIGHT ON
-//   ITS OWN TERMS — the ledger's sha256 matched the challenge page exactly.
-//   A LEDGER RECORDS WHAT YOU FETCHED. IT NEVER RECORDS WHETHER IT IS THE THING
-//   YOU ASKED FOR. The files were 9.5 KB where the real documents are 300 KB+,
-//   and no assertion anywhere was looking at that.
+// Markers classified as strong are checked at any size; weaker markers are
+// limited to small documents to reduce matches on ordinary CAPTCHA widgets.
+// Both remain heuristics and can produce false positives or miss new patterns.
+// --interstitial-extra adds observed site-specific expressions.
 //
-//   The only thing in the whole pipeline that noticed was the BUILD layer's
-//   per-transform hit floor (dom-shell-strategies.md §2 step 3): one registered
-//   transform reported 4 hits against a floor of 5, because the challenge page
-//   does not contain the platform script that transform rewrites. A guard
-//   written for an entirely different purpose was the sole objection to the
-//   evidence base being swapped out. Do not rely on that happening again.
-//
-// mirroring.md §9 has carried "catch-all fake 200" and "small-response alarm"
-// as prose for four projects. This is their executable form:
-//
-//   1. INTERSTITIAL — challenge / consent / block bodies carry markers no real
-//      page has. Narrow anchors, hard fail, EXTENSIBLE (--interstitial-extra):
-//      the table below is a starting set and every vendor invents new ones.
-//   2. TYPE CONFUSION — the precise half. A refusal page, a login wall or an
-//      SPA fallback served under an image/font/script URL is HTML in a file
-//      named .jpg, and magic bytes settle it with no threshold at all.
-//      THE ORACLE IS THE LEDGER'S CONTENT-TYPE, NOT THE URL'S EXTENSION. The
-//      first version of this keyed on the extension and produced a failure that
-//      was not one: that origin serves `font/woff2` bytes at a `.woff` URL. The
-//      extension is the origin's own naming choice and promises nothing; what
-//      the origin DECLARED does. Keying on the declaration removed the false
-//      red and made the assertion stricter at the same time.
-//   3. SIZE OUTLIER — a LEAD, printed, never a failure. It is what catches the
-//      interstitials nobody has a marker for yet (9.5 KB among 300 KB peers is
-//      two orders of magnitude, not a judgement call). It does not FAIL because
-//      "peer" is never exactly right on a query-parameterised CDN — a flat
-//      swatch and a photograph share ?width=1200 and differ 200x for honest
-//      reasons — and making it fail buys one tuning knob and one excuse list,
-//      the two things §4 of verification-gates.md says gates go wrong by
-//      acquiring. The peer key therefore carries the transform's own size
-//      parameters, and the test only runs where a median means something.
-
-// TWO STRENGTHS, and the split is what keeps this gate readable.
-//   STRONG — vendor markers that only ever appear IN a challenge body. Applied
-//            to every text file regardless of size.
-//   WEAK   — markers that also appear on perfectly real pages: a contact form
-//            embeds reCAPTCHA, a protected site loads its WAF's own script, a
-//            real page mentions its bot vendor. Applied ONLY when the whole
-//            document is smaller than WEAK_MAX (a challenge page IS the whole
-//            document; a real page that merely contains a captcha widget is
-//            not). A false red here is expensive in a specific way: it teaches
-//            you to skim this gate's output, which is exactly how the 43
-//            challenge pages would survive the next run.
-// Region blocks and consent WALLS are deliberately absent: their bodies are not
-// distinguishable from a real page's cookie banner by text alone. They are the
-// size-outlier lead's job, and --interstitial-extra's once you have seen the
-// one your origin serves.
+// Content-type is compared with recognizable file signatures. URL extensions
+// alone are insufficient: this site served WOFF2 under a .woff URL. Size
+// outliers are advisory because legitimate images at the same dimensions can
+// have very different encoded sizes. Cookie/region walls that cannot be
+// distinguished by text need separate inspection.
 const WEAK_MAX = 32 * 1024;
 // Does this body present as an HTML document at all? Cheap and decisive: a
 // challenge page is served as a page. Anything that opens with a packer's
@@ -514,11 +403,10 @@ const INTERSTITIAL = [
   [/_pxCaptcha|Please verify you are a human/i, "PerimeterX/HUMAN challenge"],
   [/Pardon Our Interruption|are you a robot/i, "generic bot interstitial"],
   [/unusual traffic from your computer network/i, "rate-limit interstitial"],
-  // ⛔ DOMAIN-PARKING LOTS ANSWER 200 AND WEAR THE URL. On a dead-site rescue a
-  // parked capture is bytes that honestly hash, honestly close, and are the
-  // wrong site entirely — twice measured (Sedo in-window at one target, a
-  // Rakko lot overwriting a rescued root at another) with every other gate
-  // green. Parking is an interstitial: the page under the URL is not the site.
+  // Domain parking pages can return HTTP 200 and have internally consistent
+  // hashes and references while replacing the requested site. Recorded examples
+  // include Sedo within the capture window and a Rakko page replacing a restored
+  // root. Detect parking signatures as interstitial content.
   [/sedoparking\.com|parkingcrew|hugedomains\.com|rakkoid\.com|domain-parking|dan\.com\/buy/i, "domain-parking lot"],
   [/domain (is )?for sale|buy this domain|売り出し中のドメイン/i, "domain-for-sale page", true],
   // weak — small documents only
@@ -585,18 +473,13 @@ if (!SKIP.has("authenticity")) {
     if (!head || !sniffTextBytes(head)) continue;
     const text = head.toString("utf8");
     for (const [re, what, weak] of patterns) {
-      // ⛔ A weak marker may only fire on something that could BE a challenge
-      // page, and a challenge page is an HTML DOCUMENT. Size alone is not that
-      // test: a 28 KB JavaScript chunk is under WEAK_MAX, and Next.js ships
-      // `forbidden()` as an API name plus HTTP status constants, so "refusal
-      // wording" matched a perfectly real bundle. ⚠ A false red here is
-      // expensive in a specific way — it teaches you to skim this gate, which is
-      // exactly how the 43 real challenge pages would survive the next run.
-      //
-      // ⭐ Strong markers still apply to every text file: a challenge body
-      // served at a .js path is precisely the case they exist for.
+      // Apply weak markers only to small HTML documents. A 28 KB Next.js chunk
+      // contained the valid forbidden() API and HTTP status constants, which caused
+      // a false positive when size and refusal wording were the only conditions.
+      // Strong challenge signatures still apply to every scanned text file, because
+      // an asset URL can return an HTML challenge body.
       if (weak && (st.size > WEAK_MAX || !looksLikeDocument(text))) continue;
-      // ⛔ The DELIBERATELY captured 404 template is exempt from WEAK markers
+      //  The DELIBERATELY captured 404 template is exempt from WEAK markers
       // only: it is definitionally a refusal-semantics page, so refusal wording
       // carries zero signal there — and on a Next App Router origin its flight
       // payload contains `"forbidden":"$undefined"` (the error-boundary slot
@@ -634,14 +517,14 @@ if (!SKIP.has("authenticity")) {
 
   // 2. TYPE CONFUSION — declared type vs magic bytes.
 
-  // ⛔ `ftyp` ALONE DECIDES NOTHING. AVIF and MP4 are both ISO-BMFF: the box at
+  //  `ftyp` ALONE DECIDES NOTHING. AVIF and MP4 are both ISO-BMFF: the box at
   // offset 4 is byte-identical in a still image and in a video, so a predicate
   // that stops there makes `avif` and `mp4` the SAME TEST. That is not a
   // cosmetic overlap — it is what lets an MP4 body sitting under an
   // `image/jpeg` declaration match an image kind and get waved through as the
   // origin's labeling habit, which is precisely the substitution this gate
   // exists to catch. The brand list is what separates them.
-  // ⚠ Read the COMPATIBLE brands too, not just the major one at offset 8: an
+  //  Read the COMPATIBLE brands too, not just the major one at offset 8: an
   // AVIF file routinely ships `major=mif1, compatible=[avif, mif1, miaf]`, and
   // a video container can carry a HEIF-family brand in the same list. Deciding
   // on the major brand alone leaves the two predicates overlapping again, one
@@ -674,12 +557,12 @@ if (!SKIP.has("authenticity")) {
     woff2: (b) => startsWith(b, [0x77, 0x4f, 0x46, 0x32]),
     woff: (b) => startsWith(b, [0x77, 0x4f, 0x46, 0x46]),
     otf: (b) => startsWith(b, [0x4f, 0x54, 0x54, 0x4f]),
-    // ⚠ "OTTO" too: an OpenType/CFF font served under a .ttf name with
+    //  "OTTO" too: an OpenType/CFF font served under a .ttf name with
     // `font/ttf` is the ORIGIN'S labeling habit, not corruption — the bytes are
     // a real font. Measured on hubtown: commit-mono-bold.ttf is OTTO/CFF, and
     // rejecting it told the operator to re-fetch a file that was already right.
     ttf: (b) => startsWith(b, [0x00, 0x01, 0x00, 0x00]) || startsWith(b, [0x74, 0x72, 0x75, 0x65]) || startsWith(b, [0x4f, 0x54, 0x54, 0x4f]),
-    // ⚠ MP4 is a BOX format, not one magic. A whole file opens with `ftyp` at
+    //  MP4 is a BOX format, not one magic. A whole file opens with `ftyp` at
     // offset 4, but fragmented-MP4 HLS segments (.m4s) open with `styp`, a bare
     // `moof`/`sidx`/`prft`, or an `emsg` box — same family, no `ftyp` anywhere.
     // Measured on rauchg: 45 real twimg .m4s segments declared video/mp4 were
@@ -752,7 +635,7 @@ if (!SKIP.has("authenticity")) {
     const head = await readHead(path.join(ROOT, rel), 512);
     if (!head || !head.length) continue;
     if (kind && SIGS[kind] && !SIGS[kind](head)) {
-      // ⚠ Like OTTO under .ttf above: bytes that are a REAL image of another
+      //  Like OTTO under .ttf above: bytes that are a REAL image of another
       // known format, declared image/*, are the ORIGIN'S labeling habit, not a
       // refusal body. Measured on a Strapi bucket: a 2.8 MB GIF uploaded as
       // .jpg, served as image/jpeg, byte-identical on refetch. The gate exists
@@ -824,7 +707,7 @@ if (!SKIP.has("closure")) {
   //   full URL   (`https://cdn.example.com/a/8914/files`)
   //              -> EXACT. It excuses itself and nothing below it.
   //   trailing * (`https://cdn.example.com/legacy/pack/*`)
-  //              -> prefix, DECLARED. Listed loudly on every run, because each
+  //              -> prefix, DECLARED. Listed explicitly on every run, because each
   //                 one is a subtree nobody is checking any more.
   const exact = new Set(); // scheme-stripped, fragment-stripped URLs
   const hostWide = new Set();
@@ -893,20 +776,11 @@ if (!SKIP.has("closure")) {
       hosts.add(new URL(url).hostname);
     } catch {}
   }
-  // ⛔ A REFERENCE THIS GATE CANNOT FOLLOW USED TO LEAVE NO TRACE. `hosts` above
-  // is DERIVED FROM THE LEDGER, so a host the crawler never fetched from is not
-  // on it, and every reference to that host was dropped inside the extractor in
-  // silence — while "reference set − disk set = ∅" printed green over a set the
-  // gate had itself narrowed. Same family as the escaped spellings and the
-  // extension whitelist in this gate's header: NOT A WRONG ASSERTION, AN
-  // ASSERTION OVER A SHORT INPUT.
-  //
-  // ⭐ And the difference from the crawler is what makes it worth printing at a
-  // LOWER bar here. The crawler's allow-list is a CLI argument — an unfollowed
-  // host is a decision someone made. This one is derived, so an unfollowed host
-  // is one THE MIRROR HOLDS NO FILE FROM AT ALL and nobody ever decided about:
-  // a runtime library's CDN, a font service, an image host that only ever
-  // appears inside a bundle. One asset-shaped reference is enough to report.
+  // The verifier derives allowed hosts from the manifest. Asset references to
+  // an absent host would otherwise be omitted from the set being checked.
+  // Report even one such reference so a missing CDN, font service or image host
+  // can be investigated. The crawler uses an explicitly configured host list,
+  // so its warning threshold serves a different purpose.
   const census = createOffHostCensus();
   const extract = createRefExtractor({
     origin: ORIGIN,
@@ -965,17 +839,11 @@ if (!SKIP.has("closure")) {
       `not by extension), ${refs.size} distinct references`,
   );
 
-  // The references the assertion below never got to see. Printed BEFORE the
-  // verdict so it cannot be read as a footnote to a green run.
-  //
-  // ⚠ NOT A FAILURE, and the reason is the excuse vocabulary rather than the
-  // finding's weight: a host-scope line in external.txt ("accepted degradation
-  // / stubbed vendor") is a legitimate decision, and it is already honoured
-  // below — so what is left here is exactly the set NOBODY HAS DECIDED ABOUT.
-  // Making that red would flip the exit code of every existing mirror that has
-  // an undocumented namespace host, which buys one excuse list and teaches the
-  // reader to skim. It is loud instead. If a host here is holding real assets,
-  // the fix is --hosts on a re-crawl, not a line in external.txt.
+  // Report references excluded from the comparison before its result. A host
+  // census is diagnostic because namespace identifiers and outbound links need
+  // not be mirrored. Host-wide external.txt entries identify exclusions already
+  // reviewed. Investigate remaining asset references and recrawl newly included
+  // hosts when they belong in the captured scope.
   if (census.size) {
     const { rows, total, assetish } = census.summary();
     const undecided = assetish.filter(([h]) => !hostWide.has(h.toLowerCase()));
@@ -1019,7 +887,7 @@ if (!SKIP.has("closure")) {
       console.log(`         ${h}  (${rows.length})`);
       list(rows, (m) => `           ${m.url}\n             <- ${m.from.join(", ")}`);
     }
-    // ⭐ The console listing is TRUNCATED (MAX_REPORT), and the natural next
+    //  The console listing is TRUNCATED (MAX_REPORT), and the natural next
     // step is "pipe the missing URLs into mirror-site --seeds" — which, fed
     // from the truncated listing, seeds the same first page of the gap every
     // round while the gate keeps failing. Measured: four seed rounds at a

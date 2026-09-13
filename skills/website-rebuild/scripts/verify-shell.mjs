@@ -1,33 +1,17 @@
 #!/usr/bin/env node
 /**
- * verify-shell.mjs — the SHELL BYTE-FIDELITY gate for strategy-A rebuilds.
+ * Compare built HTML documents with the declared shell transformations.
+ * Checks differing line ranges against the transform table without rewriting the
+ * artifact under test. Unexplained differences fail and require investigation or
+ * an explicitly recorded adaptation.
  *
- * The claim that must hold every commit is "the rebuild differs from the mirror
- * ONLY where the transform table says". This gate re-derives that claim FROM
- * THE BYTES ON DISK: it line-diffs every document and requires each differing
- * hunk to be reproducible by replaying the table on the mirror side of that
- * hunk. An unexplained hunk is an unregistered deviation, i.e. a bug
- * (porting-discipline.md §4: a difference has exactly three legal homes — §Q,
- * §6, or fixed).
+ * The shell configuration is shared data. Importing the build entry itself once
+ * executed a build before checking it: on two projects an injected byte vanished
+ * and the check passed. Keeping the producer out of this process preserves the
+ * on-disk input, though a shared transform definition can still have shared errors.
  *
- * ⛔ IT DOES NOT IMPORT build-site.mjs, AND THAT IS THE POINT.
- * An earlier shape of this gate got its page list with
- * `import { PAGES } from "./build-site.mjs"`, and build-site does its work at
- * top level — so the import RAN THE BUILD and the gate audited output it had
- * just written. Measured on two projects: inject a byte into a built shell, run
- * the gate, it reports PASS 0 and the byte is gone afterwards. It also made the
- * assertion circular — the artifact was re-derived from the table and then
- * checked against that same table. Shared data lives in the side-effect-free
- * shell-config; producing and checking stay in separate processes
- * (verification-gates.md §2.1.2).
- *
- *   node scripts/verify-shell.mjs --config scripts/shell-config.mjs
- *   node scripts/verify-shell.mjs [--config scripts/shell-config.mjs] [--mirror mirror] [--site site] [--max-report 8]
- *
- * 中文规格（自 scripts/README.md 迁入，v0.3.21；本表另一拼写：`verify-shell.mjs`）
- * **外壳字节门**：逐文档 patience diff，每个差异块必须能被变换表**重放**解释。⛔ 不 import `build-site.mjs`——门不许生产它所审计之物（`verification-gates.md` §2.1.2）
- * **外壳字节保真门**："复刻与镜像的差异仅限变换表所述"——不是相信构建日志，而是从字节**重推**这个命题：逐 shell 对镜像原文 diff，每个差异 hunk 必须被某条已登记变换解释（变换在 hunk 上重放）。配 `floors` 下限与 purpose 断言
- * `node verify-shell.mjs --site site`
+ * node scripts/verify-shell.mjs --config scripts/shell-config.mjs
+ *  node scripts/verify-shell.mjs [--config scripts/shell-config.mjs] [--mirror mirror] [--site site] [--max-report 8]
  */
 import { readFile } from "node:fs/promises";
 import path from "node:path";
@@ -116,15 +100,10 @@ for (const page of PAGES) {
       const r = transformPage(aText, cfg, { head });
       if (r.text === bText) { used = [...r.hits.keys()]; break; }
     }
-    // The noindex injection is a PURE INSERTION, and where the patience diff
-    // puts its boundary depends on which nearby lines happen to be unique. It
-    // has been observed three ways on real targets: mirror side empty; mirror
-    // side = the `<head …>` tag; mirror side = the line AFTER the tag. Special-
-    // casing each spelling is how this check kept going red on correct builds.
-    //
-    // General form instead: if the site side STARTS WITH the exact bytes the
-    // transform inserts, strip that prefix and require the REST to replay from
-    // the table like any other hunk. One rule, every anchoring.
+    // Patience diff can anchor an insertion on different neighboring lines.
+    // Observed noindex hunks used an empty reference side, the head tag or the line
+    // after it. Remove the exact inserted prefix from the site hunk, then verify
+    // the remainder against the configured transforms.
     if (!used && cfg.notice) {
       const block = noindexBlock(cfg);
       for (const b of [block, block.replace(/\n$/, "")]) {

@@ -1,78 +1,27 @@
 #!/usr/bin/env node
 /**
- * lib/ports.mjs — the port ALLOCATION + INSTANCE-IDENTITY registry shared by
- * every script in this directory that opens a listening socket (a static
- * server) or a headless-Chrome CDP debug port.
+ * Allocate tool ports and verify browser/server identity.
  *
- * ===========================================================================
- * WHY THIS FILE EXISTS — the crossed-wires failure it prevents
- * ===========================================================================
- * Each script used to pick its own port: `9222 + random*500`, `CDP_PORT || 9333`,
- * `PORT || 5175`, ... The random ranges overlapped and the fixed defaults were
- * global, so two scripts on one machine could land on the SAME port. Field case
- * (shopifydesign-rebuild §8.30): a foreground probe of the REBUILD attached to
- * the browser a background self-comparison had started on the MIRROR, and
- * reported "the rebuild makes 19 outbound requests to the mirror's port".
+ *   port = PORT_BASE + slot * 1000 + lane * 10 + side  (21000..29999)
  *
- * Crossed wires fake BOTH colors, which is why this is a root-level defect for
- * a toolchain whose two headline gates are "zero outbound calls" and "compare
- * the two sides":
- *   FALSE RED   — normal behavior gets reported as an offline-gate violation
- *                 (that is the 19-requests report above), and it lands right
- *                 after you shipped new code, so it reads as the new code's bug.
- *   FALSE GREEN — the worse one. If both processes end up on the same browser
- *                 or the same server, you get a beautiful A/B report in which
- *                 both sides ARE THE SAME SIDE. Nothing in the numbers looks
- *                 wrong, because nothing IS wrong — you measured one side twice.
+ * slot: workspace-path hash modulo 9, or WRS_PORT_SLOT; collisions are possible.
+ * lane: fixed role number from LANES; changing it changes default ports.
+ * side: 1 = mirror, 2 = rebuild, 3 = live origin, 0 = unspecified/both.
  *
- * ===========================================================================
- * THE SCHEME
- * ===========================================================================
- *   port = PORT_BASE + slot*1000 + lane*10 + side          (21000 .. 29999)
+ * Different lanes and sides have different ports within a slot. Concurrent runs
+ * using the same tuple, colliding workspace slots or unrelated services can
+ * still conflict. An occupied port produces exit 3 instead of automatic fallback.
+ * Explicit CLI and environment overrides are reported and checked too.
  *
- *   slot  0..8   one WORKSPACE (git root). Derived from a hash of the workspace
- *                path, so two checkouts on one machine get different ports
- *                without anyone configuring anything. Override: WRS_PORT_SLOT.
- *   lane  0..99  one SCRIPT ROLE (see LANES). Fixed numbers — treat them as an
- *                ABI: changing one renumbers every running project's ports.
- *   side  0..9   which SIDE of the comparison this process serves/drives:
- *                1 = mirror, 2 = rebuild, 3 = live origin, 0 = neither/both.
+ * In shopifydesign, a rebuild probe attached to a mirror browser and reported
+ * 19 requests to the mirror's port. Sentinels check ownership of a launched
+ * browser; response identity tokens detect comparison of one server process
+ * with itself. These checks identify instances, not correctness of their content.
  *
- * Consequences, all of them deliberate:
- *   * DEFAULTS NEVER OVERLAP. Two different scripts cannot collide by default,
- *     because the lane digits differ; the same script on the two sides cannot
- *     collide, because the side digit differs; two projects cannot collide,
- *     because the slot digit differs.
- *   * THE PORT NAMES ITSELF. 21012 decodes to "slot 0 / probe.cdp / rebuild"
- *     and this module prints exactly that, everywhere a port is mentioned —
- *     including in probe.mjs's outbound-request report, so the field case above
- *     would now have printed "127.0.0.1:21001 = serve.mjs MIRROR" instead of an
- *     anonymous host that looks like a leak.
- *   * ALLOCATION NEVER DRIFTS. If the computed port is taken, scripts EXIT
- *     (code 3) and name the occupant. Silently sliding to the next free port is
- *     precisely the mechanism that manufactures false greens: a slid process is
- *     no longer where its partner expects it, and the partner then talks to
- *     whatever *is* there.
- *   * IDENTITY IS VERIFIED, NOT ASSUMED. Ports are a hint, never a proof:
- *     allocation can always be beaten by something outside this registry. So
- *     every CDP script launches its browser on a one-shot random SENTINEL page
- *     and refuses to attach to anything else (assertOwnBrowser), and serve.mjs
- *     stamps every response with a per-process identity token that A/B scripts
- *     compare to prove the two sides are two processes (assertDistinctSides).
+ *   node scripts/lib/ports.mjs        # show this workspace's port table
+ *   node scripts/lib/ports.mjs 21012  # decode a port
  *
- * Overrides are allowed and stay loud: every script still honors its explicit
- * --port / CDP_PORT / PORT input, an explicit port is announced as EXPLICIT in
- * the log line, and it is preflighted and identity-checked exactly like a
- * computed one.
- *
- * CLI:  node scripts/lib/ports.mjs           # the whole table for this workspace
- *       node scripts/lib/ports.mjs 21012     # decode one port
- *
- * Zero dependencies (Node 22+ builtins only).
- *
- * 中文规格（自 scripts/README.md 迁入，v0.3.21；本表另一拼写：`lib/ports.mjs`）
- * **端口分配 + 实例身份注册表**（见本文件顶部一节）：`21000 + slot×1000 + lane×10 + side` 的确定性分配（默认互不重叠、端口自带语义）、占用即退 3 并点名占用方、CDP sentinel 归属校验、`serve.mjs` 身份 token 与双侧同一性断言。带 CLI：打印本工作区端口表 / 反解端口
- * `node scripts/lib/ports.mjs`；脚本内 `import { resolvePort, assertPortFree, assertOwnBrowser } from "./lib/ports.mjs"`
+ * Uses Node built-ins.
  */
 import { createHash, randomBytes } from "node:crypto";
 import { existsSync } from "node:fs";
@@ -222,7 +171,7 @@ export function resolvePort({ lane, side = "unset", cli = null, env = null, envN
   return { port, explicit: false, label: labelPort(port) };
 }
 
-// --- loud failure on a taken port ------------------------------------------
+// --- explicit failure on a taken port ------------------------------------------
 
 /** Ask an occupied port what it is, so the error names the conflicting object. */
 export async function describeOccupant(port) {
@@ -277,12 +226,11 @@ export async function assertPortFree(port, { tool, note = null } = {}) {
   ].filter(Boolean));
 }
 
-// --- identity: prove you are talking to your own instance -------------------
+// Browser launch identity.
 
 /**
- * A one-shot landing page whose URL nobody else can be showing. Passed to
- * Chrome on the command line; assertOwnBrowser then refuses to attach to any
- * target that is not it.
+ * A landing page with a random launch token. Pass it to Chrome on the command
+ * line so assertOwnBrowser can correlate a CDP target with this launch.
  */
 export function chromeSentinel() {
   const token = randomBytes(8).toString("hex");
@@ -290,19 +238,14 @@ export function chromeSentinel() {
 }
 
 /**
- * THE LAST GATE AGAINST CROSSED WIRES. Port allocation is a convention and can
- * always be beaten (a stale browser, a foreign tool, an explicit override);
- * this cannot, because the sentinel URL is random and lives only on the command
- * line of the browser THIS process spawned.
+ * Find the sentinel page supplied when launching Chrome. Port allocation alone
+ * cannot detect a stale browser or another process using the same port.
+ * A matching random token provides correlation with this launch; it is not an
+ * authentication mechanism. Missing or unavailable sentinel targets produce
+ * exit 3 after the bounded startup check.
  *
- * Waits for the sentinel target on `port`, returns it, and exits 3 if the
- * endpoint answers with anything else — that "anything else" is somebody
- * else's browser, and everything measured through it would be a measurement of
- * another program.
- *
- * `pid` (optional) is corroborating only: the sentinel already proves ownership,
- * while a launcher that forks instead of exec'ing would make the pid differ for
- * an innocent reason, so a mismatch warns rather than fails.
+ * The optional PID check is diagnostic: a launcher can fork another process,
+ * so a PID mismatch warns while the sentinel remains the matching criterion.
  */
 export async function assertOwnBrowser({ port, sentinel, tool, pid = null, timeoutMs = 15000 }) {
   const deadline = Date.now() + timeoutMs;
@@ -352,7 +295,7 @@ async function warnOnForeignPid(port, pid, tool) {
   } catch {}
 }
 
-// --- identity: prove the two A/B sides are two instances --------------------
+// Comparison endpoint identity.
 
 /** Read serve.mjs's identity for a base URL. null when the server is not ours. */
 export async function fetchIdentity(baseUrl) {
@@ -370,10 +313,10 @@ export async function fetchIdentity(baseUrl) {
 }
 
 /**
- * The false-green gate for every two-sided comparison: A and B must be two
- * different processes. Same origin, or the same serve.mjs identity token behind
- * two different URLs (a proxy, a symlinked root, a copy-pasted command), means
- * the report about to be written compares one side with itself.
+ * Reject comparisons using the same origin or the same reported serve.mjs
+ * token. This catches common endpoint mixups, including two proxy URLs reaching
+ * one server. Distinct tokens identify separate server instances, not different
+ * content; endpoints without identity metadata are checked only by origin.
  */
 export async function assertDistinctSides(a, b, { tool, labelA = "A", labelB = "B" }) {
   const originOf = (u) => {

@@ -1,32 +1,19 @@
 /**
- * lib/cdp.mjs — the one Chrome DevTools Protocol client (raw WebSocket, Node 22+).
+ * Chrome DevTools Protocol client using Node's built-in WebSocket.
+ * Provides configurable call deadlines, event subscriptions and flattened sessions.
+ * Socket closure rejects pending calls; later sends fail instead of remaining queued.
+ * This handles reported close-1006 screenshot failures without leaving callers hung.
  *
- *   import { connectCdp, cdpUrlFor } from "./lib/cdp.mjs";
- *   const cdp = await connectCdp(target.webSocketDebuggerUrl, { defaultTimeoutMs: 60000 });
- *   cdp.on("Runtime.consoleAPICalled", (params) => …);   // one method
- *   cdp.on("*", (msg) => { switch (msg.method) { … } });   // every event, raw
- *   await cdp.send("Page.navigate", { url });
- *   await cdp.send("Runtime.evaluate", { expression }, { timeoutMs: 5000, sessionId });
- *   const v = await cdp.evaluate("document.title");       // returnByValue, throws on exception
- *   cdp.close();
+ * import { connectCdp, cdpUrlFor } from "./lib/cdp.mjs";
+ *  const cdp = await connectCdp(target.webSocketDebuggerUrl, { defaultTimeoutMs: 60000 });
+ *  cdp.on("Runtime.consoleAPICalled", (params) => …);   // one method
+ *  cdp.on("*", (msg) => { switch (msg.method) { … } });   // every event, raw
+ *  await cdp.send("Page.navigate", { url });
+ *  await cdp.send("Runtime.evaluate", { expression }, { timeoutMs: 5000, sessionId });
+ *  const v = await cdp.evaluate("document.title");       // returnByValue, throws on exception
+ *  cdp.close();
  *
- * Four scripts (probe, pixelcompare, netcapture, sweep-routes) each carried a
- * private copy of this — same pending map, same timeout, same loud-close hook —
- * and a fifth mini-client lived in lib/ports.mjs. Two of the copies had the
- * onclose handler, two did not; the ones without it hung silently when an
- * oversized screenshot killed the socket (close 1006). One client, both guards:
- *
- *   ⛔ EVERY CALL IS BOUNDED. A route whose scene never finishes booting leaves
- *      Page.navigate / Runtime.evaluate pending forever; an unbounded await
- *      wedges the whole run on one page.
- *   ⛔ A DEAD SOCKET FAILS LOUDLY. On close, every in-flight call rejects with
- *      the close code and a hint; a later send() rejects immediately instead
- *      of queueing into the void. lib/chrome.mjs `shotCeilingAdvice` explains
- *      the screenshot case.
- *
- * 中文规格（自 scripts/README.md 迁入，v0.3.21；本表另一拼写：`lib/cdp.mjs`）
- * **唯一的 CDP 客户端**：`connectCdp(url)` → `send(m, p, {timeoutMs, sessionId})` / `on(method \| "*")` / `evaluate` / `close`；每次调用有界、断连时在途调用全部响亮拒绝（此前四份私有拷贝里两份没有 onclose，截图超载时静默挂死）；`cdpUrlFor(port)` 轮询 `/json/version`
- * `import { connectCdp, cdpUrlFor } from "./lib/cdp.mjs"`
+ * See lib/chrome.mjs for observed screenshot transport failures and their limits.
  */
 
 /** Poll `/json/version` on a debug port until the browser answers (or give up). */

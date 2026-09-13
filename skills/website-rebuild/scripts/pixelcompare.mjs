@@ -1,13 +1,10 @@
 #!/usr/bin/env node
-// pixelcompare.mjs — A/B pixel comparison of two ALREADY-RUNNING servers
-// (rebuild vs mirror): screenshot both at the same viewport in the same
-// headless Chrome, quantify the difference on a coarse 64x40 grid-cell
-// luma/color metric (suited to live scenes — noise, videos, particles — where
-// an exact diff is meaningless), write both frames (PNG by default, JPEG on
-// demand), a labeled side-by-side composite JPG, and merge the numbers into
-// <out>/metric.json.
+// Compare captures from two running servers at the same viewport.
+// Reports coarse 64x40 grid luma/color differences and writes captured frames,
+// a labeled composite and metric.json. Grid averaging can hide localized pixel
+// differences; a passing threshold applies only to the configured captures.
 //
-//   node pixelcompare.mjs --a http://localhost:5173/ --b http://localhost:5175/
+// node pixelcompare.mjs --a http://localhost:5173/ --b http://localhost:5175/
 //     [--name home]                    view name (keys metric.json + filenames)
 //     [--out docs/pixelcompare] [--width 1280] [--height 800]
 //     [--settle 6000]                  ms to wait after load before shooting
@@ -20,55 +17,19 @@
 //     [--self] [--pump dt,frames] [--after-ready N] [--hold expr] [--hold-grace ms] [--hold-after N]
 //     [--drive expr] [--chunk N] [--freeze-css] [--freeze-at -1s] [--cdp-port N]
 //
-// VIEWPORT SIZE IS LIMITED BY THE TRANSPORT, NOT BY CHROME. CDP hands the whole
-// frame back as ONE base64 WebSocket message and Node's built-in WebSocket dies
-// (close 1006) above ~2.4 M chars. Measured on one machine, one Chrome:
-//   1280x800 png 2,395,616 chars OK (280ms) | 390x844 png 734,240 OK
-//   1728x1080 jpeg q100 1,995,384 OK (106ms) | 1728x1080 jpeg q92 827,968 OK (58ms)
-//   1728x1080 png ~3,600,000 -> DEAD: socket closes and every later CDP call
-//   times out with no error of its own.
-// So at roughly >= 1500x900 PNG cannot arrive at all, and the old failure mode
-// was a SILENT HANG. Now the socket's close is turned into a named error with
-// the fix attached, and --format jpeg --quality 92 is the escape hatch: 58 ms a
-// frame, and verified noise-free in the field (two shots of the same static
-// state came back byte-identical). Default stays PNG because a byte-exact gate
-// needs it — drop to jpeg only when the viewport says you must.
+// Use --ready, --seed and the drive options to reach comparable application
+// states. --max-mean is an explicit threshold; this script does not infer a
+// noise tolerance from repeated samples. --self records repeatability samples.
 //
-// Drive different app states by running this once per state with a --ready /
-// --seed combination (the samsyninja original walked its menu states inline;
-// that drive logic is site-specific and belongs in the caller).
+// Screenshot transport limits vary with runtime and image content. See
+// lib/chrome.mjs for measured failures. JPEG reduces message size but is lossy;
+// use PNG when comparing lossless pixels. Distinct-server identity and browser
+// ownership are checked through lib/ports.mjs, with process-group cleanup in
+// lib/chrome.mjs.
 //
-// PORTS AND IDENTITY (scripts/lib/ports.mjs — read its header once):
-//   The debug port is allocated per (workspace, script) instead of being a
-//   fixed 9333 every project shares, a taken port is a loud exit, and the
-//   browser this script attaches to must be the one it started (sentinel page).
-//   Before shooting anything it also proves A and B are TWO SERVERS: same
-//   origin, or two URLs with the same serve.mjs identity token, is fatal. That
-//   check exists because this script's failure mode is silent — one side
-//   photographed twice produces a flawless report in which every number is
-//   real and the comparison is empty.
-//
-// BROWSER LIFECYCLE (scripts/lib/ports.mjs's sibling, scripts/lib/chrome.mjs):
-//   Chrome runs as a detached PROCESS GROUP and the group is reaped on every
-//   exit path. `chrome.kill('SIGKILL')` kills only the browser process and
-//   orphans the 6-8 renderer/GPU/network children it forked (measured: 129 live
-//   Chrome processes, ~16 leaked profiles, oldest 2 days 1 hour, load average
-//   8.7 with "nothing running"). For THIS script that is a correctness bug, not
-//   a tidiness one: a pixel gate's tolerance is not a hand-picked epsilon, it is
-//   the band you get by comparing the reference side WITH ITSELF over N runs.
-//   Background load makes those N runs disagree more -> the band widens -> the
-//   gate silently forgives real cross-side residuals. A leaked process LOOSENS
-//   the gate.
-//
-// Zero npm dependencies: raw CDP over Node's built-in WebSocket (Node 22+).
-// Adapted from samsyninja-rebuild/scripts/pixelcompare.mjs (64x40 grid +
-// metric.json). For per-pixel byte gates + diff heatmaps see side-by-side.mjs.
-//
-// 中文规格（自 scripts/README.md 迁入，v0.3.21；本表另一拼写：`pixelcompare.mjs`、`scripts/pixelcompare.mjs` 的 `--freeze-css`）
-// 量化像素对拍（粗网格相似度 + metric 输出）。⭐ **状态对齐协议**：`--ready <表达式>` + `--chunk 1` + `--after-ready N`——两侧各自 READY 后再泵 N 帧，分块粒度即对齐分辨率（darkroom /about、/work 两处 UNCLASSIFIED 残差由此归零，determinism §7）。**视口 ≳ 1500×900 时 PNG 过不了 CDP 载荷硬顶**，改 `--format jpeg --quality 92`。**产出前先过非空帧前置条件**——两张空帧对拍会报 `meanAbsDiff 0 / 相似度 100`，与完美结果同形（实测：冻结把引擎停在首帧之前，三条路由全报 0，而那是 201 色 99.5% 纯黑）；`--pump dt,frames` 是 probe-shim 的一等驱动入口，且**与真实时间交错地泵**——冻结页的启动仍在墙钟上等资产，settle 之后一次性泵完会让引擎永远拿不到"资产已到达"的那一帧（`determinism.md` §2.9.1）。`--self` 是**自比带宽的合法通道**（§1.3.2 要求的那次测量按定义是一侧与自己比，会被跨侧假绿守卫拦下）——产物标 `kind:"self-band"`，且 `--max-mean` 对它失效：带宽是分类的**输入**，不是判决
-// ⛔ **冻 JS 时钟冻不住 CSS 动画**——`animation` 跑在浏览器动画时间线上，不经过 JS。症状是**同侧对照比跨侧还大**且最差格相同。该旗标把所有动画 `paused` + 固定负延迟钉在同一相位（⚠ 它改变被渲染内容，这正是目的：两侧定格在同一位置）。
-// 双服务器 A/B 截图 + 64×40 网格量化（适合活体场景）+ 并排合成图 + metric.json；`--max-mean` 可作门。**开拍前先证明 A/B 是两个进程**：同 origin 或两个 URL 拿到同一个 `serve.mjs` identity token 一律退 3（否则那份完美报告测的是同一侧），标签与服务自报的 side 不符则告警。浏览器生命周期走 `lib/chrome.mjs`——**这里的进程泄漏会直接把自比带宽抬高、把门调松**。`--format jpeg --quality N` 是撞上 CDP 载荷硬顶时的规避（默认 PNG），截图/指标/合成三步失败都点名原因并退 4，不再无声超时。⭐ v0.3.15 **状态分两种**（determinism §7.1）：泵到的状态用 `--ready`/`--after-ready N`（状态相对再泵 N 帧）；**等到的状态**（GLB 在 worker 里解码、纹理到达）用 `--hold <expr> --hold-after N --hold-grace ms`——先泵 N 帧让页面在泵的世界里发出请求，真实时间等到达（虚拟钟钉住）+ grace，再两侧同样绝对泵完。raycastkbd 25% 检查点：绝对泵 1/3 概率 2.91（未到达）、`--after-ready` 恒 1.7（相位错开）、泵前 hold 60s 超时、`--hold-after 30 --hold-grace 1500` 归零。v0.3.16：同一 `--out` 里混用 `--self` 与跨侧直接 FATAL（exit 2），metric.json 的 `kind` 不再被旧值覆盖
-// `node pixelcompare.mjs --a http://127.0.0.1:25002/ --b http://127.0.0.1:25001/ --name home`；1728×1080 加 `--format jpeg --quality 92`
+// Adapted from samsyninja's grid comparison. side-by-side.mjs provides image
+// composites and a pixel difference view.
+
 
 import { writeFileSync, readFileSync, mkdirSync } from 'node:fs';
 import { join } from 'node:path';
@@ -105,7 +66,7 @@ const flag = (name, dflt) => {
   return i >= 0 && args[i + 1] !== undefined ? args[i + 1] : dflt;
 };
 
-// ⭐ The pump protocol REQUIRES the shim, and serve.mjs only injects it when the
+//  The pump protocol REQUIRES the shim, and serve.mjs only injects it when the
 // request carries ?__probe — so a URL without it is never what the caller meant.
 // Measured: a bare URL produced "window.__pump never appeared within 30s" nine
 // times in a row, and the truncated error (relayed through pixel-walk's 60-char
@@ -125,7 +86,7 @@ if (!URL_A || !URL_B) {
 const NAME = flag('name', 'home');
 const OUT = flag('out', join(process.cwd(), 'docs', 'pixelcompare'));
 const KIND = args.includes('--self') ? 'self-band' : 'cross-side';
-// ⛔ Refuse to MIX KINDS in one metric.json, and refuse HERE — before the
+//  Refuse to MIX KINDS in one metric.json, and refuse HERE — before the
 // server wait and before a browser is launched. The tag used to be spread
 // under the loaded object (`{kind, ...metrics}` with `metrics.kind` already
 // set), so the file kept whichever kind its first run wrote: a band file and
@@ -183,7 +144,7 @@ const HOLD_GRACE = Number(flag('hold-grace', '0')) || 0;
 // let the page ask; the hold then waits in real time; the remaining total−N frames pump the
 // same absolute clock on both sides.
 const HOLD_AFTER = Number(flag('hold-after', '0')) || 0;
-// ⛔ A LOAD-TIME SEED CANNOT DRIVE A PAGE WHOSE TARGET DOES NOT EXIST YET.
+//  A LOAD-TIME SEED CANNOT DRIVE A PAGE WHOSE TARGET DOES NOT EXIST YET.
 // Measured: a site whose scroll container is created only after its preloader
 // finishes. The seed ran at `load`, found `scrollHeight - clientHeight === 0`,
 // and scrolled to 0 — at every checkpoint. Driving and readiness co-evolve, so
@@ -192,12 +153,9 @@ const HOLD_AFTER = Number(flag('hold-after', '0')) || 0;
 // --drive is an expression re-evaluated after EVERY pump chunk. Write it
 // idempotently: it will run many times.
 const DRIVE = flag('drive', null);
-// --pump "dt,frames": drive the determinism shim from here instead of smuggling
-// a call into --ready. probe-shim.js's header says "from a CDP probe call
-// window.__pump(dt, frames)" and this script had no way to do it, so the frozen
-// comparison everyone reaches for was one expression-shaped workaround away.
+// --pump "dt,frames" advances the shim's virtual clock through window.__pump.
 const PUMP = flag('pump', null);
-// ⛔⛔ THE SHIM CANNOT FREEZE CSS. probe-shim.js takes over rAF, timers,
+//  THE SHIM CANNOT FREEZE CSS. probe-shim.js takes over rAF, timers,
 // performance.now, Date.now and Math.random — every clock that runs through
 // JavaScript. A CSS `animation` does not: it runs on the browser's own
 // animation timeline, and a marquee at `animation: marquee 30s infinite` keeps
@@ -211,7 +169,7 @@ const PUMP = flag('pump', null);
 //
 // --freeze-css pins every animation to the SAME PHASE on both sides: paused,
 // with a fixed negative delay so each one is evaluated at the same offset into
-// its own timeline. ⚠ It changes what is rendered (a marquee is captured
+// its own timeline.  It changes what is rendered (a marquee is captured
 // mid-travel rather than wherever it drifted to), which is exactly the point —
 // both sides are captured at the same mid-travel position.
 const FREEZE_CSS = args.includes('--freeze-css');
@@ -245,19 +203,9 @@ await waitFor(async () => (await fetch(URL_A)).ok, 10000, 'server A ' + URL_A);
 await waitFor(async () => (await fetch(URL_B)).ok, 10000, 'server B ' + URL_B);
 console.log('[pixel] servers up');
 
-// --- and they must be TWO servers (the false-green gate) ---
-//
-// ⭐ UNLESS --self. verification-gates.md §1.3.2 requires a SELF-COMPARISON BAND
-// before any residual can be classified: the same side, captured across
-// independent sessions, 4 runs per side, and "2 runs do not make a band". That
-// measurement is by definition one side against itself, so the false-green gate
-// below would refuse the very run the doctrine mandates — and an agent that
-// hits the FATAL either skips the band (leaving every residual UNCLASSIFIED) or
-// invents a workaround.
-//
-// --self is that channel, and it is NOT a way to relax the gate: the result is
-// tagged as a band sample, never as a verdict, and the tag travels into the
-// output JSON so a band file cannot later be read as a cross-side pass.
+// Cross-side runs reject repeated server identities. --self permits repeated
+// endpoints for noise measurement and marks the output as a baseline sample,
+// rather than a cross-side comparison result (verification-gates.md §1.3.2).
 const SELF = args.includes('--self');
 let idA = null, idB = null;
 if (SELF) {
@@ -310,7 +258,7 @@ const target = await assertOwnBrowser({
   port: CDP_PORT, sentinel, tool: 'pixelcompare.mjs', pid: chrome.pid,
 });
 
-// THE loud-failure hook (an oversized screenshot kills the connection with
+// THE error-reporting hook (an oversized screenshot kills the connection with
 // close 1006 instead of returning an error) and the per-call timeout both live
 // in lib/cdp.mjs; a silent hang is the worst failure shape there is.
 const cdp = await connectCdp(target.webSocketDebuggerUrl, { defaultTimeoutMs: 120000 });
@@ -364,38 +312,38 @@ function shotFatal(label, err) {
 let landA = null, landB = null;
 async function capture(url, label) {
   await cdp.send('Page.navigate', { url });
-  // ⛔ --ready is NOT a pre-pump wait. Checking it before the pump can only ever
+  //  --ready is NOT a pre-pump wait. Checking it before the pump can only ever
   // express "ready without any driving", and on a frozen page the states worth
   // waiting for are exactly the ones the pump has to produce: a preloader that
   // finishes, a WebGL canvas that gets sized. Waiting first simply hangs — 120 s
   // for a condition whose precondition has not run yet.
   //
-  // ⭐ So --ready is the PUMP LOOP'S EXIT CONDITION (below): pump until the page
+  //  So --ready is the PUMP LOOP'S EXIT CONDITION (below): pump until the page
   // reaches the state, capped by the frame budget. Fast when the state arrives
   // early, and honest when it never does. Without --pump it keeps its old
   // meaning, because then there is nothing to drive.
   if (READY && !PUMP) await waitFor(() => evalJs(READY), 120000, label + ' ready');
   if (PUMP) {
-    // ⭐ INTERLEAVED WITH REAL TIME, not one burst after the settle.
+    //  INTERLEAVED WITH REAL TIME, not one burst after the settle.
     //
     // A frozen page still boots against REAL async: XHR for assets, decode,
     // font loading. Those land on the wall clock while everything the page can
     // observe about time only moves when pumped. Pump once at the end and the
     // engine never gets a frame in which its assets have arrived — measured on a
     // WebGL target, canvases sat at the default 300x150 through a 240-frame
-    // burst, and the comparison then reported a perfect 0 over two blank frames.
+    // burst, and the comparison then reported a zero difference over two blank frames.
     // Pumping in chunks with real gaps, the same engine sized its canvas to
     // 1730x1082 within ~2.5 s of virtual time.
     //
     // So: the pump budget is spread across the settle window. Both sides get the
     // IDENTICAL dt sequence, which is what makes the frames comparable.
     const [dt, frames] = PUMP.split(',').map((n) => Number(n.trim()));
-    // ⛔ WAIT for the shim, do not test for it once. `Page.navigate` resolves when
+    //  WAIT for the shim, do not test for it once. `Page.navigate` resolves when
     // navigation STARTS, so a single check runs against the previous document or
     // before the injected script has executed — and then this gate blames the URL
     // for a shim that was there all along. Measured: the same URL that made this
     // FATAL answered `typeof window.__pump === "function"` from a plain probe.
-    // ⚠ A wrong diagnosis is more expensive than no diagnosis: it sends you to
+    //  A wrong diagnosis is more expensive than no diagnosis: it sends you to
     // change something that was already correct.
     const ok = await waitFor(
       async () => {
@@ -462,7 +410,7 @@ async function capture(url, label) {
     }
 
     if (READY && readyAt === null) {
-      // ⚠ Say it. A capture taken before the page reached its state is a capture
+      //  Say it. A capture taken before the page reached its state is a capture
       // of the loading screen, and two of those agree perfectly.
       console.error(`[pixel] FATAL: ${label} never satisfied --ready within ${total} pumped frame(s).`);
       console.error(`        Raise --pump frames or --settle, or fix the predicate — do NOT compare this frame.`);
@@ -527,16 +475,12 @@ const inlineFatal = (step, err) => {
   process.exit(4);
 };
 
-// --- NON-BLANK PRECONDITION (gate-failure-modes.md §1.8) ---------------------
-// ⛔ Runs BEFORE the diff, and it is not optional. A comparison of two empty
-// frames reports meanAbsDiff 0, worstCellDiff 0, similarity 100 — the exact
-// shape of a perfect result. Measured on a WebGL target whose determinism
-// freeze parked the engine before first paint: three routes reported 0 across
-// the board, and the frames were 201 distinct colours at 99.5% black against
-// 28,282 colours unfrozen. The SELF-band was 0 too, so the check meant to prove
-// the freeze worked was equally satisfied by the blankness.
-//
-// Nothing else in this toolchain asks whether a frame HAS ANYTHING IN IT.
+// Check for near-blank frames before computing differences
+// (gate-failure-modes.md §1.8). Matching blank frames can have zero differences.
+// On one frozen WebGL target, three routes produced frames with 201 colors
+// and 99.5% black pixels, compared with 28,282 colors when unfrozen; both
+// cross-side and self comparisons reported zero difference. Color count and
+// background dominance are heuristics and still require scene-specific review.
 const census = await evalJs(`(async () => {
   const load = (b64) => new Promise((r) => { const i = new Image(); i.onload = () => r(i); i.src = ${JSON.stringify(MIME)} + b64; });
   const stat = async (b64) => {
@@ -557,7 +501,7 @@ const census = await evalJs(`(async () => {
 })()`);
 {
   const { a, b } = JSON.parse(census);
-  // ⭐ SAY WHERE THIS WAS MEASURED. A gate that reports a number without saying
+  //  SAY WHERE THIS WAS MEASURED. A gate that reports a number without saying
   // what state produced it invites the reader to assume the intended state. And an
   // assertion whose inputs are missing is silently inert — printing them is how
   // you find out it never ran, rather than believing it passed.
@@ -573,7 +517,7 @@ const census = await evalJs(`(async () => {
     }
   }
 
-  // ⛔ Both sides must have landed at the SAME scroll position. The seed records
+  //  Both sides must have landed at the SAME scroll position. The seed records
   // where the scroll actually settled; a smooth-scroll library can drag it
   // elsewhere, and then this gate compares two different parts of the page and
   // reports the difference as a porting defect.
@@ -678,7 +622,7 @@ cdp.close();
 // which also swallows cleanup errors so they can never decide the exit code.
 chrome.reap();
 
-// ⛔ --max-mean is a GATE, and a band sample is not a gate result. Applying a
+//  --max-mean is a GATE, and a band sample is not a gate result. Applying a
 // threshold to a self-comparison would let the reference side's own noise
 // "pass" or "fail" something, which is a category error: the band is an INPUT
 // to classification, never a verdict.

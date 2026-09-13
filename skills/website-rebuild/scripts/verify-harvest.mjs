@@ -12,22 +12,18 @@
  * but a curve sampled at fixed points IS its identity, and it is
  * condition-independent, so the two sides can be matched by behaviour.
  *
- * ⭐ Matching by behaviour also recovers the names. The port's module exports
+ *  Matching by behaviour also recovers the names. The port's module exports
  * its easings under readable keys; the source's are anonymous. Matching
  * fingerprints tells you WHICH named curve the source was using — a fact the
  * source page cannot tell you directly.
  *
- * ⛔ Every harvested identity must match, and match EXACTLY ONE thing on the
+ *  Every harvested identity must match, and match EXACTLY ONE thing on the
  * port. A harvested curve matching two port curves means the port has
  * duplicates and the mapping is ambiguous; matching none means it is missing.
  *
  *   node scripts/verify-harvest.mjs --baseline docs/case-baseline.json \
  *        --b <port-url> --config scripts/harvest.config.mjs [--probe scripts/probe.mjs]
  *
- * 中文规格（自 scripts/README.md 迁入，v0.3.21；本表另一拼写：`verify-harvest.mjs`）
- * **采集基线的 B 侧**：把采到的身份逐条喂给移植，要求**恰好匹配一个**（零个=缺失，两个=移植里有重复行为、映射不成立）。⭐ 按**行为**匹配还能**把名字找回来**——源站的缓动函数全匿名，移植侧按可读键导出，指纹一对上就知道源页面在跑哪条曲线
- * 采集基线的 B 侧：逐条身份要求在移植侧**恰好匹配一个**。⭐ 按行为匹配能把源站说不出的名字找回来
- * `node scripts/verify-harvest.mjs --baseline docs/case-baseline.json --b <port>`
  */
 import { readFile } from "node:fs/promises";
 import { spawn } from "node:child_process";
@@ -103,11 +99,11 @@ for (const [key, fp] of entries) {
   }
 }
 
-// ⚠ Coverage is not correctness, but it is worth saying: a port that defines 20
+//  Coverage is not correctness, but it is worth saying: a port that defines 20
 // curves while the page uses 3 is carrying 17 unexercised ones, and this gate
 // says nothing about those.
 const used = new Set(entries.flatMap(([, fp]) => portEntries.filter(([, pv]) => eq(fp, pv)).map(([pk]) => pk)));
-console.log(`\n  ⚠    ${used.size}/${portEntries.length} port identity(ies) are exercised by the harvest;`);
+console.log(`\n      ${used.size}/${portEntries.length} port identity(ies) are exercised by the harvest;`);
 console.log(`       the rest are untested by this gate.`);
 
 console.log(fail ? `\nFAIL — ${fail} harvested identity(ies) unmatched.` : `\nPASS — all ${entries.length} harvested identity(ies) matched exactly one on the port.`);

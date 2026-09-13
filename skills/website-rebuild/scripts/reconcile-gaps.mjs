@@ -13,10 +13,7 @@
 // Inputs: --urls <file(s), comma-sep>  (netcapture.tsv rows or plain URL lines)
 // Usage:  node scripts/reconcile-gaps.mjs --out mirror --urls docs/netcapture.tsv,docs/next-image-urls.txt
 //
-// 中文规格（自 scripts/README.md 迁入，v0.3.21；本表另一拼写：`reconcile-gaps.mjs`）
-// **运行时缺口对账器**：把 netcapture 记下的 GAP 行与字节推导的全集清单（如 next/image 的 srcset 阶梯穷举——实测 1,078 vs 浏览器碰到 217）逐条补进镜像。⭐ **请求头梯子**（标准 profile 4xx → 裸 profile 重试：同一个 403 有两种相反的药，landonorris 要 Referer、video.twimg 恨 Referer）+ 逐 URL 容错 + 分批记账（一次崩溃不留账外文件）。⛔ 图片 URL 的标准 profile 发**浏览器同款图片 Accept**（`lib/negotiate.mjs`）——`auto=format` 类 CDN 按 Accept 协商格式，`*/*` 拿到的是回退字节（basement D5：391 变体全回退而门全绿）；账本记 `profile`+`vary`
-// 运行时缺口对账器：netcapture 的 GAP 行 + 字节推导的全集清单（next/image 的 srcset 阶梯穷举、`?_rsc=` 载荷、爬虫专供 OG 路由）逐条补进镜像。请求头梯子（标准 profile 4xx → 裸 profile 一次重试：同一个 403 两种相反的药）；逐 URL 容错；每百条分批记账（一次崩溃不留账外文件）
-// `node reconcile-gaps.mjs --out mirror --urls docs/netcapture.tsv,docs/next-image-urls.txt`
+
 import { readFile, writeFile, mkdir } from "node:fs/promises";
 import { join, dirname } from "node:path";
 import { sha256 } from "./lib/hash.mjs";
@@ -69,14 +66,11 @@ for (const f of LISTS) {
 }
 console.log(`candidate urls: ${urls.size}`);
 
-// Image URLs get the browser's own image Accept on the std rung: `auto=format`
-// CDNs negotiate the format on it, and `accept: */*` lands the FALLBACK bytes
-// (basement D5 — 391 variants all fallback, sampled 6/6 divergent from what a
-// browser receives, every gate green). The bare rung keeps `*/*`: it exists
-// for header allergies, and staying minimal is its job. The rungs are
-// lib/negotiate.mjs `fetchProfiles` (same UA and headers as the crawler); the
-// climb below stays local because it differs from `fetchLadder` — a 3xx is a
-// failure here, and any non-2xx (not only 401/403) falls through to bare.
+// Use the browser image Accept header for the standard request profile. In
+// basement D5, 391 variants used fallback formats and all six sampled responses
+// differed from browser downloads despite passing the existing checks.
+// The minimal profile retains Accept: */*. Unlike fetchLadder, this caller
+// retries every non-2xx response, including redirects, with the next profile.
 const profilesFor = (url) => fetchProfiles(url, { origin: ORIGIN, typeHint: typeHints.get(url) || "" });
 
 async function flush() {

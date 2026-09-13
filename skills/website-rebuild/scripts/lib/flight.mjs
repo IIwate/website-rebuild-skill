@@ -1,35 +1,20 @@
 /**
- * lib/flight.mjs — rewriting text that carries its own length.
+ * Localize text within length-prefixed React Flight rows.
  *
- * ⛔ THE RULE THIS FILE EXISTS FOR: a string replacement is safe only where
- * nothing else has written down how long the string is.
+ * A T row has the form <id>:T<hex>,<UTF-8 text>. Its length determines where the
+ * next row begins. URL replacement changes the text's byte count, so the length
+ * must be updated at the same time. Other serialized fields can have separate
+ * constraints; this helper covers the supported Flight row representation.
  *
- * Both layers of this toolchain localise absolute URLs in text — the build
- * layer bakes it into the port's bytes (T-LOCALIZE), the serve layer applies it
- * to the mirror on the way out. Both are safe in href/src attributes, CSS
- * url(), and ordinary JSON. Neither is safe inside React's flight stream, which
- * every Next.js App Router page embeds as a sequence of rows:
- *
- *     <id>:T<hex>,<exactly that many UTF-8 BYTES of text>
- *
- * ⭐ A length-prefixed row has NO terminator. The next row's header begins at
- * the declared end — the length IS the separator, which is the whole reason it
- * is written down. So shortening `https://media.host/x` to `/ext/media.host/x`
- * inside a row leaves the reader consuming the next row's header as text, and
- * the parse dies somewhere with no relation to the cause:
- *
+ * On eightdesign, two of 115 routes rendered 70 characters instead of 2,440
+ * after response localization. The recorded failure was:
  *     TypeError: t.reason.enqueueModel is not a function
+ * There were no observed 404s or request failures, and the stored HTML byte
+ * counts matched. Serving the same files with python3 -m http.server restored
+ * both routes, locating the defect in response transformation.
  *
- * Measured on eightdesign: 2 of 115 routes rendered 70 characters instead of
- * 2,440, with ZERO 404s, ZERO request failures, an identical HTML byte count
- * and every other gate green. What located it was serving the SAME directory
- * with `python3 -m http.server`, which rendered both routes perfectly — the
- * fault was in the server, not in the bytes.
- *
- * ⚠ Both callers share this file rather than copying it, for the reason
- * lib/extract-refs.mjs is shared: a mirror and a port that localise by
- * different code will disagree, and the disagreement shows up as a rendering
- * difference that looks like a porting error.
+ * The build and response layers share this helper so they use the same byte
+ * length calculation and Flight escaping rules.
  */
 
 /** The push shape every Next.js App Router page streams its payload through. */
@@ -77,7 +62,7 @@ export function repairFlightRows(stream, rw) {
     const start = comma + 1;
     const stop = Math.min(start + declared, buf.length);
     const body = rw(buf.subarray(start, stop).toString("utf8"));
-    // ⭐ Re-declare in UTF-8 BYTES, not characters. This payload is Japanese,
+    //  Re-declare in UTF-8 BYTES, not characters. This payload is Japanese,
     // where the two differ by a factor of three.
     const head = `${m[1]}:T${Buffer.byteLength(body, "utf8").toString(16)},`;
     out.push(head + body);
@@ -94,7 +79,7 @@ export function repairFlightRows(stream, rw) {
  * Returns null when there is no payload, so the caller can fall through to its
  * ordinary path.
  *
- * ⚠ The gaps BETWEEN pushes are rewritten here too, so every region of the
+ *  The gaps BETWEEN pushes are rewritten here too, so every region of the
  * document is rewritten exactly once. Letting a blanket pass run afterwards
  * over the repaired literal would shorten those rows a second time and re-open
  * the mismatch this function closes.
@@ -117,7 +102,7 @@ export function rewriteFlight(html, rw) {
 
   const { text: fixed, marks } = repairFlightRows(stream, rw);
 
-  // ⭐ Keep the ORIGINAL push boundaries. Chunk boundaries carry no meaning to
+  //  Keep the ORIGINAL push boundaries. Chunk boundaries carry no meaning to
   // the client — it concatenates before parsing — but they carry a great deal
   // to the shell gate, which diffs the port against the mirror hunk by hunk.
   // Re-chunking arbitrarily turns a handful of local URL edits into 73 hunks of

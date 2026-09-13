@@ -1,71 +1,24 @@
-// urlpath.mjs — THE url -> local-path mapping. One implementation, shared by
-// mirror-site.mjs (writes the bytes), netcapture.mjs (diffs against them),
-// serve.mjs (reads them) and verify-mirror.mjs (audits them).
+// Map URLs to local paths consistently across the crawler, server and checks.
 //
-// WHY THIS EXISTS — the collapse that turns every downstream gate green
-// ---------------------------------------------------------------------------
-// Each of those scripts used to carry its own copy of `localPathFor()`, and all
-// of them keyed on `u.pathname` alone. On any site whose image CDN is a QUERY-
-// PARAMETERISED TRANSFORM (Shopify, Cloudinary, imgix, Next/image, Wix, …) the
-// query string is not decoration — it selects which bytes come back. Measured
-// on objectandarchive.com (2026-08-13), one pathname, three responses:
+// Query parameters can select different assets. In objectandarchive, one image
+// at widths 320, 600 and 1200 returned 43,196, 163,064 and 328,321 bytes. A
+// pathname-only mapping overwrote those variants while ordinary loading checks
+// still passed.
 //
-//     /cdn/shop/files/x.jpg?v=1775999782&width=320     43,196 B
-//     /cdn/shop/files/x.jpg?v=1775999782&width=600    163,064 B
-//     /cdn/shop/files/x.jpg?v=1775999782&width=1200   328,321 B
+//   /cdn/shop/x.jpg?v=1&width=600 -> cdn/shop/x@@v=1&width=600.jpg
+//   /collections/foo?page=2     -> collections/foo@@page=2/index.html
+//   https://cdn.other.com/a.js?b=1 -> assets/cdn.other.com/a@@b=1.js
 //
-// A pathname-only mapping lands all three on one file. The damage is SILENT,
-// which is the whole point of this module:
-//   - the mirror stops being a byte-level restatement of the origin's URL space
-//     (mirroring.md §0), and inventory.tsv's sha256 describes whichever variant
-//     happened to be written last — a race between crawler workers;
-//   - the server answers every ?width= with that one file, so a srcset picks a
-//     32px icon for a 1200px slot AND STILL RENDERS: the zero-404 gate, the
-//     console gate and the zero-outbound gate all go green on a wrong mirror;
-//   - the capture pass keys its ledger by url+search but resolves disk by
-//     pathname, so every variant after the first reports HAVE. GAP = 0, falsely.
+// Query suffixes precede extensions so MIME detection still works. Parameters
+// are sorted; verify that order is insignificant for the target service.
+// Filesystem-hostile or long suffixes use a truncated SHA-1 digest. This avoids
+// lossy character substitution but cannot guarantee collision-free naming;
+// verify-mirror.mjs checks collisions among the observed URL records.
 //
-// Nothing downstream can catch this, because everything downstream asks "does
-// it render?" and the answer is yes. That is why scripts/verify-mirror.mjs
-// exists and why its first assertion is injectivity of THIS function.
-//
-// THE MAPPING
-// ---------------------------------------------------------------------------
-//   /cdn/shop/x.jpg?v=1&width=600   ->  cdn/shop/x@@v=1&width=600.jpg
-//   /cdn/shop/x.jpg                 ->  cdn/shop/x.jpg
-//   /collections/foo?page=2         ->  collections/foo@@page=2/index.html
-//   https://cdn.other.com/a.js?b=1  ->  assets/cdn.other.com/a@@b=1.js
-//
-// The suffix goes BEFORE the extension so `path.extname()` keeps working —
-// every consumer uses it for MIME selection and for the "is this a page?" test.
-// Params are sorted, so two orderings of one request map to one file (transform
-// CDNs are order-insensitive; verify with two byte-identical responses before
-// relying on it). Filesystem-hostile or over-long suffixes degrade to
-// `@@h<sha1-12>`: degrading on ANY hostile character rather than replacing it
-// keeps the mapping injective — `?a=b/c` and `?a=b?c` would otherwise sanitise
-// to the same name and re-create the collapse this module exists to prevent.
-//
-// POLICY — which params are part of the identity of the bytes
-// ---------------------------------------------------------------------------
-// Some params select bytes (`width`, `format`, `crop`); some are pure cache
-// busters (`v`, `_`, `cb`) that produce identical bytes and, left in the key,
-// merely store the same file twice. The default is DELIBERATELY CONSERVATIVE:
-// **every param is part of the key**. Over-storing costs disk; collapsing costs
-// correctness, silently. Narrow it per project only with evidence (two URLs
-// differing only in that param, byte-identical responses):
-//
-//     node mirror-site.mjs --origin … --query-ignore v,cb        # drop busters
-//     node mirror-site.mjs --origin … --query-only width,height  # keep only these
-//
-// The effective policy is written to <mirror>/urlpath-policy.json by the
-// crawler and read back by serve/netcapture/verify-mirror, so the policy lives
-// next to the bytes it produced and the four scripts CANNOT drift apart. A
-// mirror written under one policy and served under another is itself a defect —
-// verify-mirror.mjs reports it as MAPPING DRIFT.
-//
-// 中文规格（自 scripts/README.md 迁入，v0.3.21；本表另一拼写：`lib/urlpath.mjs`）
-// **唯一的 url→本地路径映射**，`mirror-site` / `netcapture` / `serve` / `verify-mirror` 四方共用（三方各存一份 `localPathFor()` 本身就是 bug 源）。**查询感知**：查询串排序后编成文件名后缀并插在扩展名前（`x.jpg?v=1&width=600` → `x@@v=1&width=600.jpg`），所以 `?width=320/600/1200` 是三个文件而不是一个；含文件系统敏感字符或过长的降级为 `@@h<sha1-12>`（**任何**敏感字符都降级，而不是替换成 `_`——替换会让 `?q=a/b` 与 `?q=a?b` 撞名，等于把要防的坍缩又造回来）。**策略可配置、默认保守**：默认每个参数都进键（宁可多存不可坍缩），确认某参数不改字节后再 `--query-ignore v,cb` 或 `--query-only width,height`；有效策略由爬虫写进 `<mirror>/urlpath-policy.json`，其余三方读它，四方不可能漂
-// `import { localRelPath, serveCandidates, loadPolicy } from "./lib/urlpath.mjs"`
+// All parameters are retained by default. Use --query-ignore or --query-only
+// only for an established site-specific equivalence. urlpath-policy.json records
+// that choice beside the mirror, and consumers load the same policy.
+
 
 import { createHash } from "node:crypto";
 import { readFile, writeFile } from "node:fs/promises";
@@ -106,8 +59,8 @@ const MAX_SUFFIX = 96;
 const HOSTILE = /[/\\?%*:|"'<>&=\x00-\x1f\x7f]/;
 
 /**
- * Conservative default: no param is ignored, no allow-list. Two URLs that
- * differ in any way are two files.
+ * Preserve all query parameters by default. Canonicalization and sorting still
+ * map fragment-only and parameter-order differences to the same resource path.
  */
 export const DEFAULT_POLICY = Object.freeze({ ignore: [], only: null });
 
@@ -208,7 +161,8 @@ export function querySuffix(search, policy = DEFAULT_POLICY) {
   // HOSTILE is tested against each key and value SEPARATELY, never against the
   // joined string: `&` and `=` are the join characters, so they are legal in the
   // result but ambiguous inside a value (`?a=b&c` vs `?a=b%26c`) — both cases
-  // therefore go to the hash form, which is injective by construction.
+  // use different suffix forms. The hashed form still requires collision
+  // checks against the observed URL records.
   const hostile = params.some(([k, v]) => HOSTILE.test(k) || HOSTILE.test(v));
   if (hostile || raw.length > MAX_SUFFIX) {
     return "@@h" + createHash("sha1").update(raw).digest("hex").slice(0, 12);
@@ -220,7 +174,7 @@ export function querySuffix(search, policy = DEFAULT_POLICY) {
  * Does this path END in a file extension? The page-vs-asset test, in ONE place
  * so the writer (localRelPath) and the lookup (serveCandidates) cannot answer
  * it differently for the same name.
- * ⚠ {1,12}, not {1,8}: `.webmanifest` is ELEVEN characters and the shorter cap
+ *  {1,12}, not {1,8}: `.webmanifest` is ELEVEN characters and the shorter cap
  * classified it as a page, so the crawler wrote the file as a DIRECTORY with an
  * index.html inside while serve.mjs (which sees a real extension via
  * path.extname) looked for a file and 404'd. The cap still exists — it keeps a
@@ -240,14 +194,14 @@ export function withQuerySuffix(p, suffix) {
 }
 
 // Extensions that make a NON-FINAL segment a file rather than a directory.
-// ⚠ A known list, not "any dotted segment": a version directory like
+//  A known list, not "any dotted segment": a version directory like
 // `/decoders/1.5.5/…` must NOT flatten, and a dot-anywhere rule would have
 // silently remapped every existing mirror that has one.
 const PATH_TAIL_EXT =
   /^(.*?\.(?:jpe?g|png|gif|webp|avif|svg|ico|mp4|webm|mov|mp3|wav|pdf|css|js|mjs|json|woff2?|ttf|otf|glb|gltf|ktx2|wasm|zip))(\/.+)$/i;
 
 /**
- * ⛔ A URL PATH CAN CONTINUE PAST A FILE. Storyblok's image service appends
+ *  A URL PATH CAN CONTINUE PAST A FILE. Storyblok's image service appends
  * transforms UNDER the original's path: `…/team-hero.jpg` is the original and
  * `…/team-hero.jpg/m/110x110/filters:format(avif):quality(70)` is a variant.
  * A naive mapping needs `team-hero.jpg` to be a file and a directory at once,
@@ -255,11 +209,12 @@ const PATH_TAIL_EXT =
  * original, EISDIR writing the original after a variant. Measured: every
  * storyblok asset with transforms, ~1,700 entries.
  *
- * ⭐ Flatten the tail into the filename: everything after an extension-bearing
+ *  Flatten the tail into the filename: everything after an extension-bearing
  * non-final segment joins it with the reserved "@@" delimiter (the same
- * convention query strings use). Injective — "@@" is reserved.
+ * convention query strings use). Check observed mappings for collisions with
+ * source paths that already contain this delimiter.
  *
- * ⛔ ONE FUNCTION, because the WRITER and the SERVER must not each carry their
+ *  ONE FUNCTION, because the WRITER and the SERVER must not each carry their
  * own copy of this rule. localRelPath() writes the flattened name; a request
  * arrives in the SLASH spelling and serveCandidates() has to resolve it through
  * the identical rule or the server 404s on a file the crawler wrote. Two
@@ -280,7 +235,7 @@ export function flattenPathTail(pathname) {
 export function localRelPath(absUrl, originHost, policy = DEFAULT_POLICY) {
   const u = new URL(absUrl);
   const suffix = querySuffix(u.search, policy);
-  // ⚠ COLLAPSE CONSECUTIVE SLASHES HERE, not somewhere downstream. Sites build
+  //  COLLAPSE CONSECUTIVE SLASHES HERE, not somewhere downstream. Sites build
   // asset URLs by concatenating a base that ends in "/" with a path that starts
   // with one, so `…/textures//tunnels/x.png` is common and origins serve it
   // happily. The crawler used to write such a file through path.join(), which
@@ -295,7 +250,7 @@ export function localRelPath(absUrl, originHost, policy = DEFAULT_POLICY) {
   // A path that continues PAST a file is flattened into the filename — see
   // flattenPathTail. The server resolves requests through the same function.
   const flattened = flattenPathTail(clean);
-  // ⛔ A FLATTENED NAME IS A FILE, and the page/asset test below cannot see
+  //  A FLATTENED NAME IS A FILE, and the page/asset test below cannot see
   // that: the flattened tail rarely ENDS in an extension
   // (`…jpg@@m@@110x110@@filters:format(avif):quality(70)`), so the extension
   // test calls it a page and appends "/index.html" — while serveCandidates
@@ -338,7 +293,7 @@ export function serveCandidates(pathname, search, policy = DEFAULT_POLICY) {
     out.push(flat);
   }
   if (suffix) {
-    // ⛔ For a DIRECTORY-style path the crawler and the server used to disagree
+    //  For a DIRECTORY-style path the crawler and the server used to disagree
     // about the ORDER of two operations — attach the query suffix, and append
     // `/index.html`. The crawler suffixes the last SEGMENT and then adds the
     // index (`…/defaultlinks@@locale=en_US&src=globalnav/index.html`); this

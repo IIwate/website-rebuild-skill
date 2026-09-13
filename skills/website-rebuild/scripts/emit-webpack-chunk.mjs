@@ -1,23 +1,18 @@
 #!/usr/bin/env node
-// emit-webpack-chunk.mjs — 多 chunk webpack 站的逐字切片交付形态（14islands 实战入库，F3）。
-//
-// slice-modules.mjs 只有两种出口：转写一个独立 webpack 运行时的 IIFE（整包替换，
-// 解析不了住在别的 chunk 里的 id——本站 _app 有 24 个这样的 require）或 ESM。Next 的
-// 多 chunk 拓扑要的是第三种：**把 chunk 按源站容器形态原样再发射**——
-//   (self.webpackChunk_N_E = self.webpackChunk_N_E || []).push([[2888], { <id>: function… }, runtimeCb])
-// 模块体逐字、容器逐字、chunk 尾部的 runtime 回调逐字；解析交给镜像里源站自己的
-// webpack-*.js 运行时（rsc/turbopack 路线里"再发射容器让真运行时解析"的 webpack 同构物）。
-//
-// ⛔ 先决条件：--map 必须是 module-map.mjs（webpack push 正签名读法，v0.3.10）或同形边界表；
-//   --in 必须是 beautify 产出且 verify-tokens 通过（或对 token 不等的模块用 --raw 代入压缩原字节）。
-// 产出：<parts>/<NNN>-<id>.js 逐模块部件（含首/尾两个非模块部件）+ <out> 按序拼接件。
-// ⛔ 自校（--check 或每次都跑）：拼接件 === `_pretty` 原件逐字节 —— 这就是
-//   readable-source.md §3.0.6 的拼接式分解语义：字节等价成立时全部运行时门的裁决免费转移。
-//
-//   node scripts/emit-webpack-chunk.mjs --in <pretty.js> --map <lines.json> --out <gen.js> --parts <dir> [--raw <min.js> --raw-bounds <bounds.json>] [--check]
-//
-// 中文规格（自 scripts/README.md 迁入，v0.3.21）
-// **多 chunk webpack 站的逐字再发射**：按 module-map 边界把 `_pretty` chunk 切成逐模块部件（含首尾非模块部件），按源站容器形态 `push([[ids],{…}],runtime)` 原样拼回，解析交给镜像里源站自己的 webpack runtime——Turbopack "再发射进 TURBOPACK" 的 webpack 同构物；`--check` 拼接门逐字节；`--raw` 对 token 不等的模块代入压缩原件精确子串
+/**
+ * Reassemble a webpack chunk from verbatim module and container slices.
+ * Retains the original runtime callback and cross-chunk resolution. The 14islands
+ * _app chunk had 24 cross-chunk requires, so an isolated IIFE was insufficient.
+ * --map accepts module-map output or a compatible boundary table; --in is the
+ * corresponding formatted source. Verify its tokens against the original first.
+ * --raw replaces selected modules with original minified spans from --raw-bounds;
+ * 14islands module 99150 required this after nested-template formatting changed.
+ * --check compares existing parts and output without regenerating them.
+ *
+ *   node scripts/emit-webpack-chunk.mjs --in <chunk.js> --map <map.json> --out <output.js> --parts <dir>
+ *   node scripts/emit-webpack-chunk.mjs --in <chunk.js> --map <map.json> --out <output.js> --parts <dir> --check
+ */
+
 import { readFileSync, writeFileSync, mkdirSync, readdirSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { cli } from "./lib/cli.mjs";
@@ -28,10 +23,10 @@ cli({ known: ["in", "map", "out", "parts", "raw", "raw-bounds"], bools: ["check"
 const args = process.argv.slice(2);
 const flag = (k, d) => { const i = args.indexOf("--" + k); return i >= 0 ? args[i + 1] : d; };
 const IN = flag("in"), MAP = flag("map"), OUT = flag("out"), PARTS = flag("parts");
-// --raw <minified.js>:<id,id> — 这些模块的部件改用源站压缩原件的精确字节（bounds 由
-// minified-module-bounds.mjs 用 token 流定位，JSON 经 --raw-bounds 传入）：用于 js-beautify 改坏
-// 模板字面量的模块（14islands _app 模块 99150 实撞：嵌套模板 `${…}` 被排成 `$ {\n … }`，token 门抓住）。
-// 拼接门对 raw 部件的断言改为：该字节串是压缩原件的精确子串。
+// --raw selects modules from the original minified file using explicit bounds.
+// The bounds JSON is supplied through --raw-bounds by the project analysis.
+// 14islands module 99150 needed this after formatting changed a nested template.
+// Each raw part must be an exact substring of the original minified file.
 const RAW_FILE = flag("raw", null), RAW_BOUNDS = flag("raw-bounds", null);
 const RAW = RAW_FILE && RAW_BOUNDS ? JSON.parse(readFileSync(RAW_BOUNDS, "utf8")) : {};
 const RAW_SRC = RAW_FILE ? readFileSync(RAW_FILE, "utf8") : "";
@@ -39,13 +34,13 @@ if (!IN || !MAP || !OUT || !PARTS) { console.error("usage: emit-webpack-chunk.mj
 const src = readFileSync(IN, "utf8");
 const lines = src.split("\n");
 const map = JSON.parse(readFileSync(MAP, "utf8"));
-// --map 接受两种字段名：module-map.mjs 的 startLine/endLine 与项目侧 webpack-map 的 start/end。
+// Accept startLine/endLine or the project map fields start/end.
 const mods = map.modules
   .map((m) => ({ ...m, start: m.start ?? m.startLine, end: m.end ?? m.endLine, exports: m.exports ?? m.exportNames ?? [] }))
   .sort((a, b) => a.start - b.start);
 
-// 部件切分：头（第 1 行到首模块前一行）、每个模块（start..end，含模块间的空行归前一个模块的尾部？
-// ——不：模块间若有间隔行，归入下一部件的头部，保证覆盖无缝）、尾（末模块后到文件末尾）。
+// Split the prefix, module ranges and suffix without leaving uncovered bytes.
+// Inter-module gap lines belong to the following part.
 const parts = [];
 let cursor = 1;
 const head = lines.slice(0, mods[0].start - 1);
@@ -65,13 +60,13 @@ const tail = lines.slice(cursor - 1);
 parts.push({ name: "999-tail", text: tail.join("\n") });
 
 const joined = parts.map((p) => p.text).join("");
-// 拼接门：非 raw 部件按序拼接（raw 位置代入其 pretty 文本）=== pretty 原件；raw 部件 = 压缩原件精确子串
+// Reassemble formatted spans for comparison, and separately verify raw spans.
 const joinedPretty = parts.map((p) => (p.raw ? p.prettyText : p.text)).join("");
 const rawOk = parts.filter((p) => p.raw).every((p) => RAW_SRC.includes(p.text.trim().replace(/,$/, "")));
 const identical = joinedPretty === src && rawOk;
 const CHECK = args.includes("--check");
 if (!identical) {
-  // 定位第一处分歧，便于修切分规则；不写盘。
+  // Report the first difference without writing output.
   let k = 0; while (k < Math.min(joinedPretty.length, src.length) && joinedPretty[k] === src[k]) k++;
   if (!rawOk) console.log("  raw part(s) are not exact substrings of the minified source");
   console.log(`FATAL — reassembly differs from ${IN} at byte ${k} (joined ${joined.length} vs src ${src.length})`);
@@ -85,7 +80,7 @@ if (!CHECK) {
   writeFileSync(OUT, joined);
   writeFileSync(join(PARTS, "MANIFEST.tsv"), "PART\tMODULE\tLINES\tEXPORTS\tSHA12\n" + parts.map((p) => [p.name, p.id || "-", p.lines || p.text.split("\n").length, (p.exports || []).join(",") || "-", sha256Short(p.text, 12)].join("\t")).join("\n") + "\n");
 } else {
-  // --check：盘上部件重拼必须仍等于原件，且等于已写出的拼接件
+  // In check mode, existing parts must reproduce both the source and emitted file.
   const onDisk = readdirSync(PARTS).filter((f) => f.endsWith(".js")).sort().map((f) => readFileSync(join(PARTS, f), "utf8")).join("");
   const outNow = readFileSync(OUT, "utf8");
   if (onDisk !== joined || outNow !== joined) { console.log("FATAL — on-disk parts or gen file drifted from the emitted assembly"); process.exit(1); }

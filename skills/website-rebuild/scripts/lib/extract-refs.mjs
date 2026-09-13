@@ -1,140 +1,29 @@
-// extract-refs.mjs — THE asset-reference extractor: every URL shape a mirror
-// has to be able to see in a text file. Shared by mirror-site.mjs (pass 1, the
-// BFS crawl) and verify-mirror.mjs (pass 4, the static closure gate).
+// Extract candidate asset references from text for crawling and mirror checks.
+// Supported forms include absolute and protocol-relative URLs, root-relative
+// assets, srcset/imagesrcset candidates, CSS url() and glTF references.
+// The extractor scans both the original spelling and a decoded view, then
+// unions the results. This handles composed JSON, Unicode and HTML escapes.
 //
-// It lives in lib/ for the same reason lib/urlpath.mjs does: when the crawler
-// and the closure gate carry separate copies of these regexes, the gate cannot
-// see the references the crawler cannot see, so the closure check reports
-// "reference set − disk set = ∅" while both sides share one blind spot. A gate
-// that inherits the bug it is auditing is worse than no gate.
+// In objectandarchive, 68 srcsets contained about 270 variants beyond their
+// first candidates. Escaped references exposed another 60 URLs, including two
+// woff2 files used on three routes. A later comparison across 197 text files
+// found 1,767 references instead of 1,587, including 121 missed by a narrower
+// escape-specific expression. The mixed spelling below demonstrates why all
+// candidate forms are scanned after decoding:
+//   "image":"https:\/\/host/file.jpg?v=1784637278\u0026width=1920"
 //
-// ⚠ THE LINE ABOVE IS A CLAIM, AND IT IS CHECKABLE — CHECK IT【objectarchive N12】
-//     grep -l "lib/extract-refs.mjs" scripts/*.mjs
-// must list exactly the callers named here. On the project that wrote this
-// module, that same header sentence was true of the gate and FALSE of the
-// crawler, which kept a private copy of the shapes for four milestones. A file
-// header states intent; only an import statement states code, and a header that
-// claims sharing while one caller has its own copy is worse than no claim —
-// it makes the next fix land on one side and read as landed on both.
-//
-// Shapes covered, and why each one is here:
-//   1. absolute            https://host/path
-//   2. protocol-relative   //host/path        (quoted or parenthesised)
-//   3. root-relative       src=/path.ext      on the origin itself
-//   4. srcset candidates   see below — the one that hides hundreds of files
-//   5. relative url(...)   inside CSS, resolved against the stylesheet's URL
-//
-// …and every one of them is run TWICE: once over the file's bytes, once over a
-// DECODED VIEW of them (see "THE ESCAPED-URL BLIND SPOT" below).
-//
-// (4) is the field lesson. `srcset` / `imagesrcset` are COMMA-SEPARATED
-// CANDIDATE LISTS, and only the FIRST candidate is preceded by the quote that
-// shapes (1)–(3) key on; every later one starts after ", ". Measured on
-// objectandarchive.com: 68 srcsets × ~5 candidates, so ~270 responsive variants
-// were invisible to pass 1 — while the ledger looked complete, because the
-// first candidate of every set was present. Paired with a pathname-only url ->
-// path mapping (lib/urlpath.mjs) this is undetectable downstream: the page
-// renders from whichever variant did land.
-//
-// THE ESCAPED-URL BLIND SPOT — why the second pass exists【objectarchive D-T10】
-// ---------------------------------------------------------------------------
-// Shape (1)'s character class excludes backslash, on purpose: a URL match must
-// stop at an escape boundary. The consequence nobody drew: a URL SPELLED with
-// escapes never starts matching at all. `https:\/\/host\/path` — what a
-// template engine's JSON filter emits inside an inline payload (Liquid
-// `| json`, PHP `json_encode`, `JSON.stringify` piped through an HTML escaper)
-// — dies at the first `\/`, and the whole class of references is invisible.
-// Same for `\/\/host\/path`, for the double-escaped `https:\\/\\/…` that comes
-// out of JSON-inside-JSON, for the `\u002f` spelling of the same escape, and
-// for `&#x2F;` in an attribute value.
-//
-// The causal chain, and it is the reason this file exists at all:
-//
-//     a hole in the DISCOVERY regex
-//       -> a reference set that is missing a whole CLASS of references
-//         -> pass 4 computes "reference set − disk set" over that short set
-//           -> the closure gate reports "= ∅" AND IS GREEN.
-//
-// The gate did not fail to run. It ran, correctly, on an input that was already
-// wrong — the same family as "the mirror needs its own gate" (mirroring.md
-// §5.1): every downstream gate can be green because THE THING THEY MEASURE is
-// the broken artefact. A gate's input can be the bug.
-//
-// Measured on objectandarchive.com (M(n)): reference set 1,360 -> 1,420. The 60
-// invisible references included two woff2 that were referenced on three routes
-// and never mirrored. Nothing downstream could catch it either — the host form
-// does not render on any produced document, and an unrendered element makes no
-// request (verification-gates.md §1.6 class 2), so the runtime gates were blind
-// FOR A LEGITIMATE REASON. It was found by the closing per-asset copyright
-// audit counting fonts, not by any gate.
-//
-// The fix is not "add two more regexes". Escapes COMPOSE with every other
-// shape: an escaped srcset list inside a JSON-embedded HTML blob needs shape
-// (4) to see through `\"` as well as `\/`. So the whole shape set is re-run
-// over a decoded view of the text, and the two result sets are unioned.
-// Over-inclusion is the safe direction here: a phantom reference makes this
-// gate RED and gets one line in external.txt, while a missed class makes it
-// GREEN and takes a copyright audit to find.
-//
-// Measured, differentially, over that project's 197 mirrored text files:
-// 1,587 -> 1,767 references, ZERO lost. 121 of those are invisible even to the
-// two-extra-regexes version of this fix, and they are why the decoding is a
-// NORMALISING PASS and not a second alphabet of shapes: one string can carry
-// TWO escape flavours at once. That site's JSON-LD spells an image as
-//
-//     "image":"https:\/\/host\/....jpg?v=1784637278\u0026width=1920"
-//
-// A shape written for \/ matches the head of that and then STOPS at the
-// \u0026, because its class excludes backslash. So the reference does not go
-// missing — it comes out TRUNCATED, as ...jpg?v=1784637278, and under a
-// query-aware mapping (lib/urlpath.mjs) that is a DIFFERENT asset, which IS on
-// disk. A half-understood escape turns a missing reference into a satisfied
-// one: the gate stays green, holding a real file up as evidence for a claim
-// about a different one. Escape flavour and escape depth are unbounded; the
-// shape list is not.
-//
-// 中文规格（自 scripts/README.md 迁入，v0.3.21；本表另一拼写：`lib/extract-refs.mjs`）
-// **唯一的资产引用提取器 + 唯一的"什么算文本"判定**，爬虫与 `verify-mirror.mjs` 的闭包门共用——门若自带一份正则，就会继承被审爬虫的盲区，然后报出一个"引用集 − 磁盘集 = ∅"的假绿。五种写法：绝对 / 协议相对 / 根相对属性（含 `poster`/`content`/`data-src` 等懒加载拼写）/ **`srcset` 逐候选** / CSS `url()`。`srcset` 是逗号分隔候选表，只有第一条前面有引号，引号锚定的正则一组只看得见 1/5 条，而账本看上去是齐的。**五种写法各跑两遍：原文一遍、解码归一后再一遍**（D-T10）——绝对 URL 的字符类排除反斜杠是**故意**的（匹配必须停在转义边界），代价是**用转义拼写的 URL 根本不会开始匹配**：`https:\/\/host\/path`（Liquid `\| json` / `json_encode`）、JSON 套 JSON 的 `https:\\/\\/…`、`/`、属性里的 `&#x2F;` 整类隐形。**因果链是这条脚本存在的理由本身**：发现侧正则残缺 → 引用集少一整类 → 闭包门在那个短了的集合上算差集 → **报"= ∅"并且是绿的**（门没有失败，它在一个已经错了的输入上正确地跑了；与"镜像要有自己的门"同族）。修法不是补两条正则而是**整套写法在解码视图上重跑一遍**，因为转义会与其它写法**复合**（JSON 里嵌 HTML 的转义 `srcset` 候选表，要同时看穿 `\"` 与 `\/`）。⛔ v0.3.15（raycastkbd）：**srcset 候选按构造是资产，`?url=` 图片代理是资产**——`addIfAsset` 的"同源无扩展名 = 页面"规则曾把 `/_next/image?url=…&w=640` 整族丢掉：srcset 形态找到 42 条、同一函数里全部丢弃、闭包报 ∅，盘上只有浏览器碰巧要过的 19 条且是 `*/*` 回退字节。现在 srcset 候选带 `{asset:true}` 直通，`[?&]url=` 的同源无扩展名 URL 视为资产，`<img src="/_next/image?…">` 这类裸属性另有 4a 形态；`/about?tab=2` 仍是页面
-// `import { createRefExtractor } from "./lib/extract-refs.mjs"`
+// mirror-site.mjs and verify-mirror.mjs share this implementation. That keeps
+// their candidate sets consistent but also gives them shared blind spots.
+// Closure applies to discovered references; it does not establish complete URL
+// discovery. Browser captures and explicit runtime-path analysis complement it.
+// Review false positives before adding exclusions. Case details are recorded
+// in references/case-studies/mirroring.md.
 
-// WHICH FILES GET SCANNED AT ALL — a gate's INPUT, not its assertion
-// 【objectarchive N13 / D-T12】
-// ---------------------------------------------------------------------------
-// The shapes above answer "what does a reference look like?". This half answers
-// the other question, and it is the one that went wrong: A REFERENCE THE
-// EXTRACTOR COULD SEE IS STILL INVISIBLE IF NOBODY HANDS IT THE FILE.
-//
-// It used to be an EXTENSION WHITELIST copied into two scripts — the crawler's
-// `TEXT_EXT` and the closure gate's `TEXT` — and both copies stopped at
-// `html|css|js|mjs|json|svg`. Every other mirrored text format was a document
-// neither side ever opened, and because BOTH sides shared the blind spot, the
-// closure gate could not see it: "reference set − disk set = ∅" is computed
-// over files the gate itself chose to read. Measured on objectandarchive.com
-// (M0b): 16 `/collections/*.atom` feeds sat on disk, each an XML document full
-// of product links and CDN image URLs in escaped `<content>` HTML, and neither
-// the crawl nor the gate had ever read one. Reference set 3,109 -> 3,521.
-//
-// Same family as the prefix-matched excuse (verify-mirror.mjs's closure gate)
-// and the escaped-URL blind spot above: NOT A WRONG ASSERTION, AN ASSERTION
-// OVER A SHORT INPUT. When auditing any gate, ask how its input is delimited
-// BEFORE asking whether its predicate is right.
-//
-// So the predicate lives here, next to the shapes, shared by both callers — and
-// it is not an extension whitelist. Extensions are the origin's own naming
-// choice and carry no promise (one origin serves woff2 bytes at a `.woff` URL);
-// plenty of real routes have no extension at all. Three inputs, in order of how
-// much they promise:
-//   1. the DECLARED content-type (the origin's own statement — the oracle);
-//   2. the extension (a hint, and the only thing available for an orphan file);
-//   3. the bytes themselves (sniffed, for everything the first two cannot rule).
-// Over-inclusion is the safe direction: scanning a binary as text costs one
-// wasted regex pass, while skipping a text file costs a class of references
-// that nothing downstream can recover.
 
 /**
  * What a file EXTENSION looks like, as a RegExp source fragment — the ONE
  * spelling every "does this URL end in an extension" test below builds on.
- * ⚠ {1,12}, the same cap lib/urlpath.mjs uses to decide page-vs-asset when it
+ *  {1,12}, the same cap lib/urlpath.mjs uses to decide page-vs-asset when it
  * maps a URL to disk. The extractor carried its own `{2,5}` in five places, so
  * `/site.webmanifest` (11), `/x.jsonld` (6) and `/x.geojson` (7) were "pages"
  * here — never queued as assets — while the mapper called them assets; the
@@ -313,7 +202,7 @@ const MAYBE_ENCODED = /\\+[/"']|\\+u00[23]|&(?:#[0-9a-fA-F]|amp|quot|apos|sol|co
  * client actually parses, so a scanner never sees a push boundary. Returns null
  * when the document has no such payload.
  *
- * ⚠ The pushes are REPLACED, not appended: appending would leave the truncated
+ *  The pushes are REPLACED, not appended: appending would leave the truncated
  * spellings in the text and the phantoms would survive alongside the real URLs.
  */
 export function joinFlightPushes(text) {
@@ -344,19 +233,19 @@ export function createRefExtractor({ origin, originHost, assetHosts, onOffHost }
   // image by construction), so the page-vs-asset heuristic below must not
   // second-guess it.
   const addIfAsset = (rawUrl, urls, { asset = false } = {}) => {
-    // ⛔ A TEMPLATE PREFIX IS NOT AN ADDRESS. A URL assembled at runtime —
+    //  A TEMPLATE PREFIX IS NOT AN ADDRESS. A URL assembled at runtime —
     //     `https://cdn.jsdelivr.net/npm/${pkg}@${ver}/dist/x.wasm`
     // scans statically as everything up to the first `${`, and that fragment is
     // an INVENTED reference in exactly the way a push-boundary truncation is:
     // it 404s, and the ledger keeps a hole for a URL that never existed.
-    // ⭐ The real one is only visible to a capture pass, which is where this
+    //  The real one is only visible to a capture pass, which is where this
     // asset was in fact found.
     if (/\$\{|\$$/.test(rawUrl)) return;
     try {
       const u = new URL(rawUrl);
       if (!hosts.has(u.hostname)) return void offHost(u.hostname, u.href, { asset });
       // Same-origin URLs without an extension are pages, not assets —
-      // ⛔ UNLESS the caller vouched for it (srcset candidate) or the URL is an
+      //  UNLESS the caller vouched for it (srcset candidate) or the URL is an
       // image-optimiser PROXY: `/_next/image?url=…&w=640&q=75` has no extension
       // and never will, yet it is the byte the browser paints. This rule
       // silently dropped every such rung for eight versions while the srcset
@@ -372,7 +261,7 @@ export function createRefExtractor({ origin, originHost, assetHosts, onOffHost }
   // then decoded (see header — escaped spellings compose with every shape, so
   // the shapes are re-run rather than duplicated).
   const scan = (text, baseUrl, urls) => {
-    // ⚠ Root-relative means relative to the DOCUMENT'S host, not the site's.
+    //  Root-relative means relative to the DOCUMENT'S host, not the site's.
     // A playlist mirrored from video.twimg.com that says "/ext_tw_video/…"
     // means video.twimg.com/ext_tw_video/… — the browser resolves it against
     // the document it came from. Joining ORIGIN unconditionally re-homed 42
@@ -384,20 +273,20 @@ export function createRefExtractor({ origin, originHost, assetHosts, onOffHost }
     }
     // 1. absolute URLs
     for (const m of text.matchAll(/https?:\/\/[a-z0-9.-]+\/[^\s"'`\\<>{}|^\][]+/gi)) {
-      // ⚠ Parens are handled by BALANCE, not by presence. A URL really can end
+      //  Parens are handled by BALANCE, not by presence. A URL really can end
       // in ")": Storyblok's `…filters:format(avif):quality(70)`. Blind trailing
-      // strips manufactured 1,593 phantom `…quality(70` URLs (v0.1.68's paren
+      // strips manufactured 1,593 spurious `…quality(70` URLs (v0.1.68's paren
       // lesson, third location). And the match can OVERRUN a closing paren the
       // URL never opened: inline `style="…url(https://…x.webp);--aspect:…"`
-      // yielded 98 phantom `x.webp);--aspect` URLs (fourth location) — the
+      // yielded 98 spurious `x.webp);--aspect` URLs (fourth location) — the
       // junk sits mid-string, so no trailing trim can reach it. One rule covers
       // both: truncate at the first paren that closes more than the URL ever
       // opened, left to right. The other trailing marks (, . ; : !) stay
       // unconditional: sentence punctuation around a URL in prose, never path.
-      // ⚠ decodeEntities can INTRODUCE the very boundary chars the raw match
+      //  decodeEntities can INTRODUCE the very boundary chars the raw match
       // excluded: `&quot;image&quot;:&quot;https://…x.webp&quot;,…` matches
       // straight through, and only the decode turns &quot; back into `"`.
-      // Measured here: 98 phantom `x.webp","description":"…` URLs (fifth
+      // Measured here: 98 spurious `x.webp","description":"…` URLs (fifth
       // trailing-junk shape). The decoded string must re-obey the same
       // character-class boundary the raw regex enforced.
       let ref = decodeEntities(m[0]).split(/["'`\\<>{}|^\][\s]/)[0];
@@ -418,7 +307,7 @@ export function createRefExtractor({ origin, originHost, assetHosts, onOffHost }
     // bundles/media reference them as /path/file.ext).
     // The (?!\/) guard is load-bearing: protocol-relative refs (//host/path)
     // also start with "/", and without it they get joined onto ORIGIN as
-    // https://host//host/path — 77 phantom 404s on the first Shopify target
+    // https://host//host/path — 77 spurious 404s on the first Shopify target
     // (racingshop-rebuild). Shape 2 already handled those.
     for (const m of text.matchAll(ROOT_ATTR_RE)) {
       addIfAsset(DOC_ORIGIN + decodeEntities(m[1]), urls);
@@ -428,7 +317,7 @@ export function createRefExtractor({ origin, originHost, assetHosts, onOffHost }
     // to code: `new Workbox("/sw.js")`, `fetch("/data/index.json")`,
     // `img.src = "/img/sprite.svg"` match nothing there.
     //
-    // ⭐ The costly instance is the SERVICE WORKER, because the two mirror
+    //  The costly instance is the SERVICE WORKER, because the two mirror
     // passes share the blind spot: the crawler cannot see the registration
     // (a bare string in a chunk), and the CDP capture does not observe the
     // fetch either — the browser retrieves /sw.js outside the page's context,
@@ -438,7 +327,7 @@ export function createRefExtractor({ origin, originHost, assetHosts, onOffHost }
     // probe reporting "404 when fetching the script" two steps downstream.
     //
     // Deliberately still requires a file EXTENSION: without it every route
-    // string ("/about", "/works/x") becomes a phantom asset. Route strings are
+    // string ("/about", "/works/x") becomes a spurious asset. Route strings are
     // the page queue's business, not the asset extractor's.
     for (const m of text.matchAll(ROOT_LITERAL_RE)) {
       addIfAsset(DOC_ORIGIN + decodeEntities(m[1] + (m[2] || "")), urls);
@@ -463,25 +352,17 @@ export function createRefExtractor({ origin, originHost, assetHosts, onOffHost }
     for (const m of text.matchAll(/\b(?:src|href|poster|data-src)=["'](\/(?!\/)[^"'\s]*\?[^"'\s]*)["']/gi)) {
       addIfAsset(DOC_ORIGIN + decodeEntities(m[1]), urls);
     }
-    // 4b. A REFERENCE NESTED IN ANOTHER URL'S QUERY. An image-optimisation
-    // endpoint names its subject in a parameter:
-    //
-    //     /_next/image?url=%2F_next%2Fstatic%2Fmedia%2Fpic_3.0w8q….png&w=2048&q=75
-    //
-    // ⛔ An extractor that treats a URL as atomic sees ONE reference here — the
-    // endpoint — and never asks for the image. Measured on eightdesign: 8
-    // source images referenced only this way, absent from the mirror, and the
-    // closure gate green throughout because nothing ever named them. They
-    // surfaced only when the built site's references were replayed against the
-    // server.
-    //
-    // ⭐ The parameter names are the ones endpoints actually use; a value that
-    // does not look like a reference is skipped by addIfAsset anyway.
+    // 4b. Image optimizers can reference another asset through a query parameter:
+    //     /_next/image?url=%2F_next%2Fstatic%2Fmedia%2Fpic.png&w=2048&q=75
+    // On eightdesign, eight source images were referenced only this way. The initial
+    // mirror and its reference check omitted them; replaying the built site's
+    // requests against the server exposed the missing files. Inspect recognized
+    // parameter names and let addIfAsset classify each decoded value.
     for (const m of text.matchAll(/[?&](?:url|src|image|file|path|href|u)=([^&"'\s<>\\]+)/gi)) {
-      // ⚠ ")" is ALLOWED in the value and trimmed only when UNBALANCED. The
+      //  ")" is ALLOWED in the value and trimmed only when UNBALANCED. The
       // first version excluded it outright and truncated six references whose
       // filename really contains "(1).jpg" — manufacturing exactly the kind of
-      // phantom this file exists to stop, in the shape added to stop another
+      // spurious this file exists to stop, in the shape added to stop another
       // one. A "(" ... ")" that balances belongs to the name; a lone trailing
       // ")" is the CSS url(...) closing delimiter.
       let raw = m[1];
@@ -523,7 +404,7 @@ export function createRefExtractor({ origin, originHost, assetHosts, onOffHost }
     // slash. Measured on a 2018 rescue: every project-gallery thumb and
     // lightbox image (`./content/…/thumb.png`, `…/1.jpg`) was invisible to
     // the closure gate, which then reported ∅ over a mirror missing the whole
-    // gallery. The attr= anchor keeps JS operator soup out; addIfAsset's
+    // gallery. The attr= anchor keeps JS operator expressions out; addIfAsset's
     // extension gate keeps page links out; resolution is against the DOCUMENT
     // URL, exactly as the browser resolves it.
     // Two guards, both measured on the first retro-audit of this shape:
@@ -549,7 +430,7 @@ export function createRefExtractor({ origin, originHost, assetHosts, onOffHost }
 
   return function extractAssetUrls(text, baseUrl) {
     const urls = new Set();
-    // ⛔ A STREAMED PAYLOAD IS CUT AT ARBITRARY POINTS, INCLUDING MID-URL.
+    //  A STREAMED PAYLOAD IS CUT AT ARBITRARY POINTS, INCLUDING MID-URL.
     // Next.js delivers its flight payload as a run of
     // `self.__next_f.push([1,"…"])` calls, and the split lands wherever the
     // encoder's buffer ended — routinely inside a URL. Scanning the raw HTML
@@ -562,11 +443,11 @@ export function createRefExtractor({ origin, originHost, assetHosts, onOffHost }
     //
     // The crawler then fetches those, gets 404, and writes 17 failed rows that
     // look exactly like real missing assets — permanent gaps in the ledger for
-    // URLs that never existed. ⭐ Reassemble first: the client concatenates
+    // URLs that never existed.  Reassemble first: the client concatenates
     // before parsing, so push boundaries carry no meaning and removing them
     // loses nothing.
-    // ⛔ REPLACES the raw scan, never joins it. Scanning both would re-add every
-    // truncated spelling alongside the whole one, which is the phantom this
+    //  REPLACES the raw scan, never joins it. Scanning both would re-add every
+    // truncated spelling alongside the whole one, which is the spurious this
     // exists to remove — and the reassembled text keeps everything outside the
     // pushes verbatim, so nothing is lost by scanning it alone.
     const joined = joinFlightPushes(text);
@@ -602,21 +483,13 @@ export const looksLikeAsset = (href) => {
 };
 
 /**
- * Census of the references `addIfAsset` drops because their host is not on the
- * allow-list — the other half of the onOffHost contract above.
+ * Count references excluded by addIfAsset's host allow-list. The observed
+ * 143-reference omission is described in createRefExtractor's header.
  *
- * ⭐ SHARED FOR THE SAME REASON THE SHAPES ARE. Both callers have to answer one
- * question — "is this unfollowed host worth shouting about?" — and they have to
- * answer it the same way. Silence is indistinguishable from "there was nothing
- * there" (the measured 143-reference case is in createRefExtractor's header),
- * but a census that names every namespace URI trains the reader to skip it, and
- * a skipped census is a silent one again. So the ranking and the "does this look
- * like an asset host?" judgement live here, once; each caller keeps its own
- * wording, because what an unfollowed host MEANS differs between them:
- *   - the crawler's allow-list is a CLI argument, so an unfollowed host is a
- *     decision the operator made and may want to revisit;
- *   - the gate's is DERIVED from the ledger, so an unfollowed host is one the
- *     mirror holds no file from at all and nobody ever decided about.
+ * Shared ranking distinguishes asset references from namespace identifiers.
+ * Callers interpret exclusions differently: the crawler uses an explicit host
+ * allow-list, while the verifier derives its host set from the manifest. A host
+ * absent from that manifest may indicate an undiscovered resource dependency.
  */
 export function createOffHostCensus() {
   const seen = new Map(); // host -> { n, sample, assetSample }
@@ -625,15 +498,11 @@ export function createOffHostCensus() {
       let e = seen.get(host);
       if (!e) seen.set(host, (e = { n: 0, sample: href, assetSample: null }));
       e.n += 1;
-      // ⛔ THE JUDGEMENT MUST NOT REST ON WHICHEVER REFERENCE CAME FIRST. A
-      // library CDN is routinely named by its BASE before any of its files:
+      // A CDN base URL can appear before a reference to one of its files:
       //     B = "https://unpkg.com/detect-gpu@5.0.70/dist/benchmarks"
       //     fetch(B + "/d-nvidia.json");  fetch(".../m-adreno.json")
-      // The base has no extension, so a sample-only test files the one host
-      // that is actually holding runtime assets under "namespace identifier"
-      // and says nothing about it — the precise failure this census exists to
-      // end, rebuilt one level up. Keep the first asset-SHAPED reference too,
-      // and judge on that.
+      // Retain an asset reference separately so an extensionless first sample
+      // does not determine the classification of every URL on that host.
       if (!e.assetSample && (asset || looksLikeAsset(href))) e.assetSample = href;
     },
     get size() {
@@ -642,13 +511,10 @@ export function createOffHostCensus() {
     /**
      * rows      every unfollowed host, most-referenced first
      * total     references across all of them
-     * assetish  the subset with at least one reference that names a FILE.
-     *           Namespace identifiers (www.w3.org appears 84x in any SVG-heavy
-     *           site) and outbound social links stay in `rows` for completeness
-     *           but are never suggested as mirror targets — advising someone to
-     *           mirror instagram.com would be worse than saying nothing.
-     * top       the one host worth a loud warning: asset-shaped, at or over
-     *           `minRefs`, and not a known telemetry vendor — or null.
+     * assetish  hosts with at least one URL classified as an asset; namespace
+     *           identifiers and ordinary outbound links remain only in rows.
+     * top       the most-referenced asset host if it reaches minRefs and is not
+     *           a known telemetry vendor; otherwise null.
      */
     summary(minRefs = 20) {
       const rows = [...seen].sort((a, b) => b[1].n - a[1].n);

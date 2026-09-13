@@ -1,66 +1,31 @@
 #!/usr/bin/env node
-// serve.mjs — zero-dependency static server for the pristine mirror (and the
-// rebuild), so source and rebuild can be diffed side-by-side without network.
+// Serve a mirror or rebuild with local URL mapping and response transforms.
+// Captured files on disk are not rewritten. Local behavior can include MIME and
+// Range handling, recorded redirects, /ext/<host>/ asset paths, explicit stubs,
+// origin URL localization, captured 404 responses and ?__probe instrumentation.
+// Project-specific server APIs require separate implementations.
 //
-//   node serve.mjs --side mirror  --root mirror   # the source site
+// node serve.mjs --side mirror  --root mirror   # the source site
 //   node serve.mjs --side rebuild --root dist            # the rebuild
 //   node serve.mjs --side mirror --root mirror [--ext-hosts cdn.x.com,fonts.gstatic.com]
 //                  [--stub-ext-hosts telemetry.example.com] [--origin-host example.com] [--port N]
 //                  [--host 127.0.0.1] [--fallback-root dir,dir] [--query-ignore v,cb | --query-only w,h] [--rewrite FROM::TO]...
 //   PORT=3200 SERVE_ROOT=mirror node serve.mjs    # explicit port still wins
 //
-// PORTS AND IDENTITY (scripts/lib/ports.mjs — read its header once):
-//   --side is what picks the port, and it is REQUIRED unless you pass an
-//   explicit --port/PORT. The mirror and the rebuild therefore always land on
-//   two different, self-describing ports (…1 = mirror, …2 = rebuild), and a
-//   port that is already taken is a loud exit, never a silent slide to the next
-//   free one. Every response also carries an x-wrs-identity token and this
-//   server answers /__wrs/identity, which is how pixelcompare.mjs proves its
-//   two sides are two processes instead of one server reached by two URLs.
+// --side determines a default port unless an explicit port is supplied.
+// Occupied ports fail instead of selecting a different port. Responses expose
+// x-wrs-identity and /__wrs/identity so comparison tools can distinguish server
+// processes. Port slots can collide; identity checks are independent of allocation.
 //
-// Discipline: the mirror on disk is SACRED — never rewritten. Every local-run
-// adaptation happens in the response layer:
-//   * full MIME map + Range requests, so <video>/<audio> can seek
-//   * QUERY-AWARE file resolution (lib/urlpath.mjs): ?width=320 and ?width=1200
-//     are two files, not one, on any transform CDN     [objectandarchive]
-//   * redirect replay from <root>/_scripts/redirects.tsv or <root>/redirects.tsv
-//     (tab-separated "CODE FROM TO" lines, header row skipped): origin routing
-//     behavior is replayed from the ledger, not re-invented   [careers-kimi]
-//     — minus entries that localize to a self-redirect, which would loop
-//   * /ext/<host>/ mapping: text responses get absolute external-host URLs
-//     rewritten to /ext/<host>/<path>, which resolves back into the mirror's
-//     assets/<host>/<path>; SRI integrity attrs are dropped because rewritten
-//     bytes can no longer match their hash        [samsyninja, landonorris]
-//     ext hosts are auto-detected from <root>/assets/<host>/ dirs; add more
-//     with --ext-hosts, and name the deliberately-unmirrored telemetry ones
-//     with --stub-ext-hosts so they answer with a JS stub instead of a 404.
-//     All four spellings are rewritten — plain, protocol-relative, JSON-escaped
-//     and BARE HOST CONSTANT (no trailing slash)      [objectandarchive]
-//   * --origin-host: the origin's own absolute/protocol-relative self-references
-//     become root-relative, so an offline mirror stops phoning the live site
-//     for bytes it already has                        [objectandarchive]
-//   * ?__probe instrumentation: HTML responses get probe-shim.js injected so
-//     both sides can be driven deterministically   [storytellingnoomo]
-//   * 404.html template replay when the mirror captured one   [landonorris]
+// Asset hosts are discovered from assets/<host>/ and extended with --ext-hosts.
+// Explicit --stub-ext-hosts return local substitutes. SRI attributes are removed
+// where response rewriting would invalidate source hashes; this changes the
+// local replay's integrity behavior and is part of its recorded adaptation.
 //
-// Site-specific layers (e.g. careers-kimi's RSC flight payloads served from
-// _rsc/ on an `RSC: 1` header) are intentionally left out — re-add per project.
-//
-// Adapted from storytellingnoomo-rebuild/scripts/serve.mjs and
-// landonorris-rebuild/scripts/serve.mjs. Lineage:
-//   samsyninja-rebuild (response-layer rewriting; mirror stays pristine)
-//   -> careers-kimi-rebuild (redirect replay from ledger, RSC layer)
-//   -> storytellingnoomo-rebuild ("Adapted from careers-kimi-rebuild/scripts/
-//      serve.mjs"; Range support, probe-shim injection)
-//   -> landonorris-rebuild (/ext/<host>/ mapping, 404 semantics, SRI strip)
-//   -> racingshop-rebuild (HLS/DASH ladder MIME types)
-//   -> shopifydesign-rebuild (.mov MIME, --stub-ext-hosts for hosts that are
-//      rewritten into /ext/ but deliberately not mirrored).
-//
-// 中文规格（自 scripts/README.md 迁入，v0.3.21；本表另一拼写：`serve.mjs`）
-// 零依赖静态服务器（MIME/Range/服务层改写/重定向回放），兼任源站参照服。`--rewrite FROM::TO` 是**登记式字面量替换**，为的是一类本地化触及不到的东西——**源程序按自己的域名分支**（`location.hostname=="x.com" && (CDN=...)`，镜像不在那个域名上于是整个子系统走空路径）；**首次命中打印**，因为沉默与生效此前无法区分。`--fallback-root` 让复刻侧只放产出、资产全部从只读镜像读（`asset-management.md` 的不复制策略）——⭐ v0.3.15 起是**回落链** `--fallback-root mirror-negotiated,mirror`，协商变体的独立记账树压在只读镜像之上、两侧同链；⛔ **桩主机的 DSN 保持是 DSN**：`https://<key>@oNNN.ingest.us.sentry.io/<id>` 改写成 `http://<key>@127.0.0.1:<port>/ext/<host>/<id>`，SDK 正常初始化、信封打进桩（此前改成裸路径 → 两侧 console `Invalid Sentry Dsn`，CLEAN 门红而无静态门能见）；**未知旗标响亮失败**——被静默忽略的旗标是一次没人知道的降级
-// 零依赖静态服务器：MIME 补全（含 HLS 阶梯与 `.mov`）、Range、redirects.tsv 重定向回放（FROM 写绝对 URL 或裸路径都能命中）、`/ext/<host>/` 服务层改写（镜像磁盘神圣不改）、`--stub-ext-hosts` 把"改写进 `/ext/` 但故意不镜像"的遥测 host 回 JS stub（否则要么真外联、要么 404）、`?__probe` 注入 probe-shim、404.html 回放。**`--side mirror\|rebuild` 必填**（除非显式给 `--port`/`PORT`）：它决定端口（…1 镜像 / …2 复刻）并写进每个响应的 `x-wrs-identity`，端口被占直接退 3 并点名占用方。三条镜像层修复：① **查询感知取文件**（`lib/urlpath.mjs`，读镜像里的 `urlpath-policy.json`）——按 pathname 取文件会拿一个变体回答所有 `?width=`，页面照渲染，零 404 门在错镜像上变绿；② **host 改写覆盖四种写法**——普通 / 协议相对 / JSON 转义（`https:\/\/host\/` 与 `\/\/host\/`）/ **裸主机常量**（`"https://otlp.example.com"` 后面代码自己拼路径）；新增 `--origin-host` 把源站对自己的绝对/协议相对自引用改写成根相对（否则离线镜像会向线上真站要盘上已有的图）；③ **回放前跳过本地化后自指的重定向**（源站常有 http→https 同路径条目，两侧本地化后同路径 → `ERR_TOO_MANY_REDIRECTS`，把真实在盘的资产打死）。v0.3.15（raycastkbd）两条：④ **`--fallback-root` 是回落链**（`--fallback-root mirror-negotiated,mirror`，左到右第一个有文件的 root 应答——协商变体的独立记账树压在只读镜像之上，两侧同链）；⑤ **桩主机的 DSN 保持是 DSN**：`https://<key>@oNNN.ingest.us.sentry.io/<id>` 改写成 `http://<key>@127.0.0.1:<port>/ext/<host>/<id>`（此前 userinfo 归一化后再本地化成裸路径，Sentry `new Dsn()` 拒收 → 两侧 console `Invalid Sentry Dsn`，CLEAN 门红而无静态门能见；现在 SDK 按源站那样初始化，信封打进 `/ext/<host>/api/<id>/envelope/` 的桩）。
-// `node serve.mjs --side mirror --root mirror --origin-host example.com`；复刻侧 `node serve.mjs --side rebuild --root dist`；有遥测时加 `--stub-ext-hosts www.googletagmanager.com,www.clarity.ms`
+// Derived from samsyninja, careers-kimi, storytellingnoomo, landonorris,
+// racingshop and shopifydesign, covering redirects, Range requests, external
+// asset mapping, HLS MIME types and instrumentation.
+
 
 import http from "node:http";
 import { rewriteFlight, repairFlightRows, hasFlight } from "./lib/flight.mjs";
@@ -84,7 +49,7 @@ import {
 // File resolution is QUERY-AWARE, using the same mapping — and the same stored
 // policy — the crawler wrote with. Resolving by pathname alone answers every
 // ?width=N with one arbitrary variant: the page renders, so the zero-404 gate
-// goes green while the server hands out the wrong bytes. See lib/urlpath.mjs.
+// passes while the server hands out the wrong bytes. See lib/urlpath.mjs.
 import { serveCandidates, loadPolicy, policyFromArgs, describePolicy } from "./lib/urlpath.mjs";
 // The ledgers this server replays (recorded types, redirects) are read by the
 // module that writes them — lib/ledger.mjs.
@@ -92,7 +57,7 @@ import { readManifest, readRedirects, REDIRECTS_FILE } from "./lib/ledger.mjs";
 import { sha256 } from "./lib/hash.mjs";
 import { cli } from "./lib/cli.mjs";
 
-// Every --flag this script understands. An UNKNOWN flag is a loud failure, not
+// Every --flag this script understands. An UNKNOWN flag is a explicit failure, not
 // a shrug: a flag that is silently ignored looks exactly like one that worked.
 // Field case — `--fallback-root` was passed to a build of this script that did
 // not have it yet; it started single-rooted without a word and every asset
@@ -122,7 +87,7 @@ const ROOT = path.resolve(flag("root", process.env.SERVE_ROOT || "mirror"));
 // mirror. Without this the rebuild side needs a second copy of the mirror — a
 // second place for the bytes to drift. Order matters: anything the build layer
 // rewrote must win over the untransformed original.
-// ⭐ A CHAIN, not one directory: `--fallback-root mirror-negotiated,mirror`.
+//  A CHAIN, not one directory: `--fallback-root mirror-negotiated,mirror`.
 // The independent ledger tree for negotiated variants (sanity-platform.md
 // §1.2 — the browser-Accept re-grab that leaves the read-only mirror untouched)
 // has to sit ABOVE the mirror on BOTH sides, and the rebuild side has already
@@ -159,8 +124,8 @@ const { port: PORT, label: PORT_LABEL } = resolvePort({
   env: process.env.PORT || null,
 });
 
-// Per-process identity. Two serve.mjs instances never share it, so an A/B
-// script can prove its two URLs are two servers and not one server twice.
+// A random per-process token helps detect two comparison URLs that reach the
+// same server instance. It identifies the process, not the content served.
 const IDENTITY = {
   tool: "serve.mjs",
   side: SIDE ?? "unset",
@@ -205,7 +170,7 @@ const TEXT_REWRITE = new Set([".html", ".css", ".js", ".mjs", ".json", ".svg"]);
 // length, and the blanket rewrite is safe there.
 const RAW_FLIGHT_ROW = /(^|\n)[0-9a-f]+:T[0-9a-f]+,/;
 
-// ⭐ THE MIRROR ALREADY KNOWS WHAT THE ORIGIN DECLARED. An extensionless URL
+//  THE MIRROR ALREADY KNOWS WHAT THE ORIGIN DECLARED. An extensionless URL
 // (a Nuxt server route like /api/_auth/session) stores as <path>/index.html,
 // and extension-guessing then serves the origin's application/json bytes as
 // text/html — whereupon ofetch, which parses BY CONTENT-TYPE, hands the app a
@@ -224,16 +189,16 @@ for (const root of ROOTS) {
   } catch {}
 }
 
-// ⛔ AN EXTENSION-LESS FILE'S TYPE IS NOT DECIDED BY THE RESPONSE'S OWN HEADER.
+//  AN EXTENSION-LESS FILE'S TYPE IS NOT DECIDED BY THE RESPONSE'S OWN HEADER.
 // This test used to read the response's content-type, which is computed one line
 // above it as `MIME[ext] || "application/octet-stream"` — so for the only case
 // it was ever consulted for (`ext === ""`) it was asking about a constant,
 // answered "not text" every time, and the whole extension-less branch never ran
-// once. ⚠ A CHECK WHOSE INPUT IS DERIVED FROM ITS OWN CONDITION IS NOT A CHECK.
+// once.  A CHECK WHOSE INPUT IS DERIVED FROM ITS OWN CONDITION IS NOT A CHECK.
 // It cost nothing visible: the files went out unrewritten, exactly as they did
 // before the branch was added, and no gate looks at a mirrored API cache.
 //
-// ⭐ Two sources of evidence, in the order mirror-site.mjs already uses when it
+//  Two sources of evidence, in the order mirror-site.mjs already uses when it
 // decides which responses to rescan (`isTextRefSource`: declared type, then
 // extension, then bytes):
 //   1. what the ORIGIN declared. mirror-manifest.json records it per entry and
@@ -241,7 +206,7 @@ for (const root of ROOTS) {
 //      SERVER never read it, which `RECORDED_TYPE` above now fixes.
 //   2. the bytes, for the rows that carry no recorded type — a mirror taken
 //      before the field existed, or a response the origin sent bare.
-// ⚠ Not the other way round. Sniffing is one-directional and crude by design
+//  Not the other way round. Sniffing is one-directional and crude by design
 // (see lib/extract-refs.mjs), so where a declaration exists it is the better
 // evidence, and answering differently from the crawler is what makes a ledger
 // claim a reference is localised while the bytes going out still carry the
@@ -459,7 +424,7 @@ function unicodeSlash(text, host, to) {
 // Measured on a WebGL target: 36 request failures per page, all of them assets,
 // while the localisation layer had done its job perfectly.
 //
-// ⛔ THIS EDITS THE SOURCE PROGRAM, so it obeys the deviation rules: every rule
+//  THIS EDITS THE SOURCE PROGRAM, so it obeys the deviation rules: every rule
 // is a §6 entry, and its FIRST HIT IS LOGGED so a rule that never fires cannot
 // pass for one that worked (silence here used to be indistinguishable from
 // success). asset-management.md §3 is the precedent — the same response-layer
@@ -483,7 +448,7 @@ const REWRITES = args
     return { from: spec.slice(0, at), to: spec.slice(at + 2), hits: 0 };
   });
 
-// What the data-island carve-out has held back from localisation. ⛔ A
+// What the data-island carve-out has held back from localisation.  A
 // REFERENCE SERVER CANNOT FATAL ON THIS — it has to keep answering — but it
 // must not stay silent either: holding an island back re-opens the latent
 // outbound this file's shape 6 exists to close, and "ten latent ones sit in
@@ -498,12 +463,12 @@ let islandNoted = false;
 function rewrite(text, ext, where = "") {
   // Rewritten bytes can no longer match SRI hashes; drop integrity attrs (HTML only).
   if (ext === ".html") text = text.replace(/ integrity="[^"]*"/g, "");
-  // ⛔ A DEVALUE DATA ISLAND IS PROGRAM INPUT, NOT ADDRESSES (payload-gates.md §6), and the
+  //  A DEVALUE DATA ISLAND IS PROGRAM INPUT, NOT ADDRESSES (payload-gates.md §6), and the
   // guard is SHARED with lib/shell-build.mjs rather than copied here — the two
   // localisers disagreeing about where an island is would be payload-gates.md §1.4's drift in
   // its most expensive form, because the payload gate compares exactly these
   // two outputs and would report the disagreement as corrupted content.
-  // ⭐ `where` is what makes the EXTERNALIZED payload reachable: `.json` is in
+  //  `where` is what makes the EXTERNALIZED payload reachable: `.json` is in
   // TEXT_REWRITE, so `/_payload.json` (payload-gates.md §5) would otherwise be localised
   // here exactly the way the inline island was.
   const guarded = protectDataIslands(text, (t) => rewriteInner(t, ext), { where });
@@ -520,11 +485,11 @@ function rewrite(text, ext, where = "") {
 }
 
 function rewriteInner(text, ext) {
-  // ⛔ Length-prefixed payloads first, and out of band: rewriteFlight() hands
+  //  Length-prefixed payloads first, and out of band: rewriteFlight() hands
   // each row's content to rewriteText() on its own and re-declares the length.
   // If the blanket pass below reached those rows it would shorten them without
   // touching the prefix, which is the corruption this exists to prevent.
-  // ⛔ KEYED ON THE CONTENT, NOT THE EXTENSION. This fork also rewrites
+  //  KEYED ON THE CONTENT, NOT THE EXTENSION. This fork also rewrites
   // extension-less responses whose Content-Type says text, and a mirror stores
   // a route as an extension-less file routinely — so an `ext === ".html"` guard
   // leaves exactly the documents it exists to protect on the blanket path.
@@ -532,7 +497,7 @@ function rewriteInner(text, ext) {
     const done = rewriteFlight(text, (t) => rewriteText(t, ext));
     if (done !== null) return done;
   }
-  // ⭐ The SAME payload arrives UNWRAPPED as well: an RSC response is the bare
+  //  The SAME payload arrives UNWRAPPED as well: an RSC response is the bare
   // row stream with no push literals to find, and it is mirrored extension-less
   // (`text/x-component`). The rows carry their own length either way.
   if (RAW_FLIGHT_ROW.test(text)) return repairFlightRows(text, (t) => rewriteText(t, ext)).text;
@@ -540,23 +505,18 @@ function rewriteInner(text, ext) {
 }
 
 function rewriteText(text, ext) {
-  // ⛔ A DSN IS A PARSED ADDRESS, NOT A FETCH TARGET. Normalising the userinfo
-  // away (below) and then localising the host turns Sentry's
-  //     https://<key>@o3794….ingest.us.sentry.io/6624334
-  // into `/ext/o3794….ingest.us.sentry.io/6624334`, which `new Dsn()` rejects:
-  // "Invalid Sentry Dsn" on the console of BOTH sides — a CLEAN-gate red that
-  // reads like a port bug and that no static gate can see (raycastkbd). For
-  // STUB hosts keep the DSN a DSN: scheme + userinfo + THIS server +
-  // /ext/<host>/<path>. Sentry parses it, posts its envelopes to
-  // /ext/<host>/api/<project>/envelope/, the stub answers 200 — same-origin,
-  // zero egress, and the SDK initialises exactly as it does on the origin.
+  // Sentry parses a DSN before issuing requests. Removing its userinfo and
+  // replacing it with a relative URL caused Invalid Sentry Dsn on both sides of
+  // the raycastkbd comparison. For configured stub hosts, retain the scheme and
+  // userinfo while routing the DSN through this server's /ext/<host>/<path>.
+  // The SDK can then initialize and send envelopes to the local stub.
   for (const h of STUB_EXT_HOSTS) {
     const eh = h.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
     text = text
       .replace(new RegExp(`https?://([\\w.+-]+(?::[^@/\\s"']*)?)@${eh}/`, "gi"), (m, ui) => `http://${ui}@${HOST}:${PORT}/ext/${h}/`)
       .replace(new RegExp(`https?:\\\\/\\\\/([\\w.+-]+(?::[^@\\s"']*)?)@${eh}\\\\/`, "gi"), (m, ui) => `http:\\/\\/${ui}@${HOST}:${PORT}\\/ext\\/${h}\\/`);
   }
-  // ⛔ A URL CAN CARRY USERINFO, AND EVERY HOST SHAPE BELOW MISSES IT. Sentry's
+  //  A URL CAN CARRY USERINFO, AND EVERY HOST SHAPE BELOW MISSES IT. Sentry's
   // DSN is the canonical case: `https://<key>@o3794….ingest.us.sentry.io/…`
   // sits in a chunk, the stub host is listed, and the request still went out —
   // because `https://host/` never occurs in the text; `https://key@host/` does.
@@ -644,7 +604,7 @@ async function resolveFile(pathname, search = "") {
     const hit = await resolveOne(cand);
     if (hit) return hit;
   }
-  // ⭐ AN IMAGE-OPTIMISATION ENDPOINT IS A SERVER-SIDE INTERFACE, NOT A FILE.
+  //  AN IMAGE-OPTIMISATION ENDPOINT IS A SERVER-SIDE INTERFACE, NOT A FILE.
   // Next.js asks for `/_next/image?url=<src>&w=<width>&q=<quality>`, where the
   // width is whatever the component decided from the viewport. A static mirror
   // can hold the widths a capture pass happened to request and NOTHING MORE —
@@ -652,20 +612,20 @@ async function resolveFile(pathname, search = "") {
   // that never converges. Measured here: 73 of 115 routes still 404ed on this
   // endpoint after two capture passes, and a third would have taken nine hours.
   //
-  // ⛔ REGISTER THIS AS A DEVIATION. The bytes served are the ORIGINAL image,
+  //  REGISTER THIS AS A DEVIATION. The bytes served are the ORIGINAL image,
   // not the origin's resized-and-recompressed one, so they are larger and
   // sharper than what the live site sends. That is a real difference and it is
   // declared; the alternative was a permanent 404 on most routes, which is a
   // bigger one. The original is genuinely in the mirror — this resolves the
   // interface, it does not invent an asset.
-  // ⭐ THE OTHER HALF OF THE BARE FALLBACK. serveCandidates() handles
+  //  THE OTHER HALF OF THE BARE FALLBACK. serveCandidates() handles
   // "request HAS a query, file has none" — a cache buster the mirror ignored.
   // The reverse also happens: the document references `/x.svg` while the mirror
   // stored `x@@dpl=….svg`, because the URL it was FETCHED by carried the
   // origin's deployment id. Measured on the built site: several such
   // references, all present on disk, all 404ing.
   //
-  // ⛔ Only when the variant is UNAMBIGUOUS. Two variants of one path are two
+  //  Only when the variant is UNAMBIGUOUS. Two variants of one path are two
   // resources (`?width=320` vs `?width=1200`), and answering either from a bare
   // request is exactly the collapse verify-mirror's injectivity gate exists to
   // catch. One variant, serve it; more than one, 404 and let the gate speak.
@@ -681,7 +641,7 @@ async function resolveFile(pathname, search = "") {
   if (opt) {
     const hit = await resolveFile(opt.pathname, opt.search);
     if (hit) { IMAGE_ENDPOINT_HITS++; return hit; }
-    // ⚠ The endpoint's `url=` parameter carries the path WITHOUT the query the
+    //  The endpoint's `url=` parameter carries the path WITHOUT the query the
     // origin serves that file under. The mirror stored it query-suffixed
     // (`x@@dpl=…​.png`) because that is the URL it was fetched by, so an exact
     // match cannot succeed and the asset looks absent while sitting right
@@ -713,7 +673,7 @@ async function queryVariantsOf(pathname) {
  * Serve a request from its stored variant(s) when that is UNAMBIGUOUS:
  * exactly one variant, or several that are byte-identical.
  *
- * ⭐ The second arm is measured, not assumed. Next's `?_rsc=` token is
+ *  The second arm is measured, not assumed. Next's `?_rsc=` token is
  * SESSION-STATE: the runtime computes a fresh one each visit, so the variant a
  * capture stored and the variant a replay requests never agree — 11 prefetch
  * 404s on a page whose mirror held every payload. Two tokens for one route
@@ -725,7 +685,7 @@ async function queryVariantsOf(pathname) {
 async function resolveSoleQueryVariant(pathname) {
   const v = await queryVariantsOf(pathname);
   if (!v.length || v.length > 6) return null;
-  // ⚠ A variant can be a plain file OR a directory holding index.html — the
+  //  A variant can be a plain file OR a directory holding index.html — the
   // url->path mapping decides per entry (an extensionless route stores as a
   // directory). Resolve each to its actual file before judging anything: the
   // first version stat'd the directory, got "not a file", and refused to serve
@@ -777,16 +737,16 @@ function imageEndpointSource(pathname, search) {
 async function resolveOne(pathname) {
   // Reject traversal before touching the filesystem.
   //
-  // ⛔ Traversal is a path SEGMENT equal to `..`, not the two-character
+  //  Traversal is a path SEGMENT equal to `..`, not the two-character
   // substring. A `includes("..")` guard also rejects perfectly legal filenames:
   // Next.js content hashes produce names like
   // `5053fba55258321d-s.p.10w.ec_utoj...woff2`, and this server answered 404 for
-  // three real fonts that were sitting on disk. ⚠ The symptom arrives far from
+  // three real fonts that were sitting on disk.  The symptom arrives far from
   // the cause — as missing fonts, then as "GSAP target not found" for elements
   // that never got laid out.
   const clean = path.normalize(decodeURIComponent(pathname));
   if (clean.split(/[/\\]/).some((seg) => seg === "..")) return null;
-  // ⛔ Never serve a git repository. The standard layouts point --root at
+  //  Never serve a git repository. The standard layouts point --root at
   // mirror/ or site/, where no .git lives — but a server pointed at a repo
   // root answers /.git/HEAD, and from there the whole object store walks out
   // (measured on a pre-skill rebuild whose server root WAS the repo).
@@ -884,7 +844,7 @@ const server = http.createServer(async (req, res) => {
     };
 
     // 4. response-layer text transforms (ext-host rewrite + probe injection)
-    // ⛔ "Is this text?" must use the same three-level signal as the MIME
+    //  "Is this text?" must use the same three-level signal as the MIME
     // answer above: recorded content-type first, extension second. A mirrored
     // Google-Fonts CSS lands as `css@@family=…` (no extension), passed the
     // rewrite gate untouched, and every absolute gstatic URL inside it walked

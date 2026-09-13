@@ -1,48 +1,29 @@
 #!/usr/bin/env node
 /**
- * mirror-site.mjs — BFS crawler: snapshot a live site into a byte-faithful
- * local mirror. Pages land at <out>/<path>/index.html, cross-host assets at
- * <out>/assets/<host>/<path>; every fetched text file is rescanned for asset
- * URLs until no new ones appear. Three ledgers are written next to the bytes:
- * <out>/mirror-manifest.json (url -> local path, size, sha256, type),
- * <out>/inventory.tsv (SHA256 BYTES PATH URL) and <out>/redirects.tsv
- * (CODE FROM TO — replayed by serve.mjs). A fourth file, <out>/urlpath-policy.json,
- * records the url -> path mapping policy these bytes were written under.
+ * Crawl page and asset references into a local mirror.
+ * Responses are stored under the shared URL mapping, with the manifest,
+ * inventory, redirects and URL policy recorded beside them. Text responses are
+ * rescanned within the configured crawl rounds and host/page scope.
  *
  * Usage:
- *   node mirror-site.mjs --origin https://example.com [--out mirror]
- *     [--hosts cdn.example.com,media.example.net]  extra asset hosts to follow
- *     [--pages /pricing,/contact]                  extra seed pages
- *     [--probe-404 /no-such-page-mirror-probe]     fetch origin 404 template -> 404.html
- *     [--seeds urls.txt]                           newline-delimited extra asset URLs
- *     [--rounds 4] [--workers 8]
- *     [--scope /path/]                             restrict the PAGE queue to a path prefix (assets unaffected)
- *     [--query-ignore v,cb]                        params that do NOT change the bytes
- *     [--query-only width,height]                  the only params that do
+ *  node mirror-site.mjs --origin https://example.com [--out mirror]
+ *    [--hosts cdn.example.com,media.example.net]  extra asset hosts to follow
+ *    [--pages /pricing,/contact]                  extra seed pages
+ *    [--probe-404 /no-such-page-mirror-probe]     fetch origin 404 template -> 404.html
+ *    [--seeds urls.txt]                           newline-delimited extra asset URLs
+ *    [--rounds 4] [--workers 8]
+ *    [--scope /path/]                             restrict the PAGE queue to a path prefix (assets unaffected)
+ *    [--query-ignore v,cb]                        params that do NOT change the bytes
+ *    [--query-only width,height]                  the only params that do
  *
- * NOTE a static crawl always misses three classes of URL: worker-fetched WASM,
- * lazy-loaded assets, and runtime-concatenated paths. Follow up with
- * netcapture.mjs (real-browser CDP capture + disk diff) to find the gaps.
- * Then audit the mirror itself with verify-mirror.mjs — the render-level gates
- * downstream cannot tell a right mirror from a wrong one.
+ * Static extraction may miss worker requests, lazy assets and computed paths.
+ * Use browser request capture and runtime-path analysis for those cases, then
+ * verify the recorded mirror. A successful render alone does not establish
+ * complete or correct capture.
  *
- * Adapted from landonorris-rebuild/scripts/mirror-site.mjs.
- * Lineage: rogierdeboeve-rebuild (BFS regex crawler + manifest, ~250 lines)
- *   -> storytellingnoomo-rebuild ("Adapted from rogierdeboeve-rebuild": same-origin
- *      absolute paths, css url() refs, glTF buffer/image URIs)
- *   -> landonorris-rebuild (asset-host whitelist, same-origin Referer header for
- *      asset CDNs that require it, 404-template probe)
- *   -> shopifydesign-rebuild (redirect:"manual" + redirects.tsv instead of
- *      following — the script used to violate its own red line; per-file sha256
- *      in the manifest + inventory.tsv; --seeds so URLs solved out of bundles
- *      and payloads go through the same downloader and land in the same ledger)
- *   -> objectandarchive-rebuild (query-aware url -> path mapping shared through
- *      lib/urlpath.mjs; srcset candidate lists extracted per candidate).
- *
- * 中文规格（自 scripts/README.md 迁入，v0.3.21；本表另一拼写：`mirror-site.mjs`）
- * BFS 爬虫镜像（资产白名单 + 迭代到不动点；`redirect:manual` + 三本账，含逐文件 sha256；⭐ `redirects.tsv` 与 manifest 一样**跨运行累积**——`--scope` 补页曾把它截成只剩表头，载荷门在 `/work` 撞 404 才发现）。`--scope <前缀>` 把**页面**队列限制在目标路径下（微站挂在企业 CMS 域下时必用；⛔ 只限页面不限资产）。**账本累积**（`--seeds` 补漏不再截短上一轮的行）+ **off-host 普查**（不跟的主机逐个计数并告警——静默丢弃曾让 827 条媒体引用消失而报告写着"57 files saved"）
- * BFS 爬虫镜像源站（页面/跨域资产，文本资产迭代到不动点；对要求同源 Referer 的资产域补齐 Referer 头、404 模板探测）。**`redirect: "manual"` 硬纪律**：重定向只记进 `redirects.tsv` 并把目标重新入队，绝不把 301 的 body 写在来源路径下。产出三本账：`mirror-manifest.json`（含逐文件 sha256）、`inventory.tsv`、`redirects.tsv`，外加 `urlpath-policy.json`（本镜像用的 url→路径策略，服务/抓包/验收三方读它）。`--seeds` 让第三遍从 bundle/payload 里解出来的 URL 走同一个下载器，账才是一本。**url→路径映射、引用提取与"什么算文本"均已上收进 `lib/`**：映射查询感知（`?width=` 变体不再坍缩）、`srcset` 逐候选提取（旧正则只认引号后第一条，一组 5 条只见 1 条）、**该重扫哪些文件按 声明的 content-type → 扩展名 → 内容嗅探 三级判定**（旧版是一张 `css
- * js|mjs|json|svg|html?` 扩展名白名单，`.atom`/`.xml`/`.rss`/`.txt` 与无扩展名路由整类不被打开，而闭包门用的是同一张表所以查不出来；`application/octet-stream` 按**没有声明**处理，它是"服务器不知道"不是"这是二进制"）。v0.3.16：绝对 `--out` 按给定路径用；`--rounds/--workers` 须为 ≥1 的整数（否则 exit 2）；三本账每 100 个文件与 Ctrl-C（exit 130）都落盘；瞬时 fetch 错误不再覆盖仍在盘上的好行；重扫抽出的同源 `.html` 统一走页面守卫、当页面爬（`enqueueRef`）|`node mirror-site.mjs --origin https://example.com --hosts cdn.x.com --probe-404 /no-such-page --seeds solved-urls.txt`；确认某参数不改字节后才 `--query-ignore v,cb`
+ * Derived from the rogierdeboeve, storytellingnoomo, landonorris,
+ * shopifydesign and objectandarchive crawlers. Their cases cover glTF/CSS
+ * references, Referer requirements, redirect replay and query variants.
  */
 import { mkdir, writeFile, readFile, access } from 'node:fs/promises';
 import { dirname, join, relative, resolve } from 'node:path';
@@ -118,7 +99,7 @@ const ORIGIN_HOST = new URL(ORIGIN).hostname;
 // resolve(), not join(cwd, …): an ABSOLUTE --out (`--out /tmp/m`) was glued
 // under the cwd as <cwd>/tmp/m, without a word.
 const OUT = resolve(flag('out', 'mirror'));
-// ⛔ A non-numeric --rounds/--workers used to become NaN — zero rounds and zero
+//  A non-numeric --rounds/--workers used to become NaN — zero rounds and zero
 // workers — and the crawl fetched nothing and still printed "Done".
 const intFlag = (name, dflt) => {
   const raw = flag(name, dflt);
@@ -151,7 +132,7 @@ const ASSET_HOSTS = new Set([
 
 const offHostRefs = createOffHostCensus(); // hosts NOT on ASSET_HOSTS
 
-// ⭐ The ledger is CUMULATIVE, not per-run. It used to start empty, so a
+//  The ledger is CUMULATIVE, not per-run. It used to start empty, so a
 // gap-filling run (--seeds) rewrote mirror-manifest.json with only the URLs it
 // happened to touch: the files from earlier runs stayed on disk while their
 // rows vanished, and verify-mirror reported them as orphans — "files nobody can
@@ -165,7 +146,7 @@ const offHostRefs = createOffHostCensus(); // hosts NOT on ASSET_HOSTS
 // Rows are preloaded but NOT marked fetched: a full re-crawl still re-fetches
 // and OVERWRITES each row, so a stale row can never survive a run that visits
 // its URL. Only rows this run never visits are carried over.
-// ⛔ A manifest that EXISTS but cannot be read is fatal (lib/ledger.mjs throws),
+//  A manifest that EXISTS but cannot be read is fatal (lib/ledger.mjs throws),
 // not an empty ledger: starting fresh over it would overwrite it at the end.
 const manifest = ((await readManifest(OUT)) || { files: {} }).files;
 const carriedOver = Object.keys(manifest).length;
@@ -174,7 +155,7 @@ const fetched = new Set();
 // Redirects are SOURCE-SITE BEHAVIOR, not crawler bookkeeping: they get their
 // own ledger and are never collapsed into the source path's file.
 const redirects = []; // {from, status, to}
-// ⛔ The redirect ledger must ACCUMULATE like the manifest does. A later run
+//  The redirect ledger must ACCUMULATE like the manifest does. A later run
 // (`--scope` to add a page family, `--seeds` to fill a gap) rebuilt this array
 // from scratch and wrote a file with only the header: the first crawl's
 // `/work 308 -> /` was gone, and the payload gate found out by hitting a 404
@@ -228,10 +209,10 @@ function writeLedgers() {
   ledgerWrite = ledgerWrite.then(writeLedgersNow, writeLedgersNow);
   return ledgerWrite;
 }
-// ⭐ FLUSH EVERY N SAVES AND ON CTRL-C. The ledgers were written once, at the
+//  FLUSH EVERY N SAVES AND ON CTRL-C. The ledgers were written once, at the
 // end: a multi-hour crawl interrupted at hour three left every byte on disk and
 // ZERO rows — the off-the-books state verify-mirror reports as orphans and no
-// gate can bless. Same cadence reconcile-gaps.mjs uses.
+// check can verify. Same cadence reconcile-gaps.mjs uses.
 const FLUSH_EVERY = 100;
 let savedSinceFlush = 0;
 // `once`, so a second Ctrl-C during a slow flush falls through to the default
@@ -243,7 +224,7 @@ process.once('SIGINT', () => {
     .finally(() => process.exit(130));
 });
 
-// ⚠ HEADER LADDER — the same 403 has two OPPOSITE cures. One CDN family
+//  HEADER LADDER — the same 403 has two OPPOSITE cures. One CDN family
 // refuses requests WITHOUT a same-origin Referer (landonorris), another
 // refuses requests WITH browser-shaped headers (video.twimg.com served a
 // bare curl and 403'd the polite profile — measured on rauchg). So a 4xx on
@@ -289,24 +270,15 @@ const extractAssetUrls = createRefExtractor({
   origin: ORIGIN,
   originHost: ORIGIN_HOST,
   assetHosts: ASSET_HOSTS,
-  // Census of every reference pointing at a host the allow-list does not
-  // follow. Printed at the end: a mirror that looks finished while one
-  // unfollowed host holds all the artwork is the failure this catches.
-  // The ranking and the "is this an asset host?" judgement are shared with
-  // verify-mirror.mjs's closure gate (lib/extract-refs.mjs) — both sides have
-  // to agree on which unfollowed host is worth shouting about.
+  // Report excluded hosts so the asset allow-list can be checked against
+  // observed references. The verifier uses the same ranking and classification.
   onOffHost: offHostRefs.onOffHost,
 });
 
-// --scope <prefix>: restrict the PAGE queue to a path prefix. Step 0 grades a
-// TARGET PATH ("existence at path granularity"), and plenty of targets are a
-// microsite living under a bigger host — an anniversary site at /50th/ on a
-// corporate WordPress domain, a campaign page under a CMS. Without this the
-// crawler follows the host's own nav out of the project's scope and puts load
-// on an origin that never agreed to it.
-// ⛔ PAGES ONLY, NEVER ASSETS. A scoped microsite still references fonts and
-// images that live elsewhere on the host; cutting those by prefix would be
-// using a scope argument to punch a hole in mirror completeness.
+// Restrict page discovery to the configured path prefix. A microsite under
+// /50th/ can otherwise lead the crawler into the enclosing site's navigation.
+// Asset references remain eligible outside this prefix because the scoped
+// pages can depend on fonts, images and scripts elsewhere on the same host.
 const SCOPE = flag('scope', null);
 const inScope = (p) => !SCOPE || p === SCOPE.replace(/\/$/, '') || p.startsWith(SCOPE);
 
@@ -346,7 +318,7 @@ if (SEEDS_FILE) {
   console.log(`[seeds] ${n} urls from ${SEEDS_FILE}`);
 }
 
-// ⛔ A same-origin HTML document is a PAGE, not an asset, and letting the
+//  A same-origin HTML document is a PAGE, not an asset, and letting the
 // asset queue take it punches straight through --scope. The asset extractor
 // asks only "does this have an extension", and `.html` says yes — so
 // `href="/legal/…/site.html"` was blocked by the page guard and then fetched
@@ -454,7 +426,7 @@ for (let round = 1; round <= ROUNDS && (assetQueue.size || pageQueue.length); ro
         }
       } catch (e) {
         console.error(`[asset FAIL] ${url}: ${e.message}`);
-        // ⚠ Never downgrade a carried-over GOOD row to an error row while its
+        //  Never downgrade a carried-over GOOD row to an error row while its
         // file is still on disk. A transient failure (reset, timeout, a CDN
         // blip) used to overwrite the row with `path: null`, and the next
         // verify-mirror reported the file as an orphan nobody can name a URL
@@ -470,15 +442,11 @@ for (let round = 1; round <= ROUNDS && (assetQueue.size || pageQueue.length); ro
   await Promise.all(workers);
 }
 
-// ⚠ A carried-over FAILED row records "the origin refused this reference". If
-// no reference produced its URL this run — every attempted URL lands in
-// `fetched`, success or failure — the row memorializes a reference that no
-// longer exists (usually an extractor artifact a fix just removed), and
-// carrying it forward turns one buggy crawl into a permanent red mark.
-// Measured: 98 phantom `x.webp);--aspect` rows outliving the extractor fix
-// through two full re-crawls. Rows with a file on disk are never pruned here,
-// and a --seeds gap-fill never prunes at all: it visits only its seed list, so
-// "nothing referenced this URL" is not a fact a seeds run can establish.
+// Prune prior failure records only when a full crawl no longer encounters the
+// URL. After an extractor fix, 98 invalid x.webp);--aspect URLs otherwise
+// survived two complete recrawls. Records with saved files are retained.
+// A --seeds run visits only its explicit list and cannot establish whether
+// other references have disappeared, so it does not perform this pruning.
 if (!SEEDS_FILE) {
   let pruned = 0;
   for (const [u, row] of Object.entries(manifest)) {

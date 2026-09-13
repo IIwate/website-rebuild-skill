@@ -14,7 +14,7 @@
 
 export const name = "expression parser";
 
-// ⭐ Condition-INDEPENDENT: the same input must produce the same number no
+//  Condition-INDEPENDENT: the same input must produce the same number no
 // matter how tall the page is. Pure arithmetic, viewport units, custom-property
 // reads, and anchor combinations that cancel (`a0h`, `(a0b - a0t) * k`).
 export const judged = [
@@ -29,7 +29,7 @@ export const judged = [
   "(a0h + 100vh) * 0.5",
 ];
 
-// ⚠ Condition-DEPENDENT: page coordinates. The mirror is a 29,556px product
+//  Condition-DEPENDENT: page coordinates. The mirror is a 29,556px product
 // page; the port side is a 1,080px probe page. These differ for a reason that
 // has nothing to do with the port, so they are printed, not graded — but both
 // sides must still resolve them, or "unsupported" hides inside "expected".
@@ -43,12 +43,12 @@ export const info = [
  * build(cases) returns a JS expression string, evaluated in the page, whose
  * value is `{ out: { [case]: value } }`.
  *
- * ⛔ It must construct its OWN one-shot synthetic input rather than reusing whatever the page
+ *  It must construct its OWN one-shot synthetic input rather than reusing whatever the page
  * happens to contain: the two sides are different pages, and a gate that reads
  * their existing DOM is comparing two documents, not one implementation against
  * another. Build identical scaffolding on both sides, measure, tear it down.
  *
- * ⛔ Per-case try/catch, not one around the loop — otherwise the first failing
+ *  Per-case try/catch, not one around the loop — otherwise the first failing
  * case hides every case after it, and the gate reports a single error where it
  * should report a column of them.
  */

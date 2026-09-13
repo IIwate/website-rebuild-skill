@@ -1,31 +1,24 @@
 #!/usr/bin/env node
 /**
- * website-rebuild-skill — installer.
+ * Install the skill files bundled with this package.
+ * Copies the directory to the selected agent location and compares file hashes.
+ * The installer uses Node built-ins. Running individual skill scripts can require
+ * Chrome or separately cached npm tools; see the skill's compatibility metadata.
  *
- * Copies the skill directory shipped inside this package into an agent's
- * skills directory, then verifies every copied byte against the source by
- * sha256. It installs FILES: it never runs the skill, never spawns a browser,
- * and never fetches anything. The skill itself stays zero-dependency — this
- * package has no dependencies either.
+ * npx website-rebuild-skill                  ->  ~/.claude/skills/website-rebuild
+ *  npx website-rebuild-skill --project        ->  ./.claude/skills/website-rebuild
+ *  npx website-rebuild-skill --dir <skills>   ->  <skills>/website-rebuild
  *
- *   npx website-rebuild-skill                  ->  ~/.claude/skills/website-rebuild
- *   npx website-rebuild-skill --project        ->  ./.claude/skills/website-rebuild
- *   npx website-rebuild-skill --dir <skills>   ->  <skills>/website-rebuild
+ * Flags:
+ *   --dir <path>  skills directory; website-rebuild is appended to it
+ *   --project     use ./.claude/skills
+ *   --force       replace an existing installation after printing its version;
+ *                 removes the old directory before copying the new files
+ *   --dry-run     report the intended writes
+ *   --version     print the bundled skill version
+ *   --help        print this description
  *
- * Flags
- *   --dir <path>   the skills DIRECTORY to install into; `website-rebuild` is
- *                  appended to it. Use this for any runtime whose convention
- *                  is not ~/.claude/skills.
- *   --project      shorthand for --dir ./.claude/skills
- *   --force        replace an existing install. The old directory is REMOVED
- *                  first (a merge would leave files the new version deleted),
- *                  so the version being replaced is printed before it goes.
- *   --dry-run      print what would be written, write nothing
- *   --version      print the skill version carried by this package
- *   --help         this text
- *
- * Exit codes follow the skill's own table (scripts/lib/cli.mjs):
- *   0 ok  ·  1 refused / verification failed  ·  2 bad invocation
+ * Exit 0: success. Exit 1: refused or verification failed. Exit 2: invalid arguments.
  */
 import { createHash } from "node:crypto";
 import { cpSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync } from "node:fs";
@@ -42,7 +35,7 @@ const VALUE_FLAGS = new Set(["dir"]);
 const BOOL_FLAGS = new Set(["project", "force", "dry-run", "help", "version"]);
 
 function die(msg, code) {
-  console.error(`⛔ ${msg}`);
+  console.error(` ${msg}`);
   process.exit(code);
 }
 
@@ -104,7 +97,7 @@ function main() {
 
   if (!existsSync(SRC)) die(`the package is missing its payload (${SRC}). Reinstall it.`, EXIT.FAIL);
   const major = Number(process.versions.node.split(".")[0]);
-  if (major < 22) console.error(`⚠️  the skill needs Node ≥ 22 to run (this is ${process.versions.node}). Installing anyway — the files are fine; the runtime that uses them will need 22+.`);
+  if (major < 22) console.error(`  the skill needs Node ≥ 22 to run (this is ${process.versions.node}). Installing anyway — the files are fine; the runtime that uses them will need 22+.`);
 
   if (opt.dir && opt.project) die("--dir and --project both set; pick one.", EXIT.USAGE);
   const skillsDir = opt.dir
@@ -125,7 +118,7 @@ function main() {
   if (existsSync(dest)) {
     const had = skillVersion(dest);
     if (!opt.force) {
-      console.error(`\n⛔ already installed there (v${had}). Nothing was written.`);
+      console.error(`\n already installed there (v${had}). Nothing was written.`);
       console.error(`   re-run with --force to replace it, or --dir <path> to install elsewhere.`);
       process.exit(EXIT.FAIL);
     }
@@ -152,13 +145,13 @@ function main() {
     if (sha256(path.join(SRC, f)) !== sha256(d)) bad.push(`sha256 differs: ${f}`);
   }
   if (bad.length) {
-    console.error(`\n⛔ copy did not verify (${bad.length} problem${bad.length > 1 ? "s" : ""}):`);
+    console.error(`\n copy did not verify (${bad.length} problem${bad.length > 1 ? "s" : ""}):`);
     for (const b of bad.slice(0, 10)) console.error(`   ${b}`);
     if (bad.length > 10) console.error(`   … and ${bad.length - 10} more`);
     process.exit(EXIT.FAIL);
   }
 
-  console.log(`\n✅ installed and verified — ${files.length}/${files.length} files match by sha256.`);
+  console.log(`\nPASS installed and verified — ${files.length}/${files.length} files match by sha256.`);
   console.log(`\nNext: tell your agent to rebuild a site, e.g.`);
   console.log(`   "复刻 https://example.com" / "1:1 rebuild https://example.com"`);
 }

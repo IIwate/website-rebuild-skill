@@ -1,23 +1,14 @@
 #!/usr/bin/env node
-// selftest/browser.mjs — the BROWSER lane: `npm run test:browser`.
+// Browser regression suite: npm run test:browser.
+// Runs Chrome against loopback fixtures to check pixel comparisons, error reports,
+// instance identity, request capture and SPA navigation. Valid and defective inputs
+// exercise success, failure and unmet-precondition results.
 //
-// The offline lane (run.mjs) proves the gates' pure logic and, since v0.3.20,
-// that every offline gate goes RED on bad input. It cannot say that about the
-// gates the skill's headline claim rests on — pixelcompare's 0.00, probe's
-// CLEAN — because they exist only with a real browser behind them. v0.3.18
-// rewrote the CDP floor under all of them (lib/cdp.mjs) with no verdict test
-// in reach. This lane launches a real headless Chrome against loopback
-// fixtures served by serve.mjs and drives those gates to their verdicts:
-// green as shipped, red on one deliberate defect, and the identity refusals
-// (same process twice, wrong side) that guard against the invisible 假绿.
+// Pixel fixtures use 128 solid cells at integer bounds without fonts or animation,
+// so a changed cell produces a measurable difference. Navigation fixtures check
+// trusted input, storage isolation and route/text stability.
 //
-// Fixtures are flat colour grids: 128 solid cells at integer pixel bounds, no
-// text, no fonts, no animation — so two renders of the same HTML in the same
-// Chrome are byte-identical (the determinism the pixel gate itself relies on),
-// and a recoloured cell is a measurable, reproducible difference.
-//
-// Needs Chrome/Chromium on the machine (lib/chrome.mjs findChrome); without one
-// it is FATAL 5, never a silent pass. Runs in its own CI job. ~30–60 s.
+// Requires a local Chrome/Chromium installation; absence exits 5.
 import { readFileSync, existsSync } from "node:fs";
 import path from "node:path";
 import { SKILL, scratch, ok, bad, eq, truthy, finish, run, green, red, W, serveOn } from "./harness.mjs";
@@ -55,6 +46,21 @@ const A = W(path.join(TMP, "a"), {
 });
 const Bdir = W(path.join(TMP, "b"), { "index.html": grid(), "diff.html": grid({ 0: 200 }), "blank.html": blank, "ping.txt": "ok", "favicon.ico": "\x00\x00\x01\x00" });
 
+W(A, { "navigation.html": `<!doctype html><html><head><link rel="icon" href="data:,"></head><body>
+<a data-link="reader's" href="/about">About</a><main>Home</main><script>
+const clean = !window.name && !localStorage.getItem('case') && !document.cookie.includes('case=1');
+window.name = 'previous-case'; localStorage.setItem('case', '1'); document.cookie = 'case=1';
+window.requestAnimationFrame = () => { console.error('Unexpected injected animation loop'); return 0; };
+document.querySelector('a').addEventListener('click', (event) => {
+  event.preventDefault();
+  if (!event.isTrusted) { console.error('Click was not trusted'); return; }
+  const mode = new URLSearchParams(location.search).get('mode');
+  history.pushState({}, '', mode === 'prefix' ? '/about-extra' : '/about');
+  document.querySelector('main').textContent = 'About Trusted ' + (clean ? 'Clean' : 'Leaked');
+  if (mode === 'redirect') setTimeout(() => history.pushState({}, '', '/elsewhere'), 250);
+});
+</script></body></html>` });
+
 // a = the rebuild, b = the mirror: pixelcompare's default labels, and the sides the servers declare
 const SA = await serveOn(PA, A, ["--side", "rebuild"]);
 const SB = await serveOn(PB, Bdir, ["--side", "mirror"]);
@@ -72,11 +78,11 @@ try {
   red("pixelcompare — one recoloured cell under --max-mean 0 goes red and prints the number (v0.3.22)", diff, /GATE FAIL: meanAbsDiff [\d.]+ > 0/);
   truthy("pixelcompare — …and the measured difference is above zero (v0.3.22)", (metric(path.join(TMP, "px-diff"), "diff")?.meanAbsDiff ?? 0) > 0, JSON.stringify(metric(path.join(TMP, "px-diff"), "diff")));
 
-  red("pixelcompare — the same URL on both sides is refused, exit 3: one process measured twice is the invisible 假绿 (v0.3.22)",
+  red("pixelcompare - rejects the same URL on both sides with exit 3",
     px("twice", ["--a", `${SA.base}/`, "--b", `${SA.base}/`]), /same|identity|origin|token/i, 3);
 
   red("pixelcompare — two blank frames refuse to compare, exit 5: a perfect 0 over nothing is not a result (v0.3.22)",
-    px("blank", ["--a", `${SA.base}/blank.html`, "--b", `${SB.base}/blank.html`]), /blank|empty|colou?rs|dominant|空/i, 5);
+    px("blank", ["--a", `${SA.base}/blank.html`, "--b", `${SB.base}/blank.html`]), /blank|empty|colou?rs|dominant/i, 5);
 
   // the same URL twice was refused above; declared as a band sample it is the run §1.3.2 mandates
   const band = px("band", ["--a", `${SA.base}/`, "--b", `${SA.base}/`, "--self", "--max-mean", "0"]);
@@ -105,6 +111,21 @@ try {
     !!files[`${SA.base}/capture-fresh.json`] && !files[`${SA.base}/capture-leaked.json`]);
   eq("netcapture — fetched ledger rows retain the declared content-type parameters",
     files[`${SA.base}/capture-fresh.json`]?.type, "application/json; charset=utf-8");
+
+  const navigationCase = { name: "trusted navigation", startPath: "/navigation.html", linkSelector: 'a[data-link="reader\'s"]', expectedPath: "/about", expectedSelector: "main", expectedTexts: ["About   Trusted", "Clean"], stabilityMs: 450, timeoutMs: 1800 };
+  const navigation = (name, cases) => {
+    const config = path.join(TMP, `${name}.mjs`);
+    W(TMP, { [`${name}.mjs`]: `export default ${JSON.stringify({ base: SA.base, cases })};\n` });
+    return run("assets/templates/verify-spa-navigation.mjs", ["--config", config], { timeout: 30000 });
+  };
+  green("SPA navigation - trusted input, quoted selectors and per-case storage isolation",
+    navigation("navigation", [navigationCase, { ...navigationCase, name: "isolated second case" }]));
+  red("SPA navigation - a path prefix is not the expected route",
+    navigation("navigation-prefix", [{ ...navigationCase, startPath: "/navigation.html?mode=prefix" }]), /Target state not reached/);
+  red("SPA navigation - every expected text snippet is required",
+    navigation("navigation-text", [{ ...navigationCase, expectedTexts: ["About", "Missing text"] }]), /Target state not reached/);
+  red("SPA navigation - route changes during the stability window fail",
+    navigation("navigation-redirect", [{ ...navigationCase, startPath: "/navigation.html?mode=redirect" }]), /Target state changed during stability window/);
 } catch (e) { bad("browser lane", String(e.stack || e.message).split("\n").slice(0, 3).join(" | ")); }
 finally { await SA.stop(); await SB.stop(); }
 

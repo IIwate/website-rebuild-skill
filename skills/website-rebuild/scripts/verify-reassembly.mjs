@@ -1,27 +1,16 @@
 #!/usr/bin/env node
 /**
- * verify-reassembly.mjs — the gate for concatenative decompositions.
+ * Check a concatenative decomposition against recorded SHA-256 digests.
+ * Compare each part with its manifest entry, concatenate parts in manifest
+ * order and compare the result with the recorded chunk digest. --against also
+ * compares the current original file, detecting a manifest tied to an older
+ * capture.
  *
- * slice-esm.mjs's whole promise is "the parts ARE the chunk". This gate
- * re-derives that claim from bytes, every run: per-part sha256 against the
- * manifest, then the in-order concatenation against the pinned chunk hash,
- * then — when --against names the tree the chunks live in — against the LIVE
- * original file, so a manifest that drifted from a re-crawled chunk cannot
- * vouch for itself (the same two-sided rule as verify-mirror's recorded vs
- * computed mapping).
- *
- * Byte equality is the strongest gate this skill has: when it holds, every
- * runtime gate's verdict transfers to the readable tree for free — same
- * bytes, same program. That is why the readable layer can be edited without
- * fear: any edit that keeps this gate green changed nothing but presentation
- * (file boundaries, file names), and any edit that changed the program turns
- * it red at the exact part.
+ * The check covers the reconstructed chunk's bytes and order. Build entrypoints,
+ * asset loading and execution environment remain separate concerns; changing
+ * file names or boundaries can affect them even when reassembly is unchanged.
  *
  *   node scripts/verify-reassembly.mjs --dir src/readable [--against src/site]
- *
- * 中文规格（自 scripts/README.md 迁入，v0.3.21；本表另一拼写：`verify-reassembly.mjs`）
- * **重拼门**：逐部件 sha + 按序拼接 sha + `--against` 对活原件三重比对。字节等价成立时全部运行时门的裁决免费转移到可读层;部件内容被改一个字节即红并点名。呈现层编辑（改名/挪目录）以本门保持绿为许可判据
- * `node verify-reassembly.mjs --dir src/readable --against src/site/_nuxt`
  */
 import { readdir, readFile } from "node:fs/promises";
 import path from "node:path";

@@ -1,49 +1,34 @@
 /**
- * lib/cli.mjs — the ONE argv contract for every script in scripts/ and tools/.
+ * Shared CLI option validation and help output.
  *
- *   import { cli } from "./lib/cli.mjs";            // tools/: "../scripts/lib/cli.mjs"
- *   const { positionals } = cli({ known: ["out", "rounds"], bools: ["check"], file: import.meta.url });
+ *   import { cli } from "./lib/cli.mjs";
+ *   const { positionals, flag } = cli({ known: ["out"], bools: ["check"], file: import.meta.url });
  *
- * Call it FIRST — after the imports, before any side effect (no fetch, no spawn,
- * no file read before it runs). It gives every script three things it used to
- * get from nobody:
+ * Call before starting work so --help and invalid options do not trigger it.
+ * --help/-h prints the file header, option inventory and version, then exits 0.
+ * --version prints the shared skill version and exits 0. Unknown long options
+ * exit 2 and list the supported names. Short options other than -h are treated
+ * as positional arguments.
  *
- *   --help / -h   prints the script's own header comment (the block at the top
- *                 of the file, which is where the usage has always lived), then
- *                 the flag inventory and the skill version. Exit 0.
- *   --version     prints the skill version this script was copied from. A
- *                 project's scripts/ is a COPY; the number is how you tell
- *                 whether it fell behind the skill. Exit 0.
- *   unknown flag  ⛔ FATAL, exit 2, listing the known set. A flag that is
- *                 silently ignored is a downgrade nobody knows about: passing
- *                 `--settle` to a tool whose word for it is `--wait` once cost
- *                 three hours of chasing a phantom (verification-gates.md
- *                 §2.1.3). Before this module, 9 of 57 scripts enforced it.
+ * Returns { argv, positionals, flag(name, defaultValue), has(name) }. The returned
+ * reader supports --key=value and --key value. Some callers use their own readers;
+ * validation alone does not make those readers accept both spellings. Value options
+ * consume the next token unless it starts with --. A bare -- ends option parsing.
  *
- * It does NOT replace a script's own `flag()` reader — those keep their exact
- * semantics. It only validates the shape of argv and hands back the leftovers:
- *   { argv, positionals, flag(name, dflt), has(name) }
- *
- * Value flags consume the next token unless that token itself starts with
- * `--` (so `--check --other` treats `--check` as bare). `--k=v` is accepted for
- * validation; whether the script's reader honours it is the script's business.
- * A bare `--` ends flag parsing.
- *
- * 中文规格（自 scripts/README.md 迁入，v0.3.21）
- * **唯一的 argv 合同**（见上文「命令行约定」）：`--help`/`--version`/未知旗标 FATAL，`EXIT` 退出码常量
- * `import { cli, EXIT } from "./lib/cli.mjs"`
+ * An observed --settle/--wait mismatch caused three hours of diagnosis because
+ * the script ignored the unknown option. Only 9 of 57 scripts checked it before
+ * the shared validator was introduced.
  */
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { SKILL_VERSION } from "./version.mjs";
 
 /**
- * Exit codes shared by the toolchain. The meaning is the contract; the number
- * is what CI sees. Keep new scripts on this table (scripts/README.md 退出码约定).
+ * Exit-code categories used by the toolchain. See scripts/README.md for their scope.
  */
 export const EXIT = {
-  OK: 0,          // gate green / job done
-  FAIL: 1,        // gate red: the thing under test is wrong (or a ledger the tool cannot read)
+  OK: 0,          // successful check or completed operation
+  FAIL: 1,        // check failed or required input could not be read
   USAGE: 2,       // bad invocation: missing/invalid/unknown flag, missing input, bad config
   IDENTITY: 3,    // port taken, wrong side, attached to somebody else's browser (lib/ports.mjs)
   TRANSPORT: 4,   // CDP transport died (payload ceiling, close 1006, timeout)

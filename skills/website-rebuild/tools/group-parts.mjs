@@ -1,23 +1,15 @@
 #!/usr/bin/env node
 /**
- * group-parts.mjs — fold a chunk's flat part list into DIRECTORIES, on
- * literal evidence only.
+ * Group chunk parts into directories using shared identifier tokens in names.
+ * A recorded scene chunk contained 151 flat files. Names such as
+ * CameraOrbitController and CameraSplineSystem can share camera/, while
+ * WaveUniforms, SunUniforms and CloudUniforms can share uniforms/.
+ * A shared token suggests a grouping, not a verified architectural boundary.
+ * Parts without at least --min-run matching siblings stay in place.
  *
- * slice-esm.mjs leaves one flat directory per chunk (151 files for a scene
- * chunk). This tool clusters parts whose NAMES share an identifier token —
- * Camera{OrbitController,SplineSystem} -> camera/, {Wave,Sun,Cloud}Uniforms
- * -> uniforms/ — which is the same tier-1 evidence the names themselves came
- * from: the shared token is IN the code's own identifiers, nothing is
- * invented. Parts whose name shares no token with ≥ --min-run siblings stay
- * where they are; a wrong grouping is worse than a flat list for exactly the
- * reason a wrong name is worse than a hash.
- *
- * Reassembly is untouched BY CONSTRUCTION and re-proved anyway: order lives
- * in slices.json (and the NNN- prefixes travel with the files), this tool
- * only rewrites each part's `file` field to its new relative path, and it
- * joins the tree back together and compares sha256 against the pinned chunk
- * BEFORE writing a single move. Presentation edits are licensed by the gate
- * staying green (readable-source.md §3.0.6).
+ * The manifest retains concatenation order and each part's numeric prefix.
+ * Check the concatenated digest before moving files and again using the updated
+ * paths; only each part's file path is changed (readable-source.md §3.0.6).
  *
  *   node tools/group-parts.mjs --dir src-readable/<chunk> [--min-run 2]
  *   node tools/group-parts.mjs --all src-readable [--min-run 2]
@@ -85,8 +77,8 @@ for (const dir of targets) {
     return null;
   };
 
-  // Plan, prove, then move: join the WOULD-BE tree in manifest order and
-  // require the pinned hash before touching the filesystem.
+  // Resolve the proposed paths and verify the manifest-order digest before
+  // moving files.
   const plan = m.parts.map((p) => {
     const g = dirFor(p);
     return { p, from: p.file, to: g ? path.join(g, p.file) : p.file };
@@ -107,7 +99,7 @@ for (const dir of targets) {
     moved++;
   }
   writeFileSync(mfPath, JSON.stringify(m, null, 1));
-  // Post-move proof from the NEW paths.
+  // Verify the concatenated digest using the updated file paths.
   const joined2 = m.parts.map((p) => readFileSync(path.join(dir, p.file), "utf8")).join("");
   if (sha256(joined2) !== m.chunkSha256) {
     console.error(`FATAL ${label} — post-move reassembly broke. This should be impossible; inspect ${mfPath}.`);

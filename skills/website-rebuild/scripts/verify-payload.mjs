@@ -1,46 +1,23 @@
 #!/usr/bin/env node
 /**
- * verify-payload.mjs — the SSG PAYLOAD gate.
+ * Extract serialized page data and compare normalized structures.
+ * Supported detection includes Nuxt, Next Flight and SvelteKit payload forms;
+ * comparison reports differing fields in the forms the extractor can evaluate.
+ * A recorded Nuxt document contained a 63,491-byte payload that expanded to
+ * about 566 KB, so small textual changes could affect many shared values.
  *
- * Static-site generators inline the page's data as a serialised blob:
- * `window.__NUXT__=(function(a,b,c,…){…}(…))` for Nuxt 2, `__NUXT_DATA__` for
- * Nuxt 3, `self.__next_f` for Next, `__sveltekit_*` for SvelteKit. On this
- * target it is 63,491 bytes — 54% of the document — and it expands 8.9x to
- * 566 KB of content. Everything the page renders comes out of it.
+ * Byte checks and expanded-data checks cover different properties. Explicit
+ * normalization removes selected differences and must be included in the
+ * reported comparison scope.
  *
- * WHY IT NEEDS ITS OWN GATE, distinct from the shell byte gate:
+ * node scripts/verify-payload.mjs --a http://127.0.0.1:24001 --b http://127.0.0.1:24002 \
+ *       --routes /,/works,/about,/contact
+ *  node scripts/verify-payload.mjs --a <base> --routes … --dump docs/payload
+ *  node scripts/verify-payload.mjs --a <base> --b <base> --routes … --allow-absent
  *
- *   The shell gate proves "the rebuild differs from the mirror only where the
- *   transform table says". It compares TEXT. A payload is not text in any
- *   meaningful sense — it is a program whose output is data, deduplicated
- *   through function arguments, with slashes escaped as / so the blob can
- *   never contain "</script>". Two payloads can differ in bytes and mean the
- *   same thing (argument order), or agree closely in bytes and mean different
- *   things (one substitution deep inside a shared argument, reused 40 times).
- *
- *   And the serve layer REWRITES INSIDE IT: url localisation has to reach the
- *   escaped spellings, or the page fetches its images from the live CDN. That
- *   is a rewrite of a serialised program by regex — which is exactly the kind
- *   of edit that can stay invisible to a byte diff and still change what the
- *   page renders.
- *
- * So: expand both sides, compare the STRUCTURE, and report where they diverge.
- *
- *   node scripts/verify-payload.mjs --a http://127.0.0.1:24001 --b http://127.0.0.1:24002 \
- *        --routes /,/works,/about,/contact
- *   node scripts/verify-payload.mjs --a <base> --routes … --dump docs/payload
- *   node scripts/verify-payload.mjs --a <base> --b <base> --routes … --allow-absent
- *
- * ⛔ It evaluates the payload with `new Function`. That is safe HERE and only
- * here: the input comes from a mirror of a site we are already running in a
- * browser, and the alternative — reimplementing the serialiser's argument
- * substitution — would be a second implementation of somebody else's format,
- * which drifts (verification-gates.md §2.1.1).
- *
- * 中文规格（自 scripts/README.md 迁入，v0.3.21；本表另一拼写：`verify-payload.mjs`）
- * **SSG payload 门**：把内联序列化数据块（Nuxt2 `window.__NUXT__` / Nuxt3 `__NUXT_DATA__` / **React flight `self.__next_f`**）**求值展开**再按结构对拍。字节门在这里不够用——payload 是一段"输出数据的程序"（参数去重、`\u002F` 转义），两份可以字节不同而语义相同，也可以字节相近而语义不同；且服务层要**改写它内部**的 URL。
- * **SSG 载荷门**：载荷是程序不是文本（去重进函数实参、`</script>` 转义），两个字节不同的载荷可以语义相同，反之亦然——所以**求值展开后按叶路径比对**，差异必须限于已登记引用改写。认 Nuxt 2（IIFE）/ Nuxt 3（`__NUXT_DATA__` devalue，**外置 `_payload.json` 优先**）等形状；`--allow-absent` 供**无数据岛**的纯标记 SSG 声明豁免（两侧一致缺席才放行，单侧有岛照样红）
- * `node verify-payload.mjs --a <mirror> --b <port> --routes /,/x [--allow-absent]`
+ * Expression evaluation uses new Function in the Node process. Only reviewed,
+ * trusted captures are suitable for that path. Running a site in a browser
+ * does not establish that its scripts are safe to execute with Node privileges.
  */
 import { cli } from "./lib/cli.mjs";
 
@@ -86,7 +63,7 @@ function extract(html) {
     const m = html.match(s.re);
     if (m) return { shape: s.name, src: m[1].trim() };
   }
-  // ⭐ React flight — what every Next.js App Router page ships, and the most
+  //  React flight — what every Next.js App Router page ships, and the most
   // common serialised-payload shape in the wild. This gate exists to compare a
   // payload's MEANING across sides, and it did not recognise the payload most
   // targets have: the two Nuxt shapes were the whole of its vocabulary.
@@ -103,12 +80,12 @@ function extract(html) {
 /**
  * Expand a flight stream into `{"<id>:<tag>": value}`.
  *
- * ⭐ Flight is not a JS expression, so it cannot be evaluated the way Nuxt's
+ *  Flight is not a JS expression, so it cannot be evaluated the way Nuxt's
  * payload is — but each ROW's content is JSON, so expanding row-wise puts it in
  * exactly the shape paths() already understands. A difference is then reported
  * as a row and a path, not as "these two 230 KB strings differ".
  *
- * ⛔ Length-prefixed rows are walked BY THEIR DECLARED LENGTH. Splitting on
+ *  Length-prefixed rows are walked BY THEIR DECLARED LENGTH. Splitting on
  * newlines instead reads a T row's own newlines as row boundaries — the text is
  * length-delimited precisely because it may contain them.
  */
@@ -171,15 +148,9 @@ const get = async (base, route) => {
 };
 
 /**
- * ⛔ A GATE MUST FAIL LEGIBLY. `get` throws on a non-2xx and every call in this
- * file is a TOP-LEVEL await, so one 404 — a side that does not serve the
- * payload file, a route the mirror never captured — kills the process with a
- * stack trace and takes the remaining routes AND the final summary with it.
- * That reads as "the gate is broken", which is the opposite of what happened;
- * it is the same distinction verify-offline.mjs states at its own head. A
- * fetch failure is a FAIL line. Everything that is not a fetch failure still
- * throws, because a gate that swallows its own bugs is worse than one that
- * dies of them.
+ * Represent fetch failures as per-route results so remaining routes can still
+ * be checked and the summary can identify the unavailable endpoint. This wrapper
+ * catches errors from get(); parsing and comparison outside it still propagate.
  */
 const tryGet = async (base, route) => {
   try {
@@ -190,7 +161,7 @@ const tryGet = async (base, route) => {
 };
 
 /**
- * ⭐ Nuxt 3 can EXTERNALIZE the payload: the document references
+ *  Nuxt 3 can EXTERNALIZE the payload: the document references
  * `/_payload.json?<buildId>` (a devalue-encoded JSON array) instead of
  * inlining __NUXT_DATA__. When that reference exists it IS the payload, and it
  * comes FIRST: the page may also carry an inline `window.__NUXT__ = {}`
@@ -206,7 +177,7 @@ function externalPayloadPath(html) {
 /**
  * One side's payload for one route.
  *
- * ⛔ EACH SIDE IS ASKED WHAT IT REFERENCES. Deriving the path from side A and
+ *  EACH SIDE IS ASKED WHAT IT REFERENCES. Deriving the path from side A and
  * fetching THAT from side B carries side A's build id across, and a rebuild
  * does not have side A's build id — so B answers 404 for a file it serves
  * perfectly well under its own name, and a side that inlines the payload while
@@ -236,12 +207,9 @@ for (const route of ROUTES) {
   const foundA = sideA.found;
   if (!foundA) {
     if (!ALLOW_ABSENT) { fail(`${route} — no known SSG payload shape found`); continue; }
-    // ⛔ ABSENCE MUST AGREE ACROSS SIDES, and B is asked THE SAME WAY A was —
-    // through payloadOf, against B's own document. A bare `extract(htmlB)` here
-    // sees only inline shapes, so a side that EXTERNALIZES its payload reads as
-    // "no island" and the two sides are declared in agreement while one of them
-    // is serving a payload file the other has never heard of. That is the
-    // wrong-shape match this file already met once, rebuilt inside the excuse.
+    // Check payload absence through the same inline/external lookup on both sides.
+    // Using only the inline extractor for side B would miss an external payload
+    // and could incorrectly report that both sides lacked data.
     if (B) {
       const resB0 = await tryGet(B, route);
       if (resB0.error) { fail(`${route} — side B: ${resB0.error}`); continue; }
@@ -300,7 +268,7 @@ for (const route of ROUTES) {
   }
   const foundB = sideB.found;
   if (!foundB) { fail(`${route} — payload missing on side B`); continue; }
-  // ⚠ A shape disagreement is a FINDING, not a reason to stop. Both sides
+  //  A shape disagreement is a FINDING, not a reason to stop. Both sides
   // still expand into the same structure, so the comparison below is worth
   // running — but one side externalizing the payload while the other inlines
   // it is a port difference nothing else in this toolchain reports, and it is
@@ -321,13 +289,13 @@ for (const route of ROUTES) {
   const onlyB = [...pB.keys()].filter((k) => !pA.has(k));
   const allDiff = [...pA.keys()].filter((k) => pB.has(k) && pA.get(k) !== pB.get(k));
 
-  // ⭐ CLASSIFY the mismatches instead of accepting or rejecting them wholesale.
+  //  CLASSIFY the mismatches instead of accepting or rejecting them wholesale.
   // A port legitimately changes URLs and asset paths — localisation, and one
   // transform per chunk. It does NOT legitimately change what the payload SAYS.
   // Blanking every URL-shaped span on both sides separates the two, and does it
   // WITHOUT the transform table: a gate that replayed the table would be
   // agreeing with the builder rather than checking it (§2.1.2).
-  // ⛔ ONE placeholder for both spellings. The first version used \0URL\0 for an
+  //  ONE placeholder for both spellings. The first version used \0URL\0 for an
   // absolute URL and \0PATH\0 for a root-relative one — so LOCALISATION ITSELF,
   // the transform this gate is meant to tolerate, came out as a content
   // difference. Two placeholders is two classes; there is only one thing here.
@@ -339,7 +307,7 @@ for (const route of ROUTES) {
   //   2. blank any path that carries an extension, so a chunk substitution
   //      (`x.js` -> `x.port.js`) reads as the same reference.
   //
-  // ⚠ This gate cannot tell a URL that is an ADDRESS from a URL that is
+  //  This gate cannot tell a URL that is an ADDRESS from a URL that is
   // CONTENT — an anchor whose visible text is the address it links to
   // normalises to the same thing either way. That distinction belongs to the
   // render comparison, which is where it was actually found

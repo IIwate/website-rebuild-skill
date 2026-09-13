@@ -1,42 +1,19 @@
 #!/usr/bin/env node
 /**
- * verify-symbols.mjs — did every ported declaration survive the rewrite?
+ * Check recorded declaration mappings between port/ and src/.
+ * Reports missing source declarations, duplicate mapped destinations and
+ * unmapped destination declarations, subject to explicit allow_orphans entries.
+ * This records declaration coverage; it does not compare function behavior or
+ * establish that a mapped declaration has the correct implementation.
  *
- * M(n+1) rewrites port/ into src/: split into modules, rename mangled locals,
- * add comments. Every runtime gate (CLEAN, pixel, DOM, geometry) can stay green
- * through that rewrite while a whole class quietly vanishes — because the gates
- * only exercise a handful of routes, and nothing on those routes constructs it.
- * That is the same structural blindness coldhead-audit.mjs answers at M(n); this
- * is its refactor-stage twin.
+ * Uses rename-map.json and source text without running the transformation tool.
+ * Runtime checks remain necessary for the behavior of mapped code.
  *
- * Three assertions:
- *   1. injective   every port/ top-level declaration maps to exactly one src/ symbol
- *   2. surjective  no port/ declaration is missing from src/
- *   3. no orphans  no src/ top-level declaration lacks a port/ origin
- *
- * (3) is the one that catches invention. A refactor that "cleans things up" by
- * extracting a helper produces a declaration with no source-site ancestor —
- * readable-source.md §3.4 forbids exactly that, and this is where it shows up.
- *
- * ⛔ Presence and identity, not behaviour. A declaration can be present, renamed
- * correctly, and still broken. The runtime gates answer that half; this gate
- * answers the half they structurally cannot.
- *
- * ⛔ This gate reads only rename-map.json and the two sides' text. It must never
- * import the refactoring tools' parser to "confirm" a rename — a gate that runs
- * its subject's machinery is testing that the machinery agrees with itself
- * (verification-gates.md §2.1.2).
- *
- *   node scripts/verify-symbols.mjs [--port port/_gen] [--src src] [--map docs/rename-map.json]
+ * node scripts/verify-symbols.mjs [--port port/_gen] [--src src] [--map docs/rename-map.json]
  *
  * rename-map.json:
- *   { "declarations": { "<portName>": "<srcName>", ... },   // identity renames may be omitted
- *     "allow_orphans": ["<srcName>", ...] }                 // must be registered in REBUILD_PLAN §6
- *
- * 中文规格（自 scripts/README.md 迁入，v0.3.21；本表另一拼写：`verify-symbols.mjs`）
- * **符号映射门**：`port/` 每个顶层声明在 `src/` 中有且仅有一个对应符号（双向单射，读 `docs/rename-map.json`），且 `src/` 里没有无来源的孤儿声明。⛔ **必需不是可选**——门只跑有限条路由，没被跑到的代码改坏了门是绿的；这是冷启动清点在重构阶段的同构物。⛔ 只读 `rename-map.json` 与两侧文本，**不许 import 重构器的 parser** 来"确认"重命名
- * **符号存活门（平铺拼接产物）**：M(n+1) 把 port/ 重写成 src/（拆模块、重命名、加注释），每个运行时门都可以在丢了一整个声明的情况下保持绿——逐顶层声明断言在 src/ 恰好映射一个符号。esbuild 惰性包装形态的产物用它会成片假红，那种形状见 SKILL.md 的 `verify-decls` 范式
- * `node verify-symbols.mjs`
+ *  { "declarations": { "<portName>": "<srcName>", ... },   // identity renames may be omitted
+ *    "allow_orphans": ["<srcName>", ...] }                 // must be registered in REBUILD_PLAN §6
  */
 import { readFile, readdir, stat } from "node:fs/promises";
 import path from "node:path";
@@ -91,7 +68,7 @@ async function declarations(root) {
 
 const map = await readFile(MAP, "utf8").then(JSON.parse).catch(() => ({}));
 
-// ⛔ A plain object inherits from Object.prototype, so `renames["toString"]`
+//  A plain object inherits from Object.prototype, so `renames["toString"]`
 // answers with a native function for a codebase that never mentioned it. This
 // gate reported exactly that on its first real run — `toString` missing from
 // src, "mapped to function toString() { [native code] }" — and it would fire on
@@ -99,7 +76,7 @@ const map = await readFile(MAP, "utf8").then(JSON.parse).catch(() => ({}));
 const renames = Object.assign(Object.create(null), map.declarations || {});
 const allowOrphans = new Set(map.allow_orphans || []);
 
-// ⚠ The map is allowed to be absent, but not to be a DIFFERENT shape. A rename
+//  The map is allowed to be absent, but not to be a DIFFERENT shape. A rename
 // file written to another schema reads as "zero renames" and the gate then
 // passes by knowing nothing — which is the failure this whole file exists to
 // prevent one level up.
@@ -167,8 +144,8 @@ if (orphans.length) {
   console.log(`         REBUILD_PLAN §6 and add to allow_orphans, or remove it.`);
 } else console.log(`  ok   no orphan declarations in src/`);
 
-console.log(`\n  ⚠    identity only — this gate does not claim any of them behave correctly`);
-console.log(`  ⚠    invented NAMES are invisible here: a wrong-but-plausible rename passes every`);
+console.log(`\n      identity only — this gate does not claim any of them behave correctly`);
+console.log(`      invented NAMES are invisible here: a wrong-but-plausible rename passes every`);
 console.log(`       gate forever. Spot-check tier 2-4 entries by hand (readable-source.md §3.2).`);
 console.log(fail ? `\nFAIL — ${fail} assertion(s) failed.` : `\nPASS — 3/3 assertions.`);
 process.exit(fail ? 1 : 0);

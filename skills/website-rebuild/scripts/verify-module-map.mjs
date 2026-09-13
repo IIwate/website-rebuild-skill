@@ -1,47 +1,25 @@
 #!/usr/bin/env node
 /**
- * verify-module-map.mjs — src/ is the port, one module per file, and nothing else.
+ * Compare source module bodies with the configured closure and module map.
+ * Checks one file per selected module, detects missing/extra entries and
+ * compares token types and values, including regular-expression pattern/flags.
+ * Changed identifier pairs must use the supported wrapper names and be
+ * consistent in both directions.
  *
- * verify-symbols.mjs asks "does every top-level declaration in port/ map to
- * exactly one symbol in src/". That premise belongs to a FLAT-CONCATENATION
- * port, where top-level declarations are the units. A module-container port has
- * three top-level names in total and hundreds of units, so the symbol gate
- * reports the runtime's declarations as unmapped and every file as an orphan,
- * and means nothing by it.
+ * Semicolon tokens and source positions are excluded. This token scan does not
+ * resolve lexical bindings, property roles or automatic semicolon insertion;
+ * it is not a proof of semantic equivalence. Syntax and behavior need their own
+ * checks. The recorded 565-module case demonstrated why reversing renames by
+ * plain text replacement incorrectly changed property names in 392 modules.
  *
- * ⭐ At this shape the unit is the MODULE, and the check can be exact:
- *
- *   1. every module in the closure has exactly one file, and every file has
- *      exactly one module — no extras, duplicates, or silently dropped ids;
- *   2. each file's body is TOKEN-FOR-TOKEN the bytes the packer emitted, except
- *      where an identifier was renamed — and those renames must form one
- *      consistent bijection, the packer's own wrapper contract.
- *
- * ⛔ Compared as TOKENS, not as text with the rename undone. The first version
- * undid the rename by string replacement and reported 392 of 565 modules as
- * mismatched — because `module.exports` has `exports` as a PROPERTY, and a text
- * replace cannot tell a property from the binding. That is the same distinction
- * the splitter needed an AST for; a gate that reintroduces it is measuring its
- * own shortcut. A token stream separates them for free: a property token and a
- * binding token both appear, but the property's value is identical on both
- * sides, so it simply matches.
- *
- * ⛔ And the gate does NOT re-run the renamer to compare. A gate may not
- * reimplement the thing it audits (verification-gates.md §2.1.2) — it reads
- * both artefacts and checks a property that holds between them.
- *
- * Zero-dependency: the tokenizer is a PINNED npx spawn, never an import.
+ * Tokenization invokes pinned Acorn through npx and requires a cache offline.
  *
  *   node scripts/verify-module-map.mjs --closure docs/app-closure.json --src src [--map docs/module-map.json]
- *
- * 中文规格（自 scripts/README.md 迁入，v0.3.21；本表另一拼写：`verify-module-map.mjs`）
- * **M(n+1) 等价门（模块化产物）**：一模块一文件，且每个文件与打包器字节 **token 级一致**（只允许包装重命名那组一一映射）。⛔ 用文本把重命名 undo 回去比对会失败——`module.exports` 里的 `exports` 是属性名；**门用捷径就会测到自己的捷径**。⛔ 门也不许重跑重命名来比对
- * **模块树对账门（模块容器产物）**：closure 里每个模块在 `src/modules/` 恰好一个文件且 token-exact——与 `verify-symbols` 互为两种产物形状（平铺 vs 容器）的同一道门。模块名可带子目录
- * `node verify-module-map.mjs [--src port]`
  */
 import { readFile, readdir, writeFile, mkdtemp, rm } from "node:fs/promises";
 import { spawnSync } from "node:child_process";
 import { tmpdir } from "node:os";
+import { isDeepStrictEqual } from "node:util";
 import path from "node:path";
 import { cli } from "./lib/cli.mjs";
 
@@ -83,7 +61,7 @@ for (const f of files) {
 }
 
 // --- tokenize both sides in one batch --------------------------------------
-// ⚠ One spawn per module would be ~600 process launches. Concatenate with a
+//  One spawn per module would be ~600 process launches. Concatenate with a
 // unique separator, tokenize once, split on the separator's token.
 const tmp = await mkdtemp(path.join(tmpdir(), "modmap-"));
 const SEP = "\n;\"__MODULE_BOUNDARY__\";\n";
@@ -92,11 +70,11 @@ const bodies = [];   // { id, file, srcText, origText }
 const mismatches = [];
 for (const id of ids) {
   const m = byId.get(id);
-  // ⛔ Character offsets when the map has them. A Turbopack factory starts
+  //  Character offsets when the map has them. A Turbopack factory starts
   // mid-line, so a line slice carries the container prefix in with it — which
   // showed up here as every module being ~10 tokens longer on the packer's side
   // than in src/, a difference entirely manufactured by this gate.
-  // ⛔ Both branches strip a leading `<id>:` key and a trailing comma with ONE
+  //  Both branches strip a leading `<id>:` key and a trailing comma with ONE
   // regex. module-map's startChar is the FACTORY start (nothing to strip), but a
   // synthesized char boundary that points at the id start — a minified-original
   // bounds table — used to keep the key on the packer's side and every module
@@ -143,7 +121,7 @@ if (srcToks.length !== origToks.length || srcToks.length !== bodies.length) {
 
 // The wrapper names a port is allowed to introduce, across both packers:
 // webpack's (module, exports, require) and Turbopack's single (ctx).
-// ⛔ Anything else renamed is not a wrapper rename and must fail — that is the
+//  Anything else renamed is not a wrapper rename and must fail — that is the
 // whole point of the check.
 const WRAP = new Set(["module", "exports", "require", "ctx"]);
 let renamedModules = 0;
@@ -152,17 +130,21 @@ for (let i = 0; i < bodies.length; i++) {
   const a = srcToks[i].filter((t) => t.type.label !== ";"), o = origToks[i].filter((t) => t.type.label !== ";");
   if (a.length !== o.length) { fail++; mismatches.push(`${b.file}: ${a.length} tokens vs ${o.length} in the packer's bytes`); continue; }
   const map = new Map();   // src identifier -> original identifier
+  const reverse = new Map(); // original identifier -> src identifier
   let bad = null, renamed = false;
   for (let k = 0; k < a.length; k++) {
     if (a[k].type.label !== o[k].type.label) { bad = `token ${k}: ${a[k].type.label} vs ${o[k].type.label}`; break; }
-    if (String(a[k].value) === String(o[k].value)) continue;
+    if (isDeepStrictEqual(a[k].value, o[k].value)) continue;
     if (a[k].type.label !== "name") { bad = `token ${k}: literal ${JSON.stringify(a[k].value)} vs ${JSON.stringify(o[k].value)}`; break; }
     // An identifier may differ only as part of the wrapper rename, and the
     // mapping must be consistent across the whole module.
     if (!WRAP.has(String(a[k].value))) { bad = `token ${k}: renamed ${JSON.stringify(o[k].value)} to ${JSON.stringify(a[k].value)}, which is not a wrapper name`; break; }
     const prev = map.get(a[k].value);
     if (prev !== undefined && prev !== o[k].value) { bad = `${a[k].value} maps to both ${JSON.stringify(prev)} and ${JSON.stringify(o[k].value)}`; break; }
+    const sourceName = reverse.get(o[k].value);
+    if (sourceName !== undefined && sourceName !== a[k].value) { bad = `${JSON.stringify(o[k].value)} maps to both ${sourceName} and ${a[k].value}`; break; }
     map.set(a[k].value, o[k].value);
+    reverse.set(o[k].value, a[k].value);
     renamed = true;
   }
   if (bad) { fail++; mismatches.push(`${b.file}: ${bad}`); continue; }
