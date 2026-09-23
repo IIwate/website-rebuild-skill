@@ -85,6 +85,10 @@ export default {
   //   note     what the slice contains (goes into the generated file verbatim)
   //   symbols  what the rest of the rebuild may import from this slice; the
   //            union of all `symbols` becomes the generated export list
+  //   wrap     optional { before?, after? } strings the slicer places OUTSIDE
+  //            the byte range (the `const ` a comma chain lost, or a function
+  //            head/tail that exports a closure-private initializer); the
+  //            range itself stays verbatim. Conditions: porting-discipline.md §2.2
   //
   // Slice whole self-contained top-level declarations: pure functions, data
   // tables, GLSL, assembly order. Framework-layer effects and glue that must

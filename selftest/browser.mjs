@@ -146,6 +146,8 @@ try {
   red("probe — the same request under --no-external goes red: zero outbound is asserted, not assumed (v0.3.22)", probe(`${SA.base}/outbound.html`, ["--no-external"]), /external|outbound|ping\.txt/i);
   red("probe — --expect-side mirror against the rebuild server is FATAL 3 and says which side answered (v0.3.22)", probe(`${SA.base}/`, ["--expect-side", "mirror"]), /answers as side REBUILD/, 3);
   green("probe — --expect-side rebuild against the rebuild server passes (v0.3.22)", probe(`${SA.base}/`, ["--expect-side", "rebuild"]), /CLEAN/);
+  const seededProbe = probe(`${SA.base}/`, ["--settle", "500", "--seed", "window.__seeded = 7", "--eval", "window.__seeded"]);
+  green("probe — --seed runs before the document and --settle equal to --wait is accepted", seededProbe, /EVAL: 7[\s\S]*CLEAN/);
 
   const captured = W(path.join(TMP, "captured"), {
     "mirror-manifest.json": JSON.stringify({ origin: SA.base, files: {} }),

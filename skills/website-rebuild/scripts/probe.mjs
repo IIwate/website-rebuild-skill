@@ -5,11 +5,11 @@
  * capture an image, evaluate expressions or exercise scroll positions.
  * The exit status describes only events observed during the configured run.
  *
- * node probe.mjs <url> [--shot out.png] [--wait 6000] [--width 1728]
+ * node probe.mjs <url> [--shot out.png] [--wait 6000] [--settle ms] [--width 1728]
  *       [--height 1080] [--scroll 0.5] [--eval "expr"]
  *       [--evalAfter "expr"] [--evalAfterDelay 2000] [--mobile]
  *       [--walk 24] [--walk-dwell 700] [--no-external]
- *       [--format png|jpeg] [--quality 92]
+ *       [--format png|jpeg] [--quality 92] [--seed "expr"] [--cdp-timeout ms]
  *       [--side mirror|rebuild] [--expect-side mirror|rebuild] [--cdp-port N]
  *
  * --no-external fails on requests outside the served origin. Without it, a
@@ -43,7 +43,7 @@ import {
   shotCeilingAdvice,
   shotLikelyTooBig,
 } from './lib/chrome.mjs';
-import { connectCdp } from './lib/cdp.mjs';
+import { connectCdp, resolveCdpTimeout } from './lib/cdp.mjs';
 import { cli } from './lib/cli.mjs';
 
 // Reject unknown flags and consume each known option's value before selecting
@@ -52,8 +52,9 @@ import { cli } from './lib/cli.mjs';
 // the expected timer needed another two seconds. A separate argument-order
 // failure treated --wait's value 9000 as the URL. cli() handles both cases.
 const { positionals } = cli({
-  known: ['shot', 'format', 'quality', 'wait', 'scroll', 'walk', 'walk-dwell',
-    'eval', 'evalAfter', 'evalAfterDelay', 'side', 'expect-side', 'cdp-port', 'width', 'height'],
+  known: ['shot', 'format', 'quality', 'wait', 'settle', 'seed', 'cdp-timeout',
+    'scroll', 'walk', 'walk-dwell', 'eval', 'evalAfter', 'evalAfterDelay',
+    'side', 'expect-side', 'cdp-port', 'width', 'height'],
   bools: ['no-external', 'mobile'],
   file: import.meta.url,
   positional: '<url>',
@@ -69,10 +70,25 @@ const has = (name) => args.includes('--' + name);
 // taken its value (see the walk note at the top).
 const url = positionals[0] ?? null;
 if (!url) {
-  console.error('usage: probe.mjs <url> [--shot out.png] [--format png|jpeg] [--quality 92] [--wait ms] [--scroll frac] [--walk steps] [--walk-dwell ms] [--no-external] [--eval expr] [--evalAfter expr] [--mobile] [--side mirror|rebuild] [--cdp-port N]');
+  console.error('usage: probe.mjs <url> [--shot out.png] [--format png|jpeg] [--quality 92] [--wait ms] [--settle ms] [--seed expr] [--cdp-timeout ms] [--scroll frac] [--walk steps] [--walk-dwell ms] [--no-external] [--eval expr] [--evalAfter expr] [--mobile] [--side mirror|rebuild] [--cdp-port N]');
   process.exit(2);
 }
-const WAIT = Number(flag('wait', 6000));
+// --settle is accepted as an alias of --wait so a pixelcompare invocation can
+// be replayed here without re-spelling the window; two different values leave
+// the observation window ambiguous and are refused.
+const waitArg = flag('wait', null);
+const settleArg = flag('settle', null);
+if (waitArg !== null && settleArg !== null && waitArg !== settleArg) {
+  console.error(`FATAL: --wait ${waitArg} and --settle ${settleArg} disagree; pass only one of them`);
+  process.exit(2);
+}
+const WAIT = Number(waitArg ?? settleArg ?? 6000);
+const SEED = flag('seed', null);
+// Explicit --cdp-timeout > CDP_TIMEOUT_MS > a budget that outlasts the settle
+// window, so a long --wait cannot be cut short by the protocol deadline.
+let cdpTimeoutMs;
+try { cdpTimeoutMs = resolveCdpTimeout(flag('cdp-timeout', null), Math.max(60000, WAIT + 30000)); }
+catch (e) { console.error(`FATAL: ${e.message}`); process.exit(2); }
 const W = Number(flag('width', has('mobile') ? 390 : 1728));
 const H = Number(flag('height', has('mobile') ? 844 : 1080));
 const SHOT = flag('shot', null);
@@ -178,7 +194,7 @@ const target = await assertOwnBrowser({ port, sentinel, tool: 'probe.mjs', pid: 
 // A dead socket must fail explicitly (an oversized screenshot closes it with 1006,
 // see the header) and every call is bounded — both guards live in lib/cdp.mjs.
 const cdp = await connectCdp(target.webSocketDebuggerUrl, {
-  defaultTimeoutMs: 60000,
+  defaultTimeoutMs: cdpTimeoutMs,
   closeHint: "if this happened on a screenshot, the frame exceeded Node's WebSocket payload ceiling",
 });
 
@@ -264,6 +280,10 @@ if (has('mobile'))
     userAgent:
       'Mozilla/5.0 (iPhone; CPU iPhone OS 17_5 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.5 Mobile/15E148 Safari/604.1',
   });
+
+if (SEED) {
+  await cdp.send('Page.addScriptToEvaluateOnNewDocument', { source: SEED });
+}
 
 const loaded = new Promise((r) => {
   cdp.on('Page.loadEventFired', () => r());

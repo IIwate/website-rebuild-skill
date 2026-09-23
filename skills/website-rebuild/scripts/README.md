@@ -145,7 +145,7 @@ objectandarchive 的记录包括查询变体映射冲突、转义 URL 漏提取�
 | `scripts/lib/shell-build.mjs` | 策略 A 的变换表执行器(build-site 与 verify-shell 共用同一份, 检查不自带实现) | M2+(策略 A) | racingshop 版(v0.1.17) | 已记录(selftest 绿/红双面) |
 | `scripts/lib/version.mjs` | 这份 scripts/ 拷贝自哪个 skill 版本;`--help` / `--version` 都打印它 | 全部脚本 | v0.3.17 新写 | 已记录(selftest 钉 SKILL.md frontmatter) |
 | `scripts/verify-ledger.mjs` | 可选坐标台账检查: 逐路径核对行号与 Needle | 坐标系建立或变更后 | 通用工具 | 需调用方配置 |
-| `scripts/verify-sourceified-tokens.mjs` | 可选源码化 token 检查: 只接受登记的标识符与 shorthand 差异 | M(n+1) | 通用工具 | 需调用方配置 |
+| `scripts/verify-sourceified-tokens.mjs` | 可选源码化 token 检查: 只接受登记的标识符, shorthand 与常量内联差异 | M(n+1) | 通用工具 | 需调用方配置 |
 | `scripts/lib/data-island.mjs` | devalue 数据岛保护与保留 URL 普查 | lib | 构建层与服务层共用 | 两侧语义一致 |
 
 模式行--本 skill 不提供实现, 写在这里是因为它定义了一种检查的形状:

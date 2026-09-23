@@ -13,7 +13,13 @@
  * The plan must contain units (or comparisons). Each unit has an id, an
  * original fragment, a sourceified fragment, and allowedChanges. A fragment is
  * { file, range: { start, end } } with inclusive line numbers. A change is
- * { kind: "identifier"|"shorthand-expansion", from, to, count }.
+ * { kind: "identifier"|"shorthand-expansion"|"constant-inlining", from, to, count }.
+ * constant-inlining matches `callee(from)` in the original against the string
+ * literal `to` in the sourceified fragment; the callee name comes from the
+ * change's `callee`, the unit's `callee` or the plan-level
+ * `constantInliningCallee`. Identifier and shorthand changes must appear in
+ * the rename map. The map may reuse one original name across units (each
+ * closure has its own `e`), but the mappings inside a unit stay one-to-one.
  *
  * ECMAScript selection:
  *   latest uses the fixed Acorn 8.14.0 maximum (2025).
@@ -172,15 +178,18 @@ function normalizeFragment(raw, field, root, cache) {
 function normalizeChange(raw, field) {
   if (!isObject(raw)) throw new ConfigurationError(`${field}: expected an object`);
   const kind = raw.kind ?? raw.type;
-  if (kind !== "identifier" && kind !== "shorthand-expansion") throw new ConfigurationError(`${field}.kind: expected identifier or shorthand-expansion`);
-  const from = raw.from;
-  const to = raw.to;
-  if (typeof from !== "string" || from === "" || typeof to !== "string" || to === "" || from === to) throw new ConfigurationError(`${field}: from and to must be different non-empty strings`);
+  if (kind !== "identifier" && kind !== "shorthand-expansion" && kind !== "constant-inlining") {
+    throw new ConfigurationError(`${field}.kind: expected identifier, shorthand-expansion, or constant-inlining`);
+  }
+  const from = String(raw.from ?? "");
+  const to = String(raw.to ?? "");
+  if (from === "" || to === "" || from === to) throw new ConfigurationError(`${field}: from and to must be different non-empty strings`);
   const count = raw.count ?? raw.occurrences ?? 1;
   if (!Number.isInteger(count) || count < 1) throw new ConfigurationError(`${field}.count: expected a positive integer`);
   const key = raw.key ?? raw.property ?? from;
   if (kind === "shorthand-expansion" && (typeof key !== "string" || key === "")) throw new ConfigurationError(`${field}.key: expected a non-empty string`);
-  return { kind, from, to, count, key: String(key) };
+  const callee = raw.callee ?? raw.fn ?? null;
+  return { kind, from, to, count, key: String(key), callee: callee ? String(callee) : null };
 }
 
 function normalizeUnits(plan, root, cache) {
@@ -206,6 +215,25 @@ function normalizeUnits(plan, root, cache) {
       if (signatures.has(signature)) throw new ConfigurationError(`${field}.allowedChanges: duplicate ${signature}`);
       signatures.add(signature);
     }
+    const unitCallee = raw.callee ?? raw.constantInliningCallee ?? plan.constantInliningCallee ?? null;
+    if (unitCallee !== null && (typeof unitCallee !== "string" || unitCallee === "")) throw new ConfigurationError(`${field}.callee: expected a non-empty string`);
+    for (const change of changes) {
+      if (change.kind !== "constant-inlining") continue;
+      change.callee = change.callee ?? unitCallee;
+      if (!change.callee) throw new ConfigurationError(`${field}.allowedChanges: constant-inlining ${change.from}->${change.to} needs a callee (change.callee, unit.callee or plan.constantInliningCallee)`);
+    }
+    // Injectivity is a per-unit property: the rename map may carry e->alpha and
+    // e->beta for two closures, but inside one unit a name has one target and a
+    // target has one origin, or the token walk could pair mismatched renames.
+    const fromTo = new Map();
+    const toFrom = new Map();
+    for (const change of changes) {
+      if (change.kind === "constant-inlining") continue;
+      if (fromTo.has(change.from) && fromTo.get(change.from) !== change.to) throw new ConfigurationError(`${field}.allowedChanges: ${change.from} maps to both ${fromTo.get(change.from)} and ${change.to}`);
+      if (toFrom.has(change.to) && toFrom.get(change.to) !== change.from) throw new ConfigurationError(`${field}.allowedChanges: ${change.to} is targeted by both ${toFrom.get(change.to)} and ${change.from}`);
+      fromTo.set(change.from, change.to);
+      toFrom.set(change.to, change.from);
+    }
     const unitSourceType = raw.sourceType ?? sourceType;
     if (unitSourceType !== "module" && unitSourceType !== "script") throw new ConfigurationError(`${field}.sourceType: expected module or script`);
     return { id: raw.id, original, sourceified, changes, sourceType: unitSourceType };
@@ -223,8 +251,6 @@ function normalizeRenameMap(raw) {
   if (entries.length === 0) throw new ConfigurationError("rename-map: no mappings supplied");
   const result = [];
   const seenPairs = new Set();
-  const fromTo = new Map();
-  const toFrom = new Map();
   for (let index = 0; index < entries.length; index += 1) {
     const entry = entries[index];
     const from = typeof entry === "object" ? entry.from ?? entry.old : null;
@@ -232,19 +258,17 @@ function normalizeRenameMap(raw) {
     if (typeof from !== "string" || typeof to !== "string" || from === "" || to === "" || from === to) throw new ConfigurationError(`rename-map[${index}]: from and to must be different strings`);
     const pair = `${from}->${to}`;
     if (seenPairs.has(pair)) throw new ConfigurationError(`rename-map[${index}]: duplicate mapping ${pair}`);
-    if (fromTo.has(from) && fromTo.get(from) !== to) throw new ConfigurationError(`rename-map[${index}]: ${from} maps to both ${fromTo.get(from)} and ${to}`);
-    if (toFrom.has(to) && toFrom.get(to) !== from) throw new ConfigurationError(`rename-map[${index}]: ${to} is targeted by both ${toFrom.get(to)} and ${from}`);
     seenPairs.add(pair);
-    fromTo.set(from, to);
-    toFrom.set(to, from);
     result.push({ from, to });
   }
-  return { entries: result, pairs: new Set(result.map((entry) => `${entry.from}->${entry.to}`)) };
+  return { entries: result, pairs: seenPairs };
 }
 
 function validateChangeMappings(units, renameMap) {
   for (const unit of units) for (const change of unit.changes) {
-    if (!renameMap.pairs.has(`${change.from}->${change.to}`)) throw new ConfigurationError(`plan unit ${unit.id}: ${change.from}->${change.to} is not present in rename-map`);
+    if (change.kind !== "constant-inlining" && !renameMap.pairs.has(`${change.from}->${change.to}`)) {
+      throw new ConfigurationError(`plan unit ${unit.id}: ${change.from}->${change.to} is not present in rename-map`);
+    }
   }
 }
 
@@ -331,8 +355,9 @@ function canonicalToken(token, text) {
   return `${type}:${tokenRaw(token, text)}`;
 }
 
+const npxCmd = process.platform === "win32" ? "npx.cmd" : "npx";
 function runAcorn(args) {
-  const result = spawnSync("npx", args, {
+  const result = spawnSync(npxCmd, args, {
     encoding: "utf8",
     maxBuffer: 1024 * 1024 * 64,
     timeout: 120000,
@@ -395,7 +420,9 @@ function expectedChanges(unit) {
   for (const change of unit.changes) {
     const key = change.kind === "identifier"
       ? `identifier:${change.from}->${change.to}`
-      : `shorthand-expansion:${change.from}->${change.to}:${change.key}`;
+      : change.kind === "shorthand-expansion"
+      ? `shorthand-expansion:${change.from}->${change.to}:${change.key}`
+      : `constant-inlining:${change.from}->${change.to}`;
     result.set(key, change.count);
   }
   return result;
@@ -435,6 +462,28 @@ function compareTokenStreams(unit, left, right, version, leftNonBindingRanges, r
       });
       leftIndex += 1;
       rightIndex += 3;
+      continue;
+    }
+    const inlining = unit.changes.find((change) => {
+      if (change.kind !== "constant-inlining" || !leftToken || !rightToken) return false;
+      if (tokenName(leftToken) !== change.callee) return false;
+      if (leftIndex + 3 >= left.length) return false;
+      if (tokenType(left[leftIndex + 1]) !== "(") return false;
+      const idToken = left[leftIndex + 2];
+      if ((tokenType(idToken) !== "num" && tokenType(idToken) !== "string") || String(idToken.value) !== String(change.from)) return false;
+      if (tokenType(left[leftIndex + 3]) !== ")") return false;
+      if (tokenType(rightToken) !== "string" || String(rightToken.value) !== String(change.to)) return false;
+      return true;
+    });
+    if (inlining) {
+      addActual(actual, `constant-inlining:${inlining.from}->${inlining.to}`, {
+        originalIndex: leftIndex,
+        sourceIndex: rightIndex,
+        original: tokenRaw(leftToken, unit.original.text) + tokenRaw(left[leftIndex + 1], unit.original.text) + tokenRaw(left[leftIndex + 2], unit.original.text) + tokenRaw(left[leftIndex + 3], unit.original.text),
+        source: tokenRaw(rightToken, unit.sourceified.text),
+      });
+      leftIndex += 4;
+      rightIndex += 1;
       continue;
     }
     if (leftToken && rightToken && canonicalToken(leftToken, unit.original.text) === canonicalToken(rightToken, unit.sourceified.text)) {

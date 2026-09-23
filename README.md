@@ -28,10 +28,14 @@ Compared with [upstream/main](https://github.com/boyang-hu/website-rebuild-skill
 - Provides `?__probe&__noio` for a native IntersectionObserver control and reports discarded observer options.
 - Rejects pixel walks whose requested second scroll falls outside the configured virtual-time pump budget. CSS freezing handles injection before the HTML root exists, and combined user seeds retain a statement boundary after trailing line comments.
 - Validates JSON stub path specifications before listening and propagates browser cache-clearing failures.
+- Slices support `wrap` encapsulation declarations, and `--balance-check` neutralizes `import.meta` safely during Script-mode evaluation without quote-escaping hazards.
+- Probe and pixel-comparison runners support dynamic CDP timeout derivation and `CDP_TIMEOUT_MS` overrides, and probe accepts `--settle` and `--seed`.
+- Token verification supports `constant-inlining` conversions and multi-scope identifier mappings across independent units.
 
 ### Additional tools and guidance
 
-- Optional `verify-ledger.mjs` and `verify-sourceified-tokens.mjs` checks, plus the Babel Binding-based `demangle-modules.mjs` transformer.
+- Optional `verify-ledger.mjs` and `verify-sourceified-tokens.mjs` checks, plus the Babel Binding-based `demangle-modules.mjs` transformer and AST-based `inline-strings.mjs` decryption inliner.
 - SPA navigation and hydration templates with isolated sessions, real interaction, error monitoring and transition stability assertions.
 - Flat-IIFE ownership maps, constructor/random-consumption accounting, per-branch WebGL readiness, scene topology checks and a narrowly scoped data-literal extraction rule.
 - Explicit boundaries for coordinate evidence, sourceification changes, asset closure and scheduler observations. Media guidance accounts for buffered seek ranges, detached elements, failed image loads and player-specific state handling. JPEG/WebP transport is documented for quantitative gates, with PNG retained for byte-fidelity checks.
+- Guidance for WebGPU/TSL compute pipeline compilation under CPU rasterization, encapsulated slice-wrapping axioms, dual-track delivery for scope-hoisted bundles, and state-isolated noise baselines.

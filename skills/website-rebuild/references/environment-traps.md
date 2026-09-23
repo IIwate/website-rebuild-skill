@@ -232,6 +232,19 @@ addEventListener('resize', () => { if (cols() !== columnCount) buildColumns(); }
 
 对策与 `lib/chrome.mjs` 同款:`spawn(…, { detached: true })` 让子进程自成进程组, 退出路径上 `process.kill(-pid, 'SIGKILL')` 回收整组; 起服务前先探一次端口,**有东西应答就明确退出并指路 `lsof -i :<port>`**--静默换端口只会把孤儿留给下一个人.
 
+## 9.7 WebGPU 与 TSL 计算管线无头软光栅编译耗时
+
+在无物理 GPU 直通的无头环境 (如 Linux 容器, WSL2 使用 SwiftShader 或 llvmpipe 纯 CPU 软件模拟) 下, 包含 WebGPU Compute Shader, TSL (Three Shading Language) 节点网络, 频域 FFT 海洋波浪仿真或体素噪声生成的复杂管线, 其首次着色器分析, 抽象语法树构建与驱动层编译的客观物理耗时常达 60~120 秒.
+
+常见误判表现:
+- 探针或 CDP 客户端在 60s 默认超时处断连, 报 `CDP timeout after 60000ms`, 被判为页面死循环或渲染器崩溃;
+- 执行方转而修改被测代码, 移除异步预编译 (`compileAsync`), 或改动原本正确的计算着色器节点.
+
+判据与处理顺序:
+1. **CPU 占用是必要判据**: 先测无头 Chromium 进程状态. 只有 Chrome 渲染与计算线程的 CPU 利用率持续处于高负载 (≥ 80%) 时, 才能判定为软光栅编译等待; CPU 利用率接近 0% (进程处于 S 睡眠态) 说明是死锁, 上下文丢失或网络挂起, 编译耗时的解释不适用.
+2. **排查原站降级开关**: 检查原站是否自带后备渲染路径 (如 `localStorage.setItem("forceWebGL", "true")` 或配置参数中的降级开关), 优先验证兼容分支.
+3. **参数化放宽探针预算**: 确认属于软光栅编译耗时后, 通过环境变量 `CDP_TIMEOUT_MS=180000` 或 CLI 参数 `--cdp-timeout 180000` 放宽仪器的等待预算. 被测代码不因仪器超时而修改.
+
 ## 10. 判定 bug 前的自查清单
 
 把问题归因到源码之前, 逐项打勾:
@@ -249,6 +262,7 @@ addEventListener('resize', () => { if (cols() !== columnCount) buildColumns(); }
 - [ ] 抓图带了 `clip` 吗? 页面有 fixed/sticky 元素吗?(`clip` 是**文档坐标**,滚动位姿会拍成全白,§4)[shopifydesign]
 - [ ] 无头 flag(`--use-gl=swiftshader` / `--disable-gpu`)有没有把被测程序切到另一条画质/能力分支?(`determinism.md` §2.9)[shopifydesign]
 - [ ] 生命周期钩子负责的产物还在吗? 这轮构建走的是 `npm run` 还是直调 CLI?(§9.5)[basement]
+- [ ] **WebGPU/TSL 计算场景**: 超时期间 Chrome 进程 CPU 利用率是否持续 ≥ 80%? (是则通过 `CDP_TIMEOUT_MS` 或 `--cdp-timeout` 放宽仪器预算, 不把编译等待当作死循环去改被测源码, §9.7)
 - [ ] **移动视口档**:用 document-start 探针量过 `innerWidth` 吗?(`<meta viewport>` 落地前它是 **980**,页面可能已经按桌面排好了版,§8)[objectarchive]
 - [ ] 准备改仪器了--**有没有先用一个探针把候选机制砍到一种**?(凭症状猜修法实测把 2/8 红变成 5/8 红,`gate-failure-modes.md` §3.1.1)[objectarchive]
 - [ ] 只在部署环境出现? 先用延迟注入复现再归因[samsy]

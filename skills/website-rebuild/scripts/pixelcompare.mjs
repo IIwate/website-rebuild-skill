@@ -48,13 +48,13 @@ import {
   shotCeilingAdvice,
   shotLikelyTooBig,
 } from './lib/chrome.mjs';
-import { connectCdp } from './lib/cdp.mjs';
+import { connectCdp, resolveCdpTimeout } from './lib/cdp.mjs';
 import { cli } from './lib/cli.mjs';
 
 cli({
   known: ['a', 'b', 'name', 'out', 'width', 'height', 'format', 'quality', 'settle', 'ready', 'after-ready',
     'hold', 'hold-grace', 'hold-after', 'drive', 'pump', 'chunk', 'freeze-at', 'seed', 'label-a', 'label-b',
-    'max-mean', 'cdp-port'],
+    'max-mean', 'cdp-port', 'cdp-timeout'],
   bools: ['self', 'freeze-css'],
   file: import.meta.url,
 });
@@ -81,7 +81,7 @@ const withProbe = (u) => {
 const URL_A = withProbe(flag('a', null));
 const URL_B = withProbe(flag('b', null));
 if (!URL_A || !URL_B) {
-  console.error('usage: pixelcompare.mjs --a <urlA> --b <urlB> [--name home] [--out docs/pixelcompare] [--width 1280] [--height 800] [--settle 6000] [--ready expr] [--seed expr] [--label-a A] [--label-b B] [--format png|jpeg] [--quality 92] [--max-mean N] [--self] [--pump dt,frames]');
+  console.error('usage: pixelcompare.mjs --a <urlA> --b <urlB> [--name home] [--out docs/pixelcompare] [--width 1280] [--height 800] [--settle 6000] [--ready expr] [--seed expr] [--label-a A] [--label-b B] [--format png|jpeg] [--quality 92] [--max-mean N] [--self] [--pump dt,frames] [--cdp-timeout ms]');
   process.exit(2);
 }
 const NAME = flag('name', 'home');
@@ -180,6 +180,11 @@ const PUMP = flag('pump', null);
 const FREEZE_CSS = args.includes('--freeze-css');
 const FREEZE_AT = flag('freeze-at', '-1s');
 const SEED = flag('seed', null);
+// Explicit --cdp-timeout > CDP_TIMEOUT_MS > a budget that outlasts --settle.
+// Resolved before any browser starts so a bad value is a plain usage error.
+let CDP_TIMEOUT_MS;
+try { CDP_TIMEOUT_MS = resolveCdpTimeout(flag('cdp-timeout', null), Math.max(120000, SETTLE + 60000)); }
+catch (e) { console.error(`FATAL: ${e.message}`); process.exit(2); }
 const LABEL_A = flag('label-a', 'REBUILD');
 const LABEL_B = flag('label-b', 'MIRROR');
 const MAX_MEAN = flag('max-mean', null);
@@ -266,7 +271,7 @@ const target = await assertOwnBrowser({
 // THE error-reporting hook (an oversized screenshot kills the connection with
 // close 1006 instead of returning an error) and the per-call timeout both live
 // in lib/cdp.mjs; a silent hang is the worst failure shape there is.
-const cdp = await connectCdp(target.webSocketDebuggerUrl, { defaultTimeoutMs: 120000 });
+const cdp = await connectCdp(target.webSocketDebuggerUrl, { defaultTimeoutMs: CDP_TIMEOUT_MS });
 const evalJs = async (expression) => {
   const res = await cdp.send('Runtime.evaluate', { expression, awaitPromise: true, returnByValue: true });
   if (res.exceptionDetails) throw new Error(res.exceptionDetails.exception?.description || 'eval failed');

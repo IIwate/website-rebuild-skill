@@ -29,7 +29,30 @@ export async function cdpUrlFor(port, { attempts = 80, intervalMs = 250 } = {}) 
   throw new Error(`could not reach CDP on port ${port}`);
 }
 
-export async function connectCdp(wsUrl, { defaultTimeoutMs = 60000, closeHint = "" } = {}) { // closeHint: "" = default screenshot hint, null = none, string = yours
+// CDP_TIMEOUT_MS raises the per-call deadline for environments where the page
+// legitimately blocks the protocol for minutes (software-rasterized WebGPU
+// shader compilation, environment-traps.md §9.7). The default stays at 60 s so
+// a silent hang still fails fast on ordinary pages.
+const ENV_TIMEOUT_RAW = process.env.CDP_TIMEOUT_MS ?? "";
+const ENV_TIMEOUT = Number(ENV_TIMEOUT_RAW);
+const FALLBACK_TIMEOUT_MS = ENV_TIMEOUT_RAW !== "" && Number.isFinite(ENV_TIMEOUT) && ENV_TIMEOUT > 0 ? ENV_TIMEOUT : 60000;
+
+/**
+ * Per-call deadline for a runner: an explicit --cdp-timeout value wins, then
+ * CDP_TIMEOUT_MS, then the caller's fallback. Throws on a value that is not a
+ * positive number so a typo cannot silently become a 1 ms deadline.
+ */
+export function resolveCdpTimeout(explicit, fallbackMs = FALLBACK_TIMEOUT_MS) {
+  const source = explicit !== null && explicit !== undefined
+    ? { label: `--cdp-timeout ${explicit}`, value: explicit }
+    : ENV_TIMEOUT_RAW !== "" ? { label: `CDP_TIMEOUT_MS=${ENV_TIMEOUT_RAW}`, value: ENV_TIMEOUT_RAW } : null;
+  if (!source) return fallbackMs;
+  const ms = Number(source.value);
+  if (!Number.isFinite(ms) || ms <= 0) throw new Error(`${source.label}: expected a positive number of milliseconds`);
+  return ms;
+}
+
+export async function connectCdp(wsUrl, { defaultTimeoutMs = FALLBACK_TIMEOUT_MS, closeHint = "" } = {}) { // closeHint: "" = default screenshot hint, null = none, string = yours
   const ws = new WebSocket(wsUrl);
   await new Promise((resolve, reject) => { ws.onopen = resolve; ws.onerror = () => reject(new Error(`CDP websocket failed to open: ${wsUrl}`)); });
   let msgId = 0;

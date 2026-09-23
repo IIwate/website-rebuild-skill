@@ -141,7 +141,20 @@ const slices = cfg.slices.map((s, i) => {
     die(2, `FATAL: ${where}: bad range L${s.from}-L${s.to}`);
   if (s.to > lineCount)
     die(2, `FATAL: ${where}: L${s.from}-L${s.to} runs past the end of ${rel(SRC)} (${lineCount} lines)`);
-  return { from: s.from, to: s.to, note: s.note ?? "", symbols: s.symbols ?? [] };
+  if (s.wrap !== undefined && (typeof s.wrap !== "object" || s.wrap === null))
+    die(2, `FATAL: ${where}: wrap must be an object { before?: string, after?: string }`);
+  if (s.wrap && (
+    (s.wrap.before !== undefined && typeof s.wrap.before !== "string") ||
+    (s.wrap.after !== undefined && typeof s.wrap.after !== "string")
+  ))
+    die(2, `FATAL: ${where}: wrap.before and wrap.after must be strings`);
+  return {
+    from: s.from,
+    to: s.to,
+    note: s.note ?? "",
+    symbols: s.symbols ?? [],
+    wrap: s.wrap ? { before: s.wrap.before ?? "", after: s.wrap.after ?? "" } : null,
+  };
 });
 
 for (let i = 1; i < slices.length; i++) {
@@ -203,10 +216,16 @@ const header = [
 
 const exported = new Set();
 const sliceParts = [];
+let wrappedCount = 0;
 for (const s of slices) {
-  const body = lines.slice(s.from - 1, s.to).join("\n");
+  let body = lines.slice(s.from - 1, s.to).join("\n");
+  const isWrapped = Boolean(s.wrap);
+  if (isWrapped) {
+    wrappedCount += 1;
+    body = s.wrap.before + body + s.wrap.after;
+  }
   sliceParts.push(
-    `\n// ===== ${rel(SRC)} L${s.from}-L${s.to} =====\n` +
+    `\n// ===== ${rel(SRC)} L${s.from}-L${s.to}${isWrapped ? " (wrapped)" : ""} =====\n` +
       (s.note ? `// ${s.note}\n` : "") +
       body,
   );
@@ -247,7 +266,8 @@ if (BALANCE) {
     );
   }
   try {
-    new Function(sliceParts.join("\n"));
+    const sanitized = sliceParts.join("\n").replace(/\bimport\s*\.\s*meta\b/g, "(void 0)");
+    new Function(sanitized);
   } catch (e) {
     die(
       4,
@@ -277,7 +297,9 @@ if (CHECK) {
 await mkdir(path.dirname(OUT), { recursive: true });
 await writeFile(OUT, out);
 console.log(
-  `${rel(OUT)} <- ${slices.length} verbatim slices, ${sourceLines} source lines, ` +
+  `${rel(OUT)} <- ${slices.length} verbatim slices` +
+    (wrappedCount ? ` (${wrappedCount} wrapped)` : "") +
+    `, ${sourceLines} source lines, ` +
     `${exported.size} exported symbols` +
     (IMPORTS.length ? `, ${IMPORTS.reduce((a, g) => a + g.symbols.length, 0)} imported aliases/stubs` : ""),
 );

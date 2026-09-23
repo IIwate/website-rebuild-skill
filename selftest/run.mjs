@@ -11,6 +11,7 @@
 import { readdirSync, readFileSync, writeFileSync, mkdirSync, rmSync, existsSync, statSync } from "node:fs";
 import { execFileSync } from "node:child_process";
 import path from "node:path";
+import { pathToFileURL } from "node:url";
 import { ROOT, SKILL, scratch, ok, bad, eq, truthy, finish, run, green, red, W, serveOn } from "./harness.mjs";
 
 const TMP = scratch(".tmp");
@@ -1601,6 +1602,136 @@ const TMP = scratch(".tmp");
   red("serve - a stub path containing a query is rejected", run("scripts/serve.mjs", [...args, "/x?action=a::" + path.join(D, "stub.json")]), /needs PATH::FILE/, 2);
   red("serve - an absent stub file fails before listening", run("scripts/serve.mjs", [...args, "/x::" + path.join(D, "nope.json")]), /not a readable JSON file/, 2);
   red("serve - malformed JSON fails before listening", run("scripts/serve.mjs", [...args, "/x::" + path.join(D, "invalid.json")]), /not a readable JSON file/, 2);
+}
+
+// Byte slicer wrap mechanics and import.meta syntax neutralization.
+{
+  const { sha256: sha } = await import(path.join(SKILL, "scripts/lib/hash.mjs"));
+  const srcCode = "console.log(import.meta.url);\nconst a = 1;\nb = 2;\n";
+  const srcSha = sha(srcCode);
+  const D = W(path.join(TMP, "slicer-wrap"), { "bundle.js": srcCode });
+  const cfgCode = `export default {\n  source: "${path.join(D, "bundle.js")}",\n  sha256: "${srcSha}",\n  out: "${path.join(D, "out.gen.js")}",\n  slices: [\n    {\n      from: 1,\n      to: 1,\n      note: "import.meta slice",\n      symbols: [],\n    },\n    {\n      from: 3,\n      to: 3,\n      note: "slice b with const wrap",\n      symbols: [{ name: "b" }],\n      wrap: { before: "const " },\n    },\n  ],\n};\n`;
+  writeFileSync(path.join(D, "slices.config.mjs"), cfgCode, "utf8");
+  const res = run("scripts/extract-source.mjs", ["--slices", path.join(D, "slices.config.mjs"), "--balance-check"]);
+  green("extract-source - wrap header and import.meta neutralization pass balance check", res, /1 wrapped/);
+  const generated = readFileSync(path.join(D, "out.gen.js"), "utf8");
+  truthy("extract-source - generated output includes wrapped keyword", generated.includes("const b = 2;"));
+}
+
+// verify-sourceified-tokens supports constant-inlining and multi-unit identifier mappings.
+{
+  const D = W(path.join(TMP, "token-inlining"), {
+    "orig-1.js": "function test(e) { return decode(42); }\n",
+    "src-1.js": "function test(alpha) { return \"water\"; }\n",
+    "orig-2.js": "function other(e) { return e * 2; }\n",
+    "src-2.js": "function other(beta) { return beta * 2; }\n",
+  });
+  const plan = {
+    sourceType: "module",
+    constantInliningCallee: "decode",
+    units: [
+      {
+        id: "unit-1",
+        original: { file: path.join(D, "orig-1.js"), range: { start: 1, end: 1 } },
+        sourceified: { file: path.join(D, "src-1.js"), range: { start: 1, end: 1 } },
+        allowedChanges: [
+          { kind: "identifier", from: "e", to: "alpha", count: 1 },
+          { kind: "constant-inlining", from: "42", to: "water", count: 1 },
+        ],
+      },
+      {
+        id: "unit-2",
+        original: { file: path.join(D, "orig-2.js"), range: { start: 1, end: 1 } },
+        sourceified: { file: path.join(D, "src-2.js"), range: { start: 1, end: 1 } },
+        allowedChanges: [
+          { kind: "identifier", from: "e", to: "beta", count: 2 },
+        ],
+      },
+    ],
+  };
+  const renameMap = [
+    { from: "e", to: "alpha" },
+    { from: "e", to: "beta" },
+  ];
+  writeFileSync(path.join(D, "plan.json"), JSON.stringify(plan), "utf8");
+  writeFileSync(path.join(D, "rename-map.json"), JSON.stringify(renameMap), "utf8");
+  const res = run("scripts/verify-sourceified-tokens.mjs", ["--plan", path.join(D, "plan.json"), "--rename-map", path.join(D, "rename-map.json")]);
+  green("verify-sourceified-tokens - constant-inlining and multi-scope renames verify cleanly", res, /PASS/);
+  // The relaxation is cross-unit only: each of these is refused before Acorn runs.
+  const vst = (name, planJson, mapJson) => {
+    writeFileSync(path.join(D, name + ".plan.json"), JSON.stringify(planJson));
+    writeFileSync(path.join(D, name + ".map.json"), JSON.stringify(mapJson));
+    return run("scripts/verify-sourceified-tokens.mjs", ["--plan", path.join(D, name + ".plan.json"), "--rename-map", path.join(D, name + ".map.json")]);
+  };
+  const { constantInliningCallee: _drop, ...noCallee } = plan;
+  red("verify-sourceified-tokens - constant-inlining without any callee source is a configuration error", vst("no-callee", noCallee, renameMap), /needs a callee/, 2);
+  const twoTargets = { ...plan, units: [plan.units[0], { ...plan.units[1], allowedChanges: [{ kind: "identifier", from: "e", to: "beta", count: 1 }, { kind: "identifier", from: "e", to: "gamma", count: 1 }] }] };
+  red("verify-sourceified-tokens - one name with two targets inside a unit is still refused", vst("two-targets", twoTargets, [...renameMap, { from: "e", to: "gamma" }]), /maps to both beta and gamma/, 2);
+  red("verify-sourceified-tokens - a duplicated rename-map row is still refused", vst("dup-row", plan, [...renameMap, { from: "e", to: "alpha" }]), /duplicate mapping e->alpha/, 2);
+}
+
+// inline-strings CLI tool AST string substitution.
+{
+  const D = W(path.join(TMP, "inline-tool"), {
+    "dict.json": JSON.stringify({ "101": "ocean_surface" }),
+    "engine.js": "const name = __decrypt(101);\n",
+  });
+  const res = run("tools/inline-strings.mjs", [
+    "--dict", path.join(D, "dict.json"),
+    "--fn", "__decrypt",
+    "--file", path.join(D, "engine.js"),
+  ]);
+  green("inline-strings - CLI executes AST replacement and writes back", res, /1 replacement\(s\)/);
+  eq("inline-strings - source call replaced with string literal", readFileSync(path.join(D, "engine.js"), "utf8"), 'const name = "ocean_surface";\n');
+  // A partial dictionary must not pass as complete: the resolvable call is
+  // inlined so the leftover is visible, the leftover is named, and the exit is 1.
+  W(D, { "partial.js": "const a = __decrypt(101); // keep\nconst b = __decrypt(202);\n" });
+  const partial = run("tools/inline-strings.mjs", ["--dict", path.join(D, "dict.json"), "--fn", "__decrypt", "--file", path.join(D, "partial.js")]);
+  red("inline-strings - a call without a dictionary entry is named and fails the run", partial, /unresolved __decrypt\(202 @2:11\)/, 1);
+  eq("inline-strings - ...while the resolvable call and the comment survive", readFileSync(path.join(D, "partial.js"), "utf8"), 'const a = "ocean_surface"; // keep\nconst b = __decrypt(202);\n');
+  W(D, { "dry.js": "f(__decrypt(101));\n" });
+  const dry = run("tools/inline-strings.mjs", ["--dict", path.join(D, "dict.json"), "--fn", "__decrypt", "--file", path.join(D, "dry.js"), "--dry-run"]);
+  green("inline-strings - --dry-run reports the plan", dry, /1 replacement\(s\) \(dry-run\)/);
+  eq("inline-strings - ...and leaves the file untouched", readFileSync(path.join(D, "dry.js"), "utf8"), "f(__decrypt(101));\n");
+}
+
+// probe accepts --settle/--seed/--cdp-timeout; the deadline resolution and its
+// validation are shared through lib/cdp.mjs and asserted without a browser.
+{
+  const p1 = run("scripts/probe.mjs", ["--settle", "100", "--seed", "window.__x=1", "--cdp-timeout", "1000", "--expect-side", "mirror", "http://127.0.0.1:1/"], { cwd: TMP });
+  truthy("probe - --settle/--seed/--cdp-timeout are known and the URL survives them",
+    p1.code === 3 && /not a serve\.mjs instance/.test(p1.out) && !/unknown flag/.test(p1.out), `exit ${p1.code}: ${p1.out.slice(0, 160)}`);
+  red("probe - --wait and --settle with different values is a usage error", run("scripts/probe.mjs", ["--wait", "100", "--settle", "200", "http://127.0.0.1:1/"], { cwd: TMP }), /--wait 100 and --settle 200 disagree/, 2);
+  red("probe - a non-numeric --cdp-timeout is a usage error before any browser starts", run("scripts/probe.mjs", ["--cdp-timeout", "soon", "http://127.0.0.1:1/"], { cwd: TMP }), /--cdp-timeout soon: expected a positive number/, 2);
+  red("pixelcompare - a zero --cdp-timeout is a usage error before any browser starts", run("scripts/pixelcompare.mjs", ["--a", "http://127.0.0.1:1/", "--b", "http://127.0.0.1:2/", "--out", path.join(TMP, "px-timeout"), "--cdp-timeout", "0"], { cwd: TMP }), /--cdp-timeout 0: expected a positive number/, 2);
+
+  const { resolveCdpTimeout } = await import(path.join(SKILL, "scripts/lib/cdp.mjs"));
+  delete process.env.CDP_TIMEOUT_MS;
+  eq("cdp - resolveCdpTimeout falls back to the caller's budget without flag or env", resolveCdpTimeout(null, 90000), 90000);
+  eq("cdp - resolveCdpTimeout: an explicit value wins", resolveCdpTimeout("2500", 90000), 2500);
+  process.env.CDP_TIMEOUT_MS = "120";
+  eq("cdp - resolveCdpTimeout: CDP_TIMEOUT_MS beats the fallback (fresh module instance)", (await import(pathToFileURL(path.join(SKILL, "scripts/lib/cdp.mjs")).href + "?env=set")).resolveCdpTimeout(null, 90000), 120);
+  // A websocket server that completes the upgrade and never answers a frame:
+  // the only way out is the client's deadline, which the env var must set.
+  const { createServer } = await import("node:http");
+  const { createHash } = await import("node:crypto");
+  const sockets = new Set();
+  const srv = createServer((_, res) => { res.statusCode = 404; res.end(); });
+  srv.on("upgrade", (req, socket) => {
+    sockets.add(socket);
+    const accept = createHash("sha1").update(req.headers["sec-websocket-key"] + "258EAFA5-E914-47DA-95CA-C5AB0DC85B11").digest("base64");
+    socket.write(`HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: ${accept}\r\n\r\n`);
+  });
+  await new Promise((r) => srv.listen(0, "127.0.0.1", r));
+  const { connectCdp: connectWithEnv } = await import(pathToFileURL(path.join(SKILL, "scripts/lib/cdp.mjs")).href + "?env=default");
+  delete process.env.CDP_TIMEOUT_MS;
+  const silent = await connectWithEnv(`ws://127.0.0.1:${srv.address().port}/`, { closeHint: null });
+  const t0 = Date.now();
+  const msg = await silent.send("Browser.getVersion").then(() => "", (e) => e.message);
+  truthy("cdp - CDP_TIMEOUT_MS is the default call deadline of connectCdp", /CDP timeout after 120ms: Browser\.getVersion/.test(msg) && Date.now() - t0 < 5000, msg);
+  silent.close();
+  for (const s of sockets) s.destroy();
+  srv.close();
 }
 
 finish(TMP);

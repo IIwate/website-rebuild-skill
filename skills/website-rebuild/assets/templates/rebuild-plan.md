@@ -36,7 +36,7 @@
 
 ## §2 技术栈证据
 
-<!-- Pin versions when output or API compatibility depends on them. Version strings, package paths and API signatures can support identification. -->
+<!-- Pin versions when output or API compatibility depends on them. For WebGPU/TSL pipelines, note compute shader complexity and headless CPU rasterization baseline. Version strings, package paths and API signatures can support identification. -->
 
 | 组件 | 版本或范围 | 来源证据 | 相关约束 |
 |---|---|---|---|
@@ -61,6 +61,8 @@
 | M{n} | {实现范围} | {具体行为或检查条件} | {状态} |
 
 ## §5 风险与待确认事项
+
+<!-- Note high-risk platforms such as WebGPU compute shaders under headless CPU rasterization (rate compatibility risk at ★★★★☆ and plan dynamic CDP timeout). -->
 
 | 问题 | 已有证据 | 影响 | 下一步 |
 |---|---|---|---|

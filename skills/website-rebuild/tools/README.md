@@ -19,6 +19,7 @@ parser(`@babel/parser` / `@babel/traverse`).这里放的就是那个阶段的工
 | `make-standalone.mjs` | 给 src/ 配齐离开仓库所需的一切: 按账本把产出引用的资产复制进 `src/public/`( 到这一步"不复制"约束**反转**--交付物的要求恰恰是"拷到哪都能跑"), 生成 `package.json`(build/serve 脚本烤入 ext/stub/origin 主机参数), `--replaced` 指定被端口替换的源 bundle **不随行**(被替换物躺在替换者旁边,"跑的是哪个"就要靠实验回答), `--allow` 消费 `external.txt` 豁免源站自身 404, `--own` 声明端口自有构建产物. 裸 `/ext/<host>`(本地化的 preconnect)不算资产缺口. **交付物自带字节清单**(`byte-manifest.json` + 生成的 `verify-bytes.mjs`):逐文件 sha256 在生成时对**落盘后的字节**固定,`npm run check/build/serve` 每次先重验--副本从"验过一次"变成"随时自证",端口自有构建产物列为 unpinned(每次 build 重生成);资产缺失时退出码为 1 |
 | `demangle-modules.mjs` | 用 Babel Binding 做作用域安全的重命名; 只改声明, 引用和赋值的源码区间, 不负责拆分模块或生成模块地图. 输入/输出边界见 `references/readable-source.md` §3.2.2 |
 | `group-parts.mjs` | 把拼接式分解的平铺部件按**字面证据**折进域目录: 仅共享标识符 token 计入--前导规则只认原名大写开头的类族(Camera*/Wave* → camera/ wave/),小写动词(get*/create*)拒分(字面但糊的桶比平铺更藏东西);尾缀族要更长的重复. 先按新布局重拼验 sha **再**动盘, 压缩名 chunk 证据不足即整体保持平铺. 实测 hashgraphvc:场景 chunk 151 件 → 24 个域目录,33/33 chunk 重拼仍逐字节一致 |
+| `inline-strings.mjs` | 使用 Babel AST 逆序展开混淆解密调用 (如 `__decrypt(id)`), 将解密字典中的字面量安全内联并校验语法, 保持原代码格式与注释 |
 | `flight-to-mdx.mjs` | C1 的正文反推器: flight 元素树 → MDX 源. markdown 构词(p/标题`[#id]`/列表/围栏/脚注对)回 markdown;站点组件形状回 JSX 调用; 其余回带精确 className 的字面 JSX(不丢字节). 站点侧适配区在文件头注明(LINK_CLASS/SHAPE/FIRST_PARTY,像 harvest.config 一样属于站点);四个 MDX 陷阱的规避已内建(多行模板字面量被按块缩进剥空格→属性值一律 JSON 字面量; 组件映射按上下文分; JSX 流里裸文本被包 p→文本一律 `{"json"}` 表达式;`pre>code>code` 嵌套=围栏指纹).实测 rauchg 17 页全过, 语义检查 18/18 |
 
  复制到复刻项目时放在项目的 `tools/` 下, 与项目 `package.json` 的 devDependencies 一起走.
@@ -31,5 +32,6 @@ parser(`@babel/parser` / `@babel/traverse`).这里放的就是那个阶段的工
 | `tools/accept-names.mjs` | **命名的接受步**:name-modules 只提名不决定; 默认只接受 tier-1(打包器声明的导出名),其余保留 id--"错名比哈希更糟"在这一步才真正生效(darkroom 278 模块接受 105) | M(n+1) |
 | `tools/sourcify-chunk.mjs` | **多 chunk 站的 M(n+1) 驱动**:按 merged map 的 canonical 位切子闭包( id 与 map 同型: 字符串),逐 chunk 跑 name-modules → accept-names → modules-to-src → verify-module-map(darkroom 43/43) | M(n+1)(多 chunk 站) |
 | `tools/harvest-optimized-images.mjs` | **next/image 优化器产物补齐**:像素检查重建侧的静态树没有优化器, serve 回落原图 → 重采样残差; 镜像字节优先, 本机 `next start` 优化器补充检查并登记为重建侧生成物(rsc-reconstruction §3.5) | M(n-1)(C1 重构工程) |
+| `tools/inline-strings.mjs` | **混淆常量字典展开**: 将索引解密函数调用批量替换为解密字符串字面量, 保持 AST 语法合法与注释布局 | M(n+1)(含解密器产物) |
 | `tools/verify-fresh-next.mjs` | **verify-fresh 的 Next 形态**:src → `next build` → assemble-static 链重建比字节; 前提 `generateBuildId` 固定, 否则链条永远"过期" | M(n+1)(C1 重构工程) |
 | `tools/name-modules.mjs` | 根据 0-4 级证据提出模块名称并记录依据: 人工确认、自注册与全局名称、消费方字段、常量与命名前缀、错误信息. 无足够证据时保留 ID. 未被压缩的消费方属性, 如 `this._chapterPlayer = new M(...)`, 可提供命名线索 | M(n+1), 模块化打包产物 |
