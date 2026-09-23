@@ -1670,8 +1670,12 @@ const TMP = scratch(".tmp");
   red("verify-sourceified-tokens - a duplicated rename-map row is still refused", vst("dup-row", plan, [...renameMap, { from: "e", to: "alpha" }]), /duplicate mapping e->alpha/, 2);
 }
 
-// inline-strings CLI tool AST string substitution.
-{
+// inline-strings CLI tool AST string substitution. Babel lives in tools/
+// devDependencies, so a checkout without them reports a visible skip instead
+// of failing (CI installs them; see .github/workflows/ci.yml).
+if (/Cannot find package/.test(run("tools/inline-strings.mjs", ["--help"]).err)) {
+  truthy("inline-strings - SKIPPED: tools/ devDependencies not installed (npm install --prefix skills/website-rebuild/tools)", true);
+} else {
   const D = W(path.join(TMP, "inline-tool"), {
     "dict.json": JSON.stringify({ "101": "ocean_surface" }),
     "engine.js": "const name = __decrypt(101);\n",

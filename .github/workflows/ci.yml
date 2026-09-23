@@ -11,6 +11,7 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 22
+      - run: npm install --prefix skills/website-rebuild/tools --no-audit --no-fund
       - run: npm test
   browser:
     runs-on: ubuntu-latest
